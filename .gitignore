@@ -1,0 +1,3 @@
+# Just ignore the linux kernel deb images
+linux-headers-3.13.6+duet_3.13.6+duet-10.00.Custom_amd64.deb
+linux-image-3.13.6+duet_3.13.6+duet-10.00.Custom_amd64.deb
