@@ -20,6 +20,12 @@
 #define __UTILS__
 
 #include <dirent.h>
+
+#define DUET_DEV_NAME   "/dev/duet"
+
+int open_dev(void);
+void close_dev(int fd);
+
 #if 0
 #include <sys/stat.h>
 
@@ -33,10 +39,6 @@ int pretty_size_snprintf(u64 size, char *str, size_t str_bytes);
 
 int get_mountpt(char *dev, char *mntpt, size_t size);
 u64 parse_size(char *s);
-#endif
-int open_dev(const char *fname);
-void close_dev(int fd);
-#if 0
 int get_fs_info(char *path, struct btrfs_ioctl_fs_info_args *fi_args,
 		struct btrfs_ioctl_dev_info_args **di_ret);
 

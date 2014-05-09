@@ -255,7 +255,7 @@ int main(int argc, char **argv)
 	const struct cmd_struct *cmd;
 
 	/* Open the duet device */
-	fd = open_dev("/dev/duet");
+	fd = open_dev();
 	if (fd == -1) {
 		fprintf(stderr, "Error: failed to open duet device\n");
 		return -1;

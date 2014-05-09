@@ -16,20 +16,20 @@
  * Boston, MA 021110-1307, USA.
  */
 
+#include <stdlib.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
 //#define _XOPEN_SOURCE 700
 //#define __USE_XOPEN2K8
 //#define __XOPEN2K8 /* due to an error in dirent.h, to get dirfd() */
 //#define _GNU_SOURCE	/* O_NOATIME */
 //#include <stdio.h>
-//#include <stdlib.h>
 //#include <string.h>
 //#include <sys/ioctl.h>
 //#include <sys/mount.h>
 //#include <sys/types.h>
-#include <sys/stat.h>
 //#include <uuid/uuid.h>
-#include <fcntl.h>
-#include <unistd.h>
 //#include <mntent.h>
 //#include <ctype.h>
 //#include <linux/loop.h>
@@ -39,12 +39,47 @@
 //#include <blkid/blkid.h>
 //#include "kerncompat.h"
 //#include "radix-tree.h"
-#include "utils.h"
 //#include "ioctl.h"
+#include "utils.h"
 
 //#ifndef BLKDISCARD
 //#define BLKDISCARD	_IO(0x12,119)
 //#endif
+
+int open_dev(void)
+{
+	int ret;
+	struct stat st;
+	int fd = -1;
+
+	ret = stat(DUET_DEV_NAME, &st);
+	if (ret < 0) {
+		ret = system("modprobe duet");
+		if (ret == -1)
+			return -1;
+
+		ret = stat(DUET_DEV_NAME, &st);
+		if (ret < 0)
+			return -1;
+	}
+
+	if (S_ISCHR(st.st_mode))
+		fd = open(DUET_DEV_NAME, O_RDWR);
+
+	return fd;
+}
+
+void close_dev(int fd)
+{
+	int ret;
+	struct stat st;
+
+	ret = stat(DUET_DEV_NAME, &st);
+	if (ret < 0)
+		return;
+
+	close(fd);
+}
 
 #if 0
 /*
@@ -289,30 +324,7 @@ u64 parse_size(char *s)
 	}
 	return strtoull(s, NULL, 10) * mult;
 }
-#endif
 
-int open_dev(const char *fname)
-{
-	int ret;
-	struct stat st;
-	int fd = -1;
-
-	ret = stat(fname, &st);
-	if (ret < 0)
-		return -1;
-
-	if (S_ISCHR(st.st_mode))
-		fd = open(fname, O_RDWR);
-
-	return fd;
-}
-
-void close_dev(int fd)
-{
-		close(fd);
-}
-
-#if 0
 #define isoctal(c)	(((c) & ~7) == '0')
 
 static inline void translate(char *f, char *t)

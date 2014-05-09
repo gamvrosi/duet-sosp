@@ -19,9 +19,11 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 #include <string.h>
+#include <stdlib.h>
 
 #include "ioctl.h"
 #include "commands.h"
+#include "utils.h"
 
 static const char * const status_cmd_group_usage[] = {
 	"duet status <command>",
@@ -42,37 +44,13 @@ static const char * const cmd_status_stop_usage[] = {
 	NULL
 };
 
-/*static int status_ctl(int cmd, int argc, char **argv)
-{
-	int ret = 0;
-	int e;
-	char *path = argv[1];
-	struct btrfs_ioctl_quota_ctl_args args;
-	DIR *dirstream = NULL;
-
-	if (check_argc_exact(argc, 2))
-		return -1;
-
-	memset(&args, 0, sizeof(args));
-	args.cmd = cmd;
-
-	ret = ioctl(fd, BTRFS_IOC_QUOTA_CTL, &args);
-	e = errno;
-	close_file_or_dir(fd, dirstream);
-	if (ret < 0) {
-		fprintf(stderr, "ERROR: quota command failed: %s\n",
-			strerror(e));
-		return 1;
-	}
-	return 0;
-}*/
-
 static int cmd_status_start(int fd, int argc, char **argv)
 {
 	int ret = 0;
 	struct duet_ioctl_recv_args args;
 
 	memset(&args, 0, sizeof(args));
+	args.cmd_flags = DUET_STATUS_START;
 
 	ret = ioctl(fd, DUET_IOC_STATUS, args);
 	if (ret < 0)
@@ -83,9 +61,17 @@ static int cmd_status_start(int fd, int argc, char **argv)
 static int cmd_status_stop(int fd, int argc, char **argv)
 {
 	int ret = 0;
-	//status_ctl(DUET_STATUS_CTL_STOP, argc, argv);
+	struct duet_ioctl_recv_args args;
+
+	memset(&args, 0, sizeof(args));
+	args.cmd_flags = DUET_STATUS_STOP;
+
+	ret = ioctl(fd, DUET_IOC_STATUS, args);
 	if (ret < 0)
 		usage(cmd_status_stop_usage);
+
+	close_dev(fd);
+	ret = system("rmmod duet");
 	return ret;
 }
 
