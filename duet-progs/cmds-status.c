@@ -32,15 +32,18 @@ static const char * const status_cmd_group_usage[] = {
 
 static const char * const cmd_status_start_usage[] = {
 	"duet status start",
-	"Enable the duet framework. Only tasks registered after running this",
-	"command will be monitored.",
+	"Enable the duet framework.",
+	"Initializes and enables the duet framework. Only tasks registered",
+	"after running this command will be monitored by the framework.",
 	NULL
 };
 
 static const char * const cmd_status_stop_usage[] = {
 	"duet status stop",
-	"Disable the duet framework. Any tasks running will no longer be",
-	"monitored.",
+	"Disable the duet framework.",
+	"Terminates and cleans up any metadata kept by the duet framework.",
+	"Any tasks running will no longer be monitored by the framework,",
+	"but will continue to function.",
 	NULL
 };
 
