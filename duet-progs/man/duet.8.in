@@ -1,0 +1,43 @@
+.TH DUET 8 "" "duet" "duet"
+.\"
+.\" Man page written by George Amvrosiadis <gamvrosi@gmail.com> (May 2014)
+.\"
+.SH NAME
+duet \- control the duet framework
+.SH SYNOPSIS
+\fBduet\fP \fBstatus\fP \fBstart\fP
+.PP
+\fBduet\fP \fBstatus\fP \fBstop\fP
+.PP
+\fBduet\fP \fBtasks\fP \fBlist\fP
+.PP
+\fBduet\fP \fBhelp|\-\-help \fP
+.PP
+.SH DESCRIPTION
+.B duet
+is used to control the framework, and the tasks registered under it. It is the
+tool used to start and stop the duet framework (terminating stats collection),
+list the tasks currently registered under the framework, and print information
+about the synergistic behaviour detected.
+
+.SH COMMANDS
+.TP
+
+\fBstatus start\fP
+Enable the duet framework. Only tasks registered after running this command
+will be monitored.
+.TP
+
+\fBstatus stop\fP
+Disable the duet framework. Any tasks running will no longer be monitored.
+.TP
+
+\fBtasks list\fP
+List the tasks currently registered under the framework.
+
+.SH EXIT STATUS
+\fBduet\fR returns a zero exit status if it succeeds. Otherwise, a non-zero
+value is returned.
+
+.SH AUTHOR
+George Amvrosiadis (gamvrosi@gmail.com)

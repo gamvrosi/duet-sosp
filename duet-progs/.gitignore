@@ -1,0 +1,6 @@
+*.o
+man/*.gz
+version.h
+version
+#ioctl-test
+duet

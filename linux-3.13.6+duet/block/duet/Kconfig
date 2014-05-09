@@ -1,0 +1,30 @@
+config DUET
+	tristate "Duet synergy framework support"
+
+	help
+	  Duet is a framework that aims to reduce the storage load due to
+	  maintenance work meant to be performed in the background. It does
+	  this by detecting synergies between the foreground workload and each
+	  maintenance tasks, and leveraging them to perform maintenance work
+	  opportunistically, out of order, while the data is already accessed.
+	  In the core of the duet system lie hooks into the block, file system,
+	  and page cache layer.
+
+	  This option enables the basic framework infrastructure. To enable
+	  hooks at different levels, you need to enable the DUET_BLOCK_HOOKS,
+	  DUET_<FS>_HOOKS, and DUET_CACHE_HOOKS options.
+
+	  To compile duet support as a module, choose M here. The module will
+	  be called duet.
+
+	  If unsure, say N.
+
+config DUET_DEBUG
+	bool "Duet debugging support"
+	depends on DUET
+	help
+	  Enable run-time debugging support for the duet framework. This may
+	  enable additional and expensive checks with negative impact on
+	  performance, or export extra information via sysfs.
+
+	  If unsure, say N.

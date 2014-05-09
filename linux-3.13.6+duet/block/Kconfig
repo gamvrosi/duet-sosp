@@ -116,6 +116,8 @@ source "block/partitions/Kconfig"
 
 endmenu
 
+source block/duet/Kconfig
+
 endif # BLOCK
 
 config BLOCK_COMPAT

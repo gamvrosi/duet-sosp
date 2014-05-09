@@ -1,0 +1,6 @@
+Install Instructions
+
+Building the utilities is just make ; make install. The programs go into
+/usr/local/bin. The main commands available are:
+
+duet: control the duet framework
