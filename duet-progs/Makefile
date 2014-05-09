@@ -6,7 +6,7 @@ LN = ln
 AM_CFLAGS = -Wall -D_FILE_OFFSET_BITS=64 -fno-strict-aliasing -fPIC
 CFLAGS = -g -O1 -fno-strict-aliasing
 objects = utils.o
-cmds_objects = cmds-status.o
+cmds_objects = cmds-status.o cmds-tasks.o
 
 INSTALL = install
 prefix ?= /usr/local
