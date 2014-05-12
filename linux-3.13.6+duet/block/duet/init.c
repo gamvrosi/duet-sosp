@@ -15,28 +15,20 @@
  * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
  * Boston, MA 021110-1307, USA.
  */
-
-#include <linux/module.h>
-#include <linux/init.h>
-#include <linux/cdev.h>
-#include <linux/device.h>
-#include <linux/slab.h>
-
-#include "duet.h"
-
-#define DUET_DEVNAME "duet"
+#include "init.h"
 
 struct file_operations duet_fops = {
 	.owner =		THIS_MODULE,
 	.unlocked_ioctl =	duet_ioctl,
 };
 
-/* Module globals */
+/* Duet globals */
 dev_t duet_dev;
 struct cdev *duet_cdev = NULL;
 struct class *duet_class = NULL;
+struct duet_info duet_env;
 
-static int __init duet_init(void)
+static int duet_create_chrdev(void)
 {
 	int ret;
 	struct device *devcp = NULL;
@@ -75,7 +67,6 @@ static int __init duet_init(void)
 		goto bail_alloc;
 	}
 
-	printk(KERN_INFO "Duet initialized successfully.\n");
 	return 0;
 
 bail_alloc:
@@ -89,7 +80,7 @@ bail_reg:
 	return -1;
 }
 
-static void __exit duet_exit(void)
+static void duet_destroy_chrdev(void)
 {
 	/* Remove the character device */
 	cdev_del(duet_cdev);
@@ -99,7 +90,39 @@ static void __exit duet_exit(void)
 
 	/* Unregister the character device */
 	unregister_chrdev_region(duet_dev, 1);
+}
 
+static int __init duet_init(void)
+{
+	int ret;
+
+	/*
+	 * This is the first and only time we'll zero out duet_env.
+	 * After the character device is online, we need synchronization
+	 * primitives to touch it.
+	 */
+	memset(&duet_env, 0, sizeof(duet_env));
+	atomic_set(&duet_env.status, DUET_STATUS_OFF);
+
+	ret = duet_create_chrdev();
+	if (ret)
+		return ret;
+
+	ret = duet_bootstrap();
+	if (ret) {
+		duet_destroy_chrdev();
+		printk(KERN_ERR "duet: failed to init module\n");
+		return ret;
+	}
+
+	printk(KERN_INFO "Duet initialized successfully.\n");
+	return 0;
+}
+
+static void __exit duet_exit(void)
+{
+	duet_shutdown();
+	duet_destroy_chrdev();
 	printk(KERN_INFO "Duet terminated successfully.\n");
 }
 

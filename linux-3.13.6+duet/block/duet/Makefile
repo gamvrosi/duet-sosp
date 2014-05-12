@@ -5,7 +5,7 @@
 ifneq ($(KERNELRELEASE),)
 # kbuild part of the Makefile
 obj-$(CONFIG_DUET) := duet.o
-duet-y += init.o ioctl.o
+duet-y += init.o ioctl.o task.o
 
 else
 # normal Makefile

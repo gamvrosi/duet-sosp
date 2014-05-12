@@ -28,20 +28,25 @@
 #define DUET_STATUS_STOP  (1 << 1)
 
 /* tasks ioctl flags */
-#define DUET_TASKS_LIST (1 << 0)
+#define DUET_TASKS_LIST		(1 << 0)
+#define DUET_TASKS_REGISTER	(1 << 1)
+#define DUET_TASKS_DEREGISTER	(1 << 2)
 
-struct duet_ioctl_recv_args {
+struct duet_ioctl_status_args {
 	__u8 cmd_flags;		/* in */
 };
 
-#define MAX_TASKS 32
-#define TASK_NAME_LEN 64
-struct duet_ioctl_send_args {
+#define MAX_TASKS 31
+#define TASK_NAME_LEN 128
+struct duet_ioctl_tasks_args {
 	__u8 cmd_flags;					/* in */
-	char task_names[MAX_TASKS][TASK_NAME_LEN];	/* out */
+	__u8 taskid[MAX_TASKS];				/* in/out */
+	char task_names[MAX_TASKS][TASK_NAME_LEN];	/* in/out */
 };
 
-#define DUET_IOC_STATUS _IOW(DUET_IOCTL_MAGIC, 1, struct duet_ioctl_recv_args)
-#define DUET_IOC_TASKS _IOWR(DUET_IOCTL_MAGIC, 2, struct duet_ioctl_send_args)
+#define DUET_IOC_STATUS _IOW(DUET_IOCTL_MAGIC, 1, \
+				struct duet_ioctl_status_args)
+#define DUET_IOC_TASKS _IOWR(DUET_IOCTL_MAGIC, 2, \
+				struct duet_ioctl_tasks_args)
 
 #endif /* _DUET_IOCTL_H */

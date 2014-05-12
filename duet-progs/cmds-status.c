@@ -15,12 +15,11 @@
  * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
  * Boston, MA 021110-1307, USA.
  */
-
 #include <sys/ioctl.h>
 #include <unistd.h>
 #include <string.h>
 #include <stdlib.h>
-
+#include <stdio.h>
 #include "ioctl.h"
 #include "commands.h"
 #include "utils.h"
@@ -35,6 +34,7 @@ static const char * const cmd_status_start_usage[] = {
 	"Enable the duet framework.",
 	"Initializes and enables the duet framework. Only tasks registered",
 	"after running this command will be monitored by the framework.",
+	"Ensure the framework is off, otherwise this command will fail.",
 	NULL
 };
 
@@ -43,38 +43,43 @@ static const char * const cmd_status_stop_usage[] = {
 	"Disable the duet framework.",
 	"Terminates and cleans up any metadata kept by the duet framework.",
 	"Any tasks running will no longer be monitored by the framework,",
-	"but will continue to function.",
+	"but will continue to function. Ensure the framework is on,",
+	"otherwise this command will fail.",
 	NULL
 };
 
 static int cmd_status_start(int fd, int argc, char **argv)
 {
 	int ret = 0;
-	struct duet_ioctl_recv_args args;
+	struct duet_ioctl_status_args args;
 
 	memset(&args, 0, sizeof(args));
 	args.cmd_flags = DUET_STATUS_START;
 
-	ret = ioctl(fd, DUET_IOC_STATUS, args);
-	if (ret < 0)
+	ret = ioctl(fd, DUET_IOC_STATUS, &args);
+	if (ret < 0) {
+		perror("status start ioctl error");
 		usage(cmd_status_start_usage);
+	}
 	return ret;
 }
 
 static int cmd_status_stop(int fd, int argc, char **argv)
 {
 	int ret = 0;
-	struct duet_ioctl_recv_args args;
+	struct duet_ioctl_status_args args;
 
 	memset(&args, 0, sizeof(args));
 	args.cmd_flags = DUET_STATUS_STOP;
 
-	ret = ioctl(fd, DUET_IOC_STATUS, args);
-	if (ret < 0)
+	ret = ioctl(fd, DUET_IOC_STATUS, &args);
+	if (ret < 0) {
+		perror("status stop ioctl error");
 		usage(cmd_status_stop_usage);
+	}
 
-	close_dev(fd);
-	ret = system("rmmod duet");
+	//close_dev(fd);
+	//ret = system("rmmod duet");
 	return ret;
 }
 
