@@ -32,6 +32,12 @@
 #define DUET_TASKS_REGISTER	(1 << 1)
 #define DUET_TASKS_DEREGISTER	(1 << 2)
 
+/* debug ioctl flags */
+#define DUET_DEBUG_ADDBLK	(1 << 0)
+#define DUET_DEBUG_RMBLK	(1 << 1)
+#define DUET_DEBUG_CHKBLK	(1 << 2)
+#define DUET_DEBUG_PRINTRBT	(1 << 3)
+
 struct duet_ioctl_status_args {
 	__u8 cmd_flags;		/* in */
 };
@@ -43,9 +49,20 @@ struct duet_ioctl_tasks_args {
 	char task_names[MAX_TASKS][TASK_NAME_LEN];	/* in/out */
 };
 
+struct duet_ioctl_debug_args {
+	__u8 cmd_flags;		/* in */
+	__u8 taskid;		/* in */
+	__u64 offset;		/* in */
+	__u32 len;		/* in */
+	__u8 unset;		/* in */
+	__u8 ret;		/* out */
+};
+
 #define DUET_IOC_STATUS _IOW(DUET_IOCTL_MAGIC, 1, \
 				struct duet_ioctl_status_args)
 #define DUET_IOC_TASKS _IOWR(DUET_IOCTL_MAGIC, 2, \
 				struct duet_ioctl_tasks_args)
+#define DUET_IOC_DEBUG _IOWR(DUET_IOCTL_MAGIC, 3, \
+				struct duet_ioctl_debug_args)
 
 #endif /* _DUET_IOCTL_H */

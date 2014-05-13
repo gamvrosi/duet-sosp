@@ -15,7 +15,14 @@
  * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
  * Boston, MA 021110-1307, USA.
  */
-#include "init.h"
+#include <linux/module.h>
+#include <linux/init.h>
+#include <linux/cdev.h>
+#include <linux/device.h>
+#include <linux/slab.h>
+#include "duet.h"
+
+#define DUET_DEVNAME "duet"
 
 struct file_operations duet_fops = {
 	.owner =		THIS_MODULE,

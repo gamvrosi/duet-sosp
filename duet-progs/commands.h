@@ -79,11 +79,14 @@ void help_command_group(const struct cmd_group *grp, int fd, int argc, char **ar
 /* Command groups */
 extern const struct cmd_group status_cmd_group;
 extern const struct cmd_group tasks_cmd_group;
+extern const struct cmd_group debug_cmd_group;
 
 /* Command usage strings */
 extern const char * const cmd_status_usage[];
 extern const char * const cmd_tasks_usage[];
+extern const char * const cmd_debug_usage[];
 
 /* Command handlers */
 int cmd_status(int fd, int argc, char **argv);
 int cmd_tasks(int fd, int argc, char **argv);
+int cmd_debug(int fd, int argc, char **argv);

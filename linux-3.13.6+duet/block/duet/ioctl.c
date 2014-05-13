@@ -54,6 +54,8 @@ int duet_shutdown(void)
 
 		/* Make sure everyone's let go before we free it */
 		synchronize_rcu();
+		wait_event(task->cleaner_queue,
+			atomic_read(&task->refcount) == 0);
 		duet_task_dispose(task);
 
 		mutex_lock(&duet_env.task_list_mutex);
@@ -130,6 +132,31 @@ static int duet_task_sendlist(struct duet_ioctl_tasks_args *ta)
 	return 0;
 }
 
+static int duet_debug_addblk(struct duet_ioctl_debug_args *da)
+{
+	return duet_mark_done(da->taskid, da->offset, da->len);
+}
+
+static int duet_debug_rmblk(struct duet_ioctl_debug_args *da)
+{
+	return duet_mark_todo(da->taskid, da->offset, da->len);
+}
+
+static int duet_debug_chkblk(struct duet_ioctl_debug_args *da)
+{
+	if (da->unset)
+		da->ret = duet_chk_todo(da->taskid, da->offset, da->len);
+	else
+		da->ret = duet_chk_done(da->taskid, da->offset, da->len);
+
+	return 0;
+}
+
+static int duet_debug_printrbt(struct duet_ioctl_debug_args *da)
+{
+	return duet_print_rbt(da->taskid);
+}
+
 static int duet_ioctl_tasks(void __user *arg)
 {
 	struct duet_ioctl_tasks_args *ta;
@@ -198,6 +225,72 @@ err:
 	return -EINVAL;
 }
 
+static int duet_ioctl_debug(void __user *arg)
+{
+	struct duet_ioctl_debug_args *da;
+
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
+	da = memdup_user(arg, sizeof(*da));
+	if (IS_ERR(da))
+		return PTR_ERR(da);
+
+	switch (da->cmd_flags) {
+	case DUET_DEBUG_ADDBLK:
+		if (duet_debug_addblk(da)) {
+			printk(KERN_ERR "duet: failed to add block\n");
+			goto err;
+		}
+//#ifdef CONFIG_DUET_DEBUG
+		printk(KERN_INFO "duet: block added\n");
+//#endif /* CONFIG_DUET_DEBUG */
+		break;
+	case DUET_DEBUG_RMBLK:
+		if (duet_debug_rmblk(da)) {
+			printk(KERN_ERR "duet: failed to rm block\n");
+			goto err;
+		}
+//#ifdef CONFIG_DUET_DEBUG
+		printk(KERN_INFO "duet: block removed\n");
+//#endif /* CONFIG_DUET_DEBUG */
+		break;
+	case DUET_DEBUG_CHKBLK:
+		if (duet_debug_chkblk(da)) {
+			printk(KERN_ERR "duet: failed to chk block\n");
+			goto err;
+		}
+		if (copy_to_user(arg, da, sizeof(*da))) {
+			printk(KERN_ERR "duet: failed to copy out args\n");
+			goto err;
+		}
+//#ifdef CONFIG_DUET_DEBUG
+		printk(KERN_INFO "duet: block chk complete\n");
+//#endif /* CONFIG_DUET_DEBUG */
+		break;
+	case DUET_DEBUG_PRINTRBT:
+		if (duet_debug_printrbt(da)) {
+			printk(KERN_ERR "duet: failed to print RBT\n");
+			goto err;
+		}
+//#ifdef CONFIG_DUET_DEBUG
+		printk(KERN_INFO "duet: RBT printed\n");
+//#endif /* CONFIG_DUET_DEBUG */
+		break;
+	default:
+		printk(KERN_INFO "duet: unknown debug command received\n");
+		goto err;
+		break;
+	}
+
+	kfree(da);
+	return 0;
+
+err:
+	kfree(da);
+	return -EINVAL;
+}
+
 /* 
  * ioctl handler function; passes control to the proper handling function
  * for the ioctl received.
@@ -221,6 +314,8 @@ long duet_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		return duet_ioctl_status(argp);
 	case DUET_IOC_TASKS:
 		return duet_ioctl_tasks(argp);
+	case DUET_IOC_DEBUG:
+		return duet_ioctl_debug(argp);
 	}
 
 	return -EINVAL;
