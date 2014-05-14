@@ -42,11 +42,13 @@ struct duet_ioctl_status_args {
 	__u8 cmd_flags;		/* in */
 };
 
-#define MAX_TASKS 31
+#define MAX_TASKS 32
 #define TASK_NAME_LEN 128
 struct duet_ioctl_tasks_args {
 	__u8 cmd_flags;					/* in */
 	__u8 taskid[MAX_TASKS];				/* in/out */
+	__u32 blksize[MAX_TASKS];			/* in/out */
+	__u32 bmapsize[MAX_TASKS];			/* in/out */
 	char task_names[MAX_TASKS][TASK_NAME_LEN];	/* in/out */
 };
 

@@ -20,58 +20,16 @@
 __u32 duet_bmap_count(__u8 *bmap, __u32 byte_len)
 {
 	__u32 i, bits_on = 0;
+	__u8 par_array[16] =
+		{ 0 /* 0000 */, 1 /* 0001 */, 1 /* 0010 */, 2 /* 0011 */,
+		  1 /* 0100 */, 2 /* 0101 */, 2 /* 0110 */, 3 /* 0111 */,
+		  1 /* 1000 */, 2 /* 1001 */, 2 /* 1010 */, 3 /* 1011 */,
+		  2 /* 1100 */, 3 /* 1101 */, 3 /* 1110 */, 4 /* 1111 */};
 
 	/* Count bits set in the bitmap */
-	for (i=0; i<byte_len; i++) {
-		if (bmap[i] == 0x00) {
-			continue;
-		} else if (bmap[i] == 0xff) {
-			bits_on += 8;
-			continue;
-		}
-
-		switch (bmap[i] & 0x0f) {
-		case 0x00:
-			break;
-		case 0x01: case 0x02:
-		case 0x04: case 0x08:
-			bits_on += 1;
-			break;
-		case 0x03: case 0x05:
-		case 0x06: case 0x09:
-		case 0x0a: case 0x0c:
-			bits_on += 2;
-			break;
-		case 0x07: case 0x0b:
-		case 0x0d: case 0x0e:
-			bits_on += 3;
-			break;
-		case 0x0f:
-			bits_on += 4;
-			break;
-		}
-
-		switch ((bmap[i] >> 4) & 0x0f) {
-		case 0x00:
-			break;
-		case 0x01: case 0x02:
-		case 0x04: case 0x08:
-			bits_on += 1;
-			break;
-		case 0x03: case 0x05:
-		case 0x06: case 0x09:
-		case 0x0a: case 0x0c:
-			bits_on += 2;
-			break;
-		case 0x07: case 0x0b:
-		case 0x0d: case 0x0e:
-			bits_on += 3;
-			break;
-		case 0x0f:
-			bits_on += 4;
-			break;
-		}
-	}
+	for (i=0; i<byte_len; i++)
+		bits_on += (par_array[ bmap[i] & 0xf ] +
+			par_array[(bmap[i] >> 4) & 0xf ]);
 
 	return bits_on;
 }
@@ -94,12 +52,6 @@ void duet_bmap_print(__u8 *bmap, __u32 byte_len)
 	printk(KERN_DEBUG "%s\n", buf);
 }
 
-/* (un)marks an entire bitmap *
-void duet_bmap_all(__u8 *bmap, __u32 byte_len, __u8 set)
-{
-	memset(bmap, set ? 0xff : 0, byte_len);
-}*/
-
 /* sets/clears bits [start, start + num) for bmap */
 static void duet_bmap_set_bits(__u8 *bmap, __u32 start, __u32 num, __u8 set)
 {
@@ -121,12 +73,12 @@ static void duet_bmap_set_bits(__u8 *bmap, __u32 start, __u32 num, __u8 set)
 	f_mask = (1 << (8 - f_bits)) - 1;
 	l_mask = ~((1 << (8 - l_bits - 1)) - 1);
 
-//#ifdef CONFIG_DUET_DEBUG
+#ifdef CONFIG_DUET_DEBUG
 	printk(KERN_DEBUG
 		"duet_bmap_set_bits: start=%u, num=%u, fbits=%02x, "
 		"l_bits=%02x, f_mask=%02x, l_mask=%02x\n", start, num,
 		f_bits, l_bits, f_mask, l_mask);
-//#endif /* CONFIG_DUET_DEBUG */
+#endif /* CONFIG_DUET_DEBUG */
 
 	if (8 - f_bits >= num) {
 		/* We are marking stuff only in one byte block */
@@ -166,7 +118,7 @@ int duet_bmap_set(__u8 *bmap, __u32 bmap_bytelen, __u64 first_byte,
 	start = (req_byte - first_byte) / blksize;
 	num = req_bytelen / blksize + (req_bytelen % blksize ? 1 : 0);
 
-	if (start + num >= bmap_bytelen * 8)
+	if (start + num >= (first_byte + (bmap_bytelen * 8 * blksize)))
 		return -1;
 
 	duet_bmap_set_bits(bmap, start, num, set);
@@ -245,7 +197,7 @@ int duet_bmap_chk(__u8 *bmap, __u32 bmap_bytelen, __u64 first_byte,
 	start = (req_byte - first_byte) / blksize;
 	num = req_bytelen / blksize + (req_bytelen % blksize ? 1 : 0);
 
-	if (start + num >= bmap_bytelen * 8)
+	if (start + num >= (first_byte + (bmap_bytelen * 8 * blksize)))
 		return -1;
 
 	return duet_bmap_chk_bits(bmap, start, num, set);

@@ -123,6 +123,8 @@ static int duet_task_sendlist(struct duet_ioctl_tasks_args *ta)
 	list_for_each_entry_rcu(cur, &duet_env.tasks, task_list) {
 		ta->taskid[i] = cur->id;
 		memcpy(ta->task_names[i], cur->name, TASK_NAME_LEN);
+		ta->blksize[i] = cur->blksize;
+		ta->bmapsize[i] = cur->bmapsize;
 		i++;
 		if (i == MAX_TASKS)
 			break;
@@ -188,7 +190,8 @@ static int duet_ioctl_tasks(void __user *arg)
 #endif /* CONFIG_DUET_DEBUG */
 		break;
 	case DUET_TASKS_REGISTER:
-		if (duet_task_register(&ta->taskid[0], ta->task_names[0])) {
+		if (duet_task_register(&ta->taskid[0], ta->task_names[0],
+		    ta->blksize[0], ta->bmapsize[0])) {
 			printk(KERN_ERR "duet: registration failed\n");
 			goto err;
 		}
@@ -242,18 +245,18 @@ static int duet_ioctl_debug(void __user *arg)
 			printk(KERN_ERR "duet: failed to add block\n");
 			goto err;
 		}
-//#ifdef CONFIG_DUET_DEBUG
+#ifdef CONFIG_DUET_DEBUG
 		printk(KERN_INFO "duet: block added\n");
-//#endif /* CONFIG_DUET_DEBUG */
+#endif /* CONFIG_DUET_DEBUG */
 		break;
 	case DUET_DEBUG_RMBLK:
 		if (duet_debug_rmblk(da)) {
 			printk(KERN_ERR "duet: failed to rm block\n");
 			goto err;
 		}
-//#ifdef CONFIG_DUET_DEBUG
+#ifdef CONFIG_DUET_DEBUG
 		printk(KERN_INFO "duet: block removed\n");
-//#endif /* CONFIG_DUET_DEBUG */
+#endif /* CONFIG_DUET_DEBUG */
 		break;
 	case DUET_DEBUG_CHKBLK:
 		if (duet_debug_chkblk(da)) {
@@ -264,18 +267,18 @@ static int duet_ioctl_debug(void __user *arg)
 			printk(KERN_ERR "duet: failed to copy out args\n");
 			goto err;
 		}
-//#ifdef CONFIG_DUET_DEBUG
+#ifdef CONFIG_DUET_DEBUG
 		printk(KERN_INFO "duet: block chk complete\n");
-//#endif /* CONFIG_DUET_DEBUG */
+#endif /* CONFIG_DUET_DEBUG */
 		break;
 	case DUET_DEBUG_PRINTRBT:
 		if (duet_debug_printrbt(da)) {
 			printk(KERN_ERR "duet: failed to print RBT\n");
 			goto err;
 		}
-//#ifdef CONFIG_DUET_DEBUG
+#ifdef CONFIG_DUET_DEBUG
 		printk(KERN_INFO "duet: RBT printed\n");
-//#endif /* CONFIG_DUET_DEBUG */
+#endif /* CONFIG_DUET_DEBUG */
 		break;
 	default:
 		printk(KERN_INFO "duet: unknown debug command received\n");

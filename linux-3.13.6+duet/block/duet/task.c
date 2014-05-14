@@ -90,8 +90,10 @@ static int bmaptree_chkupd(struct duet_task *task, __u64 lbn, __u32 len,
 	struct rb_node **link, *parent;
 	struct duet_rbnode *dnode = NULL;
 
+#ifdef CONFIG_DUET_DEBUG
 	printk(KERN_INFO "duet: chkupd on task #%d for range [%llu, %llu] "
 		"(set=%u, chk=%u)\n", task->id, lbn, lbn+len, set, chk);
+#endif /* CONFIG_DUET_DEBUG */
 
 	cur_lbn = lbn;
 	rem_len = len;
@@ -103,6 +105,11 @@ static int bmaptree_chkupd(struct duet_task *task, __u64 lbn, __u32 len,
 		found = 0;
 		link = &task->bmaptree.rb_node;
 		parent = NULL;
+
+#ifdef CONFIG_DUET_DEBUG
+		printk(KERN_DEBUG "duet: looking up node with LBN %llu\n",
+			node_lbn);
+#endif /* CONFIG_DUET_DEBUG */
 
 		while (*link) {
 			parent = *link;
@@ -117,6 +124,10 @@ static int bmaptree_chkupd(struct duet_task *task, __u64 lbn, __u32 len,
 				break;
 			}
 		}
+
+#ifdef CONFIG_DUET_DEBUG
+		printk(KERN_DEBUG "duet: node %sfound\n", found ? "" : "not ");
+#endif /* CONFIG_DUET_DEBUG */
 
 		/*
 		 * Take appropriate action based on whether we found the node
@@ -139,7 +150,8 @@ static int bmaptree_chkupd(struct duet_task *task, __u64 lbn, __u32 len,
 		 */
 
 		/* Find the last LBN on this node */
-		cur_len = min(cur_lbn + rem_len, node_lbn + task->blksize) - cur_lbn;
+		cur_len = min(cur_lbn + rem_len,
+			node_lbn + lbn_gran) - cur_lbn;
 
 		if (set) {
 			if (!found && !chk) {
@@ -155,33 +167,24 @@ static int bmaptree_chkupd(struct duet_task *task, __u64 lbn, __u32 len,
 				return 1;
 			}
 
-			if (!chk) {
-				/* Set the bits */
-				if (duet_bmap_set(dnode->bmap, task->bmapsize,
-						dnode->lbn, task->blksize,
-						cur_lbn, cur_len, 1))
-					return 1;
-			} else {
-				/* Check the bits */
-				if (duet_bmap_chk(dnode->bmap, task->bmapsize,
-						dnode->lbn, task->blksize,
-						cur_lbn, cur_len, 1))
-					return 1;
-			}
+			/* Set the bits */
+			if (!chk && duet_bmap_set(dnode->bmap, task->bmapsize,
+			    dnode->lbn, task->blksize, cur_lbn, cur_len, 1))
+				return 1;
+			/* Check the bits */
+			else if (chk && duet_bmap_chk(dnode->bmap, task->bmapsize,
+			    dnode->lbn, task->blksize, cur_lbn, cur_len, 1))
+				return 1;
+
 		} else if (found) {
-			if (!chk) {
-				/* Clear the bits */
-				if (duet_bmap_set(dnode->bmap, task->bmapsize,
-						dnode->lbn, task->blksize,
-						cur_lbn, cur_len, 0))
-					return 1;
-			} else {
-				/* Check the bits */
-				if (duet_bmap_chk(dnode->bmap, task->bmapsize,
-						dnode->lbn, task->blksize,
-						cur_lbn, cur_len, 0))
-					return 1;
-			}
+			/* Clear the bits */
+			if (!chk && duet_bmap_set(dnode->bmap, task->bmapsize,
+			    dnode->lbn, task->blksize, cur_lbn, cur_len, 0))
+				return 1;
+			/* Check the bits */
+			else if (chk && duet_bmap_chk(dnode->bmap, task->bmapsize,
+			    dnode->lbn, task->blksize, cur_lbn, cur_len, 0))
+				return 1;
 
 			if (!chk) {
 				/* Dispose of the node? */
@@ -200,7 +203,7 @@ static int bmaptree_chkupd(struct duet_task *task, __u64 lbn, __u32 len,
 		}
 
 		rem_len -= cur_len;
-		node_lbn = cur_lbn += cur_len + 1;
+		node_lbn = cur_lbn += cur_len;
 	}
 
 	return 0;
@@ -329,7 +332,8 @@ static void bmaptree_dispose(struct rb_root *root)
 }
 
 /* Properly allocate and initialize a task struct */
-static int duet_task_init(struct duet_task **task, const char *name)
+static int duet_task_init(struct duet_task **task, const char *name,
+	__u32 blksize, __u32 bmapsize)
 {
 	*task = kzalloc(sizeof(**task), GFP_NOFS);
 	if (!(*task))
@@ -341,10 +345,16 @@ static int duet_task_init(struct duet_task **task, const char *name)
 	init_waitqueue_head(&(*task)->cleaner_queue);
 	atomic_set(&(*task)->refcount, 0);
 
-	/* TODO: bmapsize and blksize should not be fixed;
-	 * determine during registration */
-	(*task)->bmapsize = 1;
-	(*task)->blksize = 4096;
+	if (blksize)
+		(*task)->blksize = blksize;
+	else
+		(*task)->blksize = 4096;
+
+	if (bmapsize)
+		(*task)->bmapsize = bmapsize;
+	else
+		(*task)->bmapsize = 32768;
+
 	mutex_init(&(*task)->bmaptree_mutex);
 	(*task)->bmaptree = RB_ROOT;
 
@@ -361,7 +371,8 @@ void duet_task_dispose(struct duet_task *task)
 	kfree(task);
 }
 
-int duet_task_register(__u8 *taskid, const char *name)
+int duet_task_register(__u8 *taskid, const char *name, __u32 blksize,
+	__u32 bmapsize)
 {
 	int ret;
 	struct list_head *last;
@@ -372,7 +383,7 @@ int duet_task_register(__u8 *taskid, const char *name)
 		return -EINVAL;
 	}
 
-	ret = duet_task_init(&task, name);
+	ret = duet_task_init(&task, name, blksize, bmapsize);
 	if (ret) {
 		printk(KERN_ERR "duet: failed to initialize task\n");
 		return ret;
