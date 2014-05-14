@@ -121,12 +121,12 @@ static void duet_bmap_set_bits(__u8 *bmap, __u32 start, __u32 num, __u8 set)
 	f_mask = (1 << (8 - f_bits)) - 1;
 	l_mask = ~((1 << (8 - l_bits - 1)) - 1);
 
-#ifdef CONFIG_DUET_DEBUG
+//#ifdef CONFIG_DUET_DEBUG
 	printk(KERN_DEBUG
-		"duet_bmap_set_bits: start=%llu, num=%lu, fbits=%02x, "
-		"l_bits=%02x, f_mask=%02x, l_mask=%02x\n", start,
-		(long unsigned int) num, f_bits, l_bits, f_mask, l_mask);
-#endif /* CONFIG_DUET_DEBUG */
+		"duet_bmap_set_bits: start=%u, num=%u, fbits=%02x, "
+		"l_bits=%02x, f_mask=%02x, l_mask=%02x\n", start, num,
+		f_bits, l_bits, f_mask, l_mask);
+//#endif /* CONFIG_DUET_DEBUG */
 
 	if (8 - f_bits >= num) {
 		/* We are marking stuff only in one byte block */
@@ -163,7 +163,7 @@ int duet_bmap_set(__u8 *bmap, __u32 bmap_bytelen, __u64 first_byte,
 {
 	__u32 start, num;
 
-	start = (first_byte - req_byte) / blksize;
+	start = (req_byte - first_byte) / blksize;
 	num = req_bytelen / blksize + (req_bytelen % blksize ? 1 : 0);
 
 	if (start + num >= bmap_bytelen * 8)
@@ -242,7 +242,7 @@ int duet_bmap_chk(__u8 *bmap, __u32 bmap_bytelen, __u64 first_byte,
 {
 	__u32 start, num;
 
-	start = (first_byte - req_byte) / blksize;
+	start = (req_byte - first_byte) / blksize;
 	num = req_bytelen / blksize + (req_bytelen % blksize ? 1 : 0);
 
 	if (start + num >= bmap_bytelen * 8)

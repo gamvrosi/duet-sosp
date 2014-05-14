@@ -90,6 +90,9 @@ static int bmaptree_chkupd(struct duet_task *task, __u64 lbn, __u32 len,
 	struct rb_node **link, *parent;
 	struct duet_rbnode *dnode = NULL;
 
+	printk(KERN_INFO "duet: chkupd on task #%d for range [%llu, %llu] "
+		"(set=%u, chk=%u)\n", task->id, lbn, lbn+len, set, chk);
+
 	cur_lbn = lbn;
 	rem_len = len;
 	lbn_gran = task->blksize * task->bmapsize * 8;
@@ -326,24 +329,24 @@ static void bmaptree_dispose(struct rb_root *root)
 }
 
 /* Properly allocate and initialize a task struct */
-static int duet_task_init(struct duet_task *task, const char *name)
+static int duet_task_init(struct duet_task **task, const char *name)
 {
-	task = kzalloc(sizeof(*task), GFP_NOFS);
-	if (!task)
+	*task = kzalloc(sizeof(**task), GFP_NOFS);
+	if (!(*task))
 		return -ENOMEM;
 
-	task->id = 1;
-	memcpy(task->name, name, TASK_NAME_LEN);
-	INIT_LIST_HEAD(&task->task_list);
-	init_waitqueue_head(&task->cleaner_queue);
-	atomic_set(&task->refcount, 0);
+	(*task)->id = 1;
+	memcpy((*task)->name, name, TASK_NAME_LEN);
+	INIT_LIST_HEAD(&(*task)->task_list);
+	init_waitqueue_head(&(*task)->cleaner_queue);
+	atomic_set(&(*task)->refcount, 0);
 
 	/* TODO: bmapsize and blksize should not be fixed;
 	 * determine during registration */
-	task->bmapsize = 1;
-	task->blksize = 4096;
-	mutex_init(&task->bmaptree_mutex);
-	task->bmaptree = RB_ROOT;
+	(*task)->bmapsize = 1;
+	(*task)->blksize = 4096;
+	mutex_init(&(*task)->bmaptree_mutex);
+	(*task)->bmaptree = RB_ROOT;
 
 	return 0;
 }
@@ -369,7 +372,7 @@ int duet_task_register(__u8 *taskid, const char *name)
 		return -EINVAL;
 	}
 
-	ret = duet_task_init(task, name);
+	ret = duet_task_init(&task, name);
 	if (ret) {
 		printk(KERN_ERR "duet: failed to initialize task\n");
 		return ret;
