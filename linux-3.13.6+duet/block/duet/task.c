@@ -15,7 +15,7 @@
  * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
  * Boston, MA 021110-1307, USA.
  */
-#include "duet.h"
+#include "common.h"
 
 /*
  * Synchronization of the task list
@@ -293,30 +293,35 @@ int duet_print_rbt(__u8 taskid)
 
 	return 0;
 }
+//EXPORT_SYMBOL_GPL(duet_print_rbt);
 
 /* Checks the blocks in the range from lbn to lbn+len are done */
 int duet_chk_done(__u8 taskid, __u64 lbn, __u32 len)
 {
 	return duet_mark_chkupd(taskid, lbn, len, 1, 1);
 }
+//EXPORT_SYMBOL_GPL(duet_chk_done);
 
 /* Checks the blocks in the range from lbn to lbn+len as todo */
 int duet_chk_todo(__u8 taskid, __u64 lbn, __u32 len)
 {
 	return duet_mark_chkupd(taskid, lbn, len, 0, 1);
 }
+//EXPORT_SYMBOL_GPL(duet_chk_todo);
 
 /* Marks the blocks in the range from lbn to lbn+len as done */
 int duet_mark_done(__u8 taskid, __u64 lbn, __u32 len)
 {
 	return duet_mark_chkupd(taskid, lbn, len, 1, 0);
 }
+//EXPORT_SYMBOL_GPL(duet_mark_done);
 
 /* Unmarks the blocks in the range from lbn to lbn+len as done */
 int duet_mark_todo(__u8 taskid, __u64 lbn, __u32 len)
 {
 	return duet_mark_chkupd(taskid, lbn, len, 0, 0);
 }
+//EXPORT_SYMBOL_GPL(duet_mark_todo);
 
 /* Disposes of the red-black bitmap tree */
 static void bmaptree_dispose(struct rb_root *root)
@@ -410,6 +415,7 @@ int duet_task_register(__u8 *taskid, const char *name, __u32 blksize,
 	*taskid = task->id;
 	return 0;
 }
+EXPORT_SYMBOL_GPL(duet_task_register);
 
 int duet_task_deregister(__u8 taskid)
 {
@@ -435,3 +441,4 @@ int duet_task_deregister(__u8 taskid)
 
 	return -ENOENT;
 }
+EXPORT_SYMBOL_GPL(duet_task_deregister);

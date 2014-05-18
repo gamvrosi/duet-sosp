@@ -19,7 +19,7 @@
 #ifndef _DUET_IOCTL_H
 #define _DUET_IOCTL_H
 #include <linux/ioctl.h>
-#include "duet.h"
+#include "common.h"
 
 #define DUET_IOCTL_MAGIC 0xDE
 

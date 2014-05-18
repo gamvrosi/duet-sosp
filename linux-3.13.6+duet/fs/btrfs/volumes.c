@@ -40,6 +40,9 @@
 #include "rcu-string.h"
 #include "math.h"
 #include "dev-replace.h"
+#ifdef CONFIG_DUET_BTRFS
+#include <linux/duet.h>
+#endif /* CONFIG_DUET_BTRFS */
 
 static int init_first_rw_device(struct btrfs_trans_handle *trans,
 				struct btrfs_root *root,
@@ -369,6 +372,14 @@ loop_lock:
 			sync_pending = 0;
 		}
 
+#ifdef CONFIG_DUET_BTRFS
+#ifdef CONFIG_DUET_DEBUG
+		printk(KERN_DEBUG "duet: hooking on run_scheduled_bios\n");
+#endif /* CONFIG_DUET_DEBUG */
+		duet_hook(cur->bi_rw & WRITE ?
+			DUET_HOOK_BTRFS_FGW : DUET_HOOK_BTRFS_FGR,
+			DUET_SETUP_HOOK_BA, (void *)cur);
+#endif /* CONFIG_DUET_BTRFS */
 		btrfsic_submit_bio(cur->bi_rw, cur);
 		num_run++;
 		batch_run++;
@@ -5351,6 +5362,14 @@ static noinline void btrfs_schedule_bio(struct btrfs_root *root,
 	/* don't bother with additional async steps for reads, right now */
 	if (!(rw & REQ_WRITE)) {
 		bio_get(bio);
+#ifdef CONFIG_DUET_BTRFS
+#ifdef CONFIG_DUET_DEBUG
+		printk(KERN_DEBUG "duet: hooking on btrfs_schedule_bio\n");
+#endif /* CONFIG_DUET_DEBUG */
+		duet_hook(rw & WRITE ?
+			DUET_HOOK_BTRFS_FGW : DUET_HOOK_BTRFS_FGR,
+			DUET_SETUP_HOOK_BA, (void *)bio);
+#endif /* CONFIG_DUET_BTRFS */
 		btrfsic_submit_bio(rw, bio);
 		bio_put(bio);
 		return;
@@ -5441,10 +5460,19 @@ static void submit_stripe_bio(struct btrfs_root *root, struct btrfs_bio *bbio,
 	}
 #endif
 	bio->bi_bdev = dev->bdev;
-	if (async)
+	if (async) {
 		btrfs_schedule_bio(root, dev, rw, bio);
-	else
+	} else {
+#ifdef CONFIG_DUET_BTRFS
+#ifdef CONFIG_DUET_DEBUG
+		printk(KERN_DEBUG "duet: hooking on submit_stripe_bio\n");
+#endif /* CONFIG_DUET_DEBUG */
+		duet_hook(rw & WRITE ?
+			DUET_HOOK_BTRFS_FGW : DUET_HOOK_BTRFS_FGR,
+			DUET_SETUP_HOOK_BA, (void *)bio);
+#endif /* CONFIG_DUET_BTRFS */
 		btrfsic_submit_bio(rw, bio);
+	}
 }
 
 static int breakup_stripe_bio(struct btrfs_root *root, struct btrfs_bio *bbio,

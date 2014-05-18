@@ -16,14 +16,15 @@
  * Boston, MA 021110-1307, USA.
  */
 
-#ifndef _DUET_H
-#define _DUET_H
+#ifndef _COMMON_H
+#define _COMMON_H
 #include <linux/fs.h>
 #include <linux/slab.h>
 #include <linux/sched.h>
 #include <linux/wait.h>
 #include <linux/rbtree.h>
 #include <linux/rculist.h>
+#include <linux/duet.h>
 
 #define TASK_NAME_LEN 128
 
@@ -80,11 +81,8 @@ int duet_bmap_set(__u8 *bmap, __u32 bmap_bytelen, __u64 first_byte,
 int duet_bmap_chk(__u8 *bmap, __u32 bmap_bytelen, __u64 first_byte,
 	__u32 blksize, __u64 req_byte, __u32 req_bytelen, __u8 set);
 
-/* task.c */
+/* task.c -- not in linux/duet.h */
 void duet_task_dispose(struct duet_task *task);
-int duet_task_register(__u8 *taskid, const char *name, __u32 blksize,
-	__u32 bmapsize);
-int duet_task_deregister(__u8 taskid);
 int duet_chk_done(__u8 taskid, __u64 lbn, __u32 len);
 int duet_chk_todo(__u8 taskid, __u64 lbn, __u32 len);
 int duet_mark_done(__u8 taskid, __u64 lbn, __u32 len);
@@ -92,8 +90,9 @@ int duet_mark_todo(__u8 taskid, __u64 lbn, __u32 len);
 int duet_print_rbt(__u8 taskid);
 
 /* ioctl.c */
+int duet_is_online(void);
 int duet_bootstrap(void);
 int duet_shutdown(void);
 long duet_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 
-#endif /* _DUET_H */
+#endif /* _COMMON_H */

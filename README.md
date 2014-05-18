@@ -9,3 +9,13 @@ git://kernel.ubuntu.com/ubuntu/ubuntu-precise.git (tag:Ubuntu-lts-3.13.0-17.37)
 
 btrfs tools 3.12 retrieved from:
 git://git.kernel.org/pub/scm/linux/kernel/git/mason/btrfs-progs.git
+
+Telling foreground from background:
+-----------------------------------
+
+In order to detect which blocks get accessed in the critical path (file system
+foreground workload), we need to intercept the following functions:
+- btrfsic_submit_bio, and submit_bio when called directly
+- btrfsic_submit_bio_wait, and submit_bio_wait when called directly
+- btrfsic_submit_bh, and submit_bh when called directly
+  (currently only used by disk-io.c:write_supers, and ignored there)

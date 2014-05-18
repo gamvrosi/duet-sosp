@@ -20,6 +20,9 @@
 #include "locking.h"
 #include "rcu-string.h"
 #include "backref.h"
+#ifdef CONFIG_DUET_BTRFS
+#include <linux/duet.h>
+#endif /* CONFIG_DUET_BTRFS */
 
 static struct kmem_cache *extent_state_cache;
 static struct kmem_cache *extent_buffer_cache;
@@ -2012,6 +2015,13 @@ int repair_io_failure(struct btrfs_fs_info *fs_info, u64 start,
 		return -EIO;
 	}
 
+#ifdef CONFIG_DUET_BTRFS
+#ifdef CONFIG_DUET_DEBUG
+	printk(KERN_DEBUG "duet: hooking on repair_io_failure\n");
+#endif /* CONFIG_DUET_DEBUG */
+	duet_hook(DUET_HOOK_BTRFS_FGW, DUET_SETUP_HOOK_BW, (void *)bio);
+#endif /* CONFIG_DUET_BTRFS */
+
 	printk_ratelimited_in_rcu(KERN_INFO "btrfs read error corrected: ino %lu off %llu "
 		      "(dev %s sector %llu)\n", page->mapping->host->i_ino,
 		      start, rcu_str_deref(dev->name), sector);
@@ -2596,11 +2606,20 @@ static int __must_check submit_one_bio(int rw, struct bio *bio,
 
 	bio_get(bio);
 
-	if (tree->ops && tree->ops->submit_bio_hook)
+	if (tree->ops && tree->ops->submit_bio_hook) {
 		ret = tree->ops->submit_bio_hook(page->mapping->host, rw, bio,
 					   mirror_num, bio_flags, start);
-	else
+	} else {
+#ifdef CONFIG_DUET_BTRFS
+#ifdef CONFIG_DUET_DEBUG
+                printk(KERN_DEBUG "duet: hooking on submit_one_bio\n");
+#endif /* CONFIG_DUET_DEBUG */
+		duet_hook(
+			rw & WRITE ? DUET_HOOK_BTRFS_FGW : DUET_HOOK_BTRFS_FGR,
+			DUET_SETUP_HOOK_BA, (void *)bio);
+#endif /* CONFIG_DUET_BTRFS */
 		btrfsic_submit_bio(rw, bio);
+	}
 
 	if (bio_flagged(bio, BIO_EOPNOTSUPP))
 		ret = -EOPNOTSUPP;

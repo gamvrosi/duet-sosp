@@ -20,7 +20,7 @@
 #include <linux/cdev.h>
 #include <linux/device.h>
 #include <linux/slab.h>
-#include "duet.h"
+#include "common.h"
 
 #define DUET_DEVNAME "duet"
 

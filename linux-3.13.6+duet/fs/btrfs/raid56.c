@@ -43,6 +43,9 @@
 #include "async-thread.h"
 #include "check-integrity.h"
 #include "rcu-string.h"
+#ifdef CONFIG_DUET_BTRFS
+#include <linux/duet.h>
+#endif /* CONFIG_DUET_BTRFS */
 
 /* set when additional merges to this rbio are not allowed */
 #define RBIO_RMW_LOCKED_BIT	1
@@ -1256,6 +1259,13 @@ static noinline void finish_rmw(struct btrfs_raid_bio *rbio)
 		bio->bi_private = rbio;
 		bio->bi_end_io = raid_write_end_io;
 		BUG_ON(!test_bit(BIO_UPTODATE, &bio->bi_flags));
+#ifdef CONFIG_DUET_BTRFS
+#ifdef CONFIG_DUET_DEBUG
+		printk(KERN_DEBUG "duet: hooking on finish_rmw\n");
+#endif /* CONFIG_DUET_DEBUG */
+		duet_hook(DUET_HOOK_BTRFS_FGW, DUET_SETUP_HOOK_BA,
+			(void *)bio);
+#endif /* CONFIG_DUET_BTRFS */
 		submit_bio(WRITE, bio);
 	}
 	return;
@@ -1516,6 +1526,13 @@ static int raid56_rmw_stripe(struct btrfs_raid_bio *rbio)
 				    BTRFS_WQ_ENDIO_RAID56);
 
 		BUG_ON(!test_bit(BIO_UPTODATE, &bio->bi_flags));
+#ifdef CONFIG_DUET_BTRFS
+#ifdef CONFIG_DUET_DEBUG
+		printk(KERN_DEBUG "duet: hooking on raid56_rmw_stripe\n");
+#endif /* CONFIG_DUET_DEBUG */
+		duet_hook(DUET_HOOK_BTRFS_FGR, DUET_SETUP_HOOK_BA,
+			(void *)bio);
+#endif /* CONFIG_DUET_BTRFS */
 		submit_bio(READ, bio);
 	}
 	/* the actual write will happen once the reads are done */
@@ -2014,6 +2031,13 @@ static int __raid56_parity_recover(struct btrfs_raid_bio *rbio)
 				    BTRFS_WQ_ENDIO_RAID56);
 
 		BUG_ON(!test_bit(BIO_UPTODATE, &bio->bi_flags));
+#ifdef CONFIG_DUET_BTRFS
+#ifdef CONFIG_DUET_DEBUG
+		printk(KERN_DEBUG "duet: hooking on __raid56_parity_recover\n");
+#endif /* CONFIG_DUET_DEBUG */
+		duet_hook(DUET_HOOK_BTRFS_FGR, DUET_SETUP_HOOK_BA,
+			(void *)bio);
+#endif /* CONFIG_DUET_BTRFS */
 		submit_bio(READ, bio);
 	}
 out:

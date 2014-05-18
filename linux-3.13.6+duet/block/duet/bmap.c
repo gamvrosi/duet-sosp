@@ -15,7 +15,7 @@
  * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
  * Boston, MA 021110-1307, USA.
  */
-#include "duet.h"
+#include "common.h"
 
 __u32 duet_bmap_count(__u8 *bmap, __u32 byte_len)
 {
@@ -149,7 +149,7 @@ static int duet_bmap_chk_bits(__u8 *bmap, __u32 start, __u32 num, __u8 set)
 
 #ifdef CONFIG_DUET_DEBUG
 	printk(KERN_DEBUG
-		"duet_bmap_chk_bits: start=%llu, num=%lu, fbits=%02x, "
+		"duet_bmap_chk_bits: start=%u, num=%lu, fbits=%02x, "
 		"l_bits=%02x, f_mask=%02x, l_mask=%02x\n", start,
 		(long unsigned int) num, f_bits, l_bits, f_mask, l_mask);
 #endif /* CONFIG_DUET_DEBUG */

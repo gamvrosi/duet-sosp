@@ -17,8 +17,13 @@
  */
 #include <linux/slab.h>
 #include <linux/uaccess.h>
-#include "duet.h"
+#include <linux/duet.h>
 #include "ioctl.h"
+
+int duet_is_online(void)
+{
+	return (atomic_read(&duet_env.status) == DUET_STATUS_ON);
+}
 
 int duet_bootstrap(void)
 {
