@@ -3143,7 +3143,8 @@ static int write_dev_supers(struct btrfs_device *device,
 #ifdef CONFIG_DUET_DEBUG
 		printk(KERN_DEBUG "duet: hooking on write_dev_supers\n");
 #endif /* CONFIG_DUET_DEBUG */
-		duet_hook(DUET_HOOK_BTRFS_FGW, DUET_SETUP_HOOK_BH, (void *)bh);
+		duet_hook(DUET_HOOK_BTRFS_WRITE, DUET_SETUP_HOOK_BH,
+			(void *)bh);
 #endif /* CONFIG_DUET_BTRFS */
 
 		/*
@@ -3233,7 +3234,7 @@ static int write_dev_flush(struct btrfs_device *device, int wait)
 #ifdef CONFIG_DUET_DEBUG
 	printk(KERN_DEBUG "duet: hooking on write_dev_flush\n");
 #endif /* CONFIG_DUET_DEBUG */
-	duet_hook(DUET_HOOK_BTRFS_FGW, DUET_SETUP_HOOK_BA, (void *)bio);
+	duet_hook(DUET_HOOK_BTRFS_WRITE, DUET_SETUP_HOOK_BA, (void *)bio);
 #endif /* CONFIG_DUET_BTRFS */
 #endif /* 0 */
 	btrfsic_submit_bio(WRITE_FLUSH, bio);

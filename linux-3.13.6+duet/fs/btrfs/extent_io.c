@@ -2008,6 +2008,10 @@ int repair_io_failure(struct btrfs_fs_info *fs_info, u64 start,
 	bio->bi_bdev = dev->bdev;
 	bio_add_page(bio, page, length, start - page_offset(page));
 
+#ifdef CONFIG_DUET_BTRFS
+	duet_hook(0, DUET_SETUP_HOOK_BW_START, (void *)bio);
+#endif /* CONFIG_DUET_BTRFS */
+
 	if (btrfsic_submit_bio_wait(WRITE_SYNC, bio)) {
 		/* try to remap that extent elsewhere? */
 		bio_put(bio);
@@ -2019,7 +2023,7 @@ int repair_io_failure(struct btrfs_fs_info *fs_info, u64 start,
 #ifdef CONFIG_DUET_DEBUG
 	printk(KERN_DEBUG "duet: hooking on repair_io_failure\n");
 #endif /* CONFIG_DUET_DEBUG */
-	duet_hook(DUET_HOOK_BTRFS_FGW, DUET_SETUP_HOOK_BW, (void *)bio);
+	duet_hook(DUET_HOOK_BTRFS_WRITE, DUET_SETUP_HOOK_BW_END, (void *)bio);
 #endif /* CONFIG_DUET_BTRFS */
 
 	printk_ratelimited_in_rcu(KERN_INFO "btrfs read error corrected: ino %lu off %llu "
@@ -2614,8 +2618,8 @@ static int __must_check submit_one_bio(int rw, struct bio *bio,
 #ifdef CONFIG_DUET_DEBUG
                 printk(KERN_DEBUG "duet: hooking on submit_one_bio\n");
 #endif /* CONFIG_DUET_DEBUG */
-		duet_hook(
-			rw & WRITE ? DUET_HOOK_BTRFS_FGW : DUET_HOOK_BTRFS_FGR,
+		duet_hook(rw & WRITE ?
+			DUET_HOOK_BTRFS_WRITE : DUET_HOOK_BTRFS_READ,
 			DUET_SETUP_HOOK_BA, (void *)bio);
 #endif /* CONFIG_DUET_BTRFS */
 		btrfsic_submit_bio(rw, bio);

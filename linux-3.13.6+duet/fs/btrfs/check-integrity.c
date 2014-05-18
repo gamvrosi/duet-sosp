@@ -1718,6 +1718,10 @@ static int btrfsic_read_block(struct btrfsic_state *state,
 			return -1;
 		}
 
+#ifdef CONFIG_DUET_BTRFS
+		duet_hook(0, DUET_SETUP_HOOK_BW_START, (void *)bio);
+#endif /* CONFIG_DUET_BTRFS */
+
 		if (submit_bio_wait(READ, bio)) {
 			printk(KERN_INFO
 			       "btrfsic: read error at logical %llu dev %s!\n",
@@ -1730,7 +1734,8 @@ static int btrfsic_read_block(struct btrfsic_state *state,
 #ifdef CONFIG_DUET_DEBUG
 		printk(KERN_DEBUG "duet: hooking on btrfsic_read_block\n");
 #endif /* CONFIG_DUET_DEBUG */
-		duet_hook(DUET_HOOK_BTRFS_FGR, DUET_SETUP_HOOK_BW, (void *)bio);
+		duet_hook(DUET_HOOK_BTRFS_READ, DUET_SETUP_HOOK_BW_END,
+			(void *)bio);
 #endif /* CONFIG_DUET_BTRFS */
 
 		bio_put(bio);

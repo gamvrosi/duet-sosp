@@ -1263,7 +1263,7 @@ static noinline void finish_rmw(struct btrfs_raid_bio *rbio)
 #ifdef CONFIG_DUET_DEBUG
 		printk(KERN_DEBUG "duet: hooking on finish_rmw\n");
 #endif /* CONFIG_DUET_DEBUG */
-		duet_hook(DUET_HOOK_BTRFS_FGW, DUET_SETUP_HOOK_BA,
+		duet_hook(DUET_HOOK_BTRFS_WRITE, DUET_SETUP_HOOK_BA,
 			(void *)bio);
 #endif /* CONFIG_DUET_BTRFS */
 		submit_bio(WRITE, bio);
@@ -1530,7 +1530,7 @@ static int raid56_rmw_stripe(struct btrfs_raid_bio *rbio)
 #ifdef CONFIG_DUET_DEBUG
 		printk(KERN_DEBUG "duet: hooking on raid56_rmw_stripe\n");
 #endif /* CONFIG_DUET_DEBUG */
-		duet_hook(DUET_HOOK_BTRFS_FGR, DUET_SETUP_HOOK_BA,
+		duet_hook(DUET_HOOK_BTRFS_READ, DUET_SETUP_HOOK_BA,
 			(void *)bio);
 #endif /* CONFIG_DUET_BTRFS */
 		submit_bio(READ, bio);
@@ -2035,7 +2035,7 @@ static int __raid56_parity_recover(struct btrfs_raid_bio *rbio)
 #ifdef CONFIG_DUET_DEBUG
 		printk(KERN_DEBUG "duet: hooking on __raid56_parity_recover\n");
 #endif /* CONFIG_DUET_DEBUG */
-		duet_hook(DUET_HOOK_BTRFS_FGR, DUET_SETUP_HOOK_BA,
+		duet_hook(DUET_HOOK_BTRFS_READ, DUET_SETUP_HOOK_BA,
 			(void *)bio);
 #endif /* CONFIG_DUET_BTRFS */
 		submit_bio(READ, bio);

@@ -29,6 +29,9 @@
 #include "check-integrity.h"
 #include "rcu-string.h"
 #include "raid56.h"
+#ifdef CONFIG_DUET_BTRFS
+#include <linux/duet.h>
+#endif /* CONFIG_DUET_BTRFS */
 
 /*
  * This is only the first step towards a full-features scrub. It reads all
@@ -1311,8 +1314,18 @@ static void scrub_recheck_block(struct btrfs_fs_info *fs_info,
 		bio->bi_sector = page->physical >> 9;
 
 		bio_add_page(bio, page->page, PAGE_SIZE, 0);
+#ifdef CONFIG_DUET_BTRFS
+		duet_hook(0, DUET_SETUP_HOOK_BW_START, (void *)bio);
+#endif /* CONFIG_DUET_BTRFS */
 		if (btrfsic_submit_bio_wait(READ, bio))
 			sblock->no_io_error_seen = 0;
+#ifdef CONFIG_DUET_BTRFS
+#ifdef CONFIG_DUET_DEBUG
+		printk(KERN_DEBUG "duet: hooking on scrub_recheck_block\n");
+#endif /* CONFIG_DUET_DEBUG */
+		duet_hook(DUET_HOOK_BTRFS_READ, DUET_SETUP_HOOK_BW_END,
+			(void *)bio);
+#endif /* CONFIG_DUET_BTRFS */
 
 		bio_put(bio);
 	}
@@ -1435,6 +1448,9 @@ static int scrub_repair_page_from_good_copy(struct scrub_block *sblock_bad,
 			return -EIO;
 		}
 
+#ifdef CONFIG_DUET_BTRFS
+		duet_hook(0, DUET_SETUP_HOOK_BW_START, (void *)bio);
+#endif /* CONFIG_DUET_BTRFS */
 		if (btrfsic_submit_bio_wait(WRITE, bio)) {
 			btrfs_dev_stat_inc_and_print(page_bad->dev,
 				BTRFS_DEV_STAT_WRITE_ERRS);
@@ -1444,6 +1460,13 @@ static int scrub_repair_page_from_good_copy(struct scrub_block *sblock_bad,
 			bio_put(bio);
 			return -EIO;
 		}
+#ifdef CONFIG_DUET_BTRFS
+#ifdef CONFIG_DUET_DEBUG
+		printk(KERN_DEBUG "duet: hooking on scrub_repair_page_from_good_copy\n");
+#endif /* CONFIG_DUET_DEBUG */
+		duet_hook(DUET_HOOK_BTRFS_WRITE, DUET_SETUP_HOOK_BW_END,
+			(void *)bio);
+#endif /* CONFIG_DUET_BTRFS */
 		bio_put(bio);
 	}
 
@@ -1564,6 +1587,13 @@ static void scrub_wr_submit(struct scrub_ctx *sctx)
 	wr_ctx->wr_curr_bio = NULL;
 	WARN_ON(!sbio->bio->bi_bdev);
 	scrub_pending_bio_inc(sctx);
+#ifdef CONFIG_DUET_BTRFS
+#ifdef CONFIG_DUET_DEBUG
+	printk(KERN_DEBUG "duet: hooking on scrub_wr_submit\n");
+#endif /* CONFIG_DUET_DEBUG */
+	duet_hook(DUET_HOOK_BTRFS_WRITE, DUET_SETUP_HOOK_BA,
+		(void *)sbio->bio);
+#endif /* CONFIG_DUET_BTRFS */
 	/* process all writes in a single worker thread. Then the block layer
 	 * orders the requests before sending them to the driver which
 	 * doubled the write performance on spinning disks when measured
@@ -1880,6 +1910,13 @@ static void scrub_submit(struct scrub_ctx *sctx)
 			"btrfs: scrub_submit(bio bdev == NULL) is unexpected!\n");
 		bio_endio(sbio->bio, -EIO);
 	} else {
+#ifdef CONFIG_DUET_BTRFS
+#ifdef CONFIG_DUET_DEBUG
+		printk(KERN_DEBUG "duet: hooking on scrub_submit\n");
+#endif /* CONFIG_DUET_DEBUG */
+		duet_hook(DUET_HOOK_BTRFS_READ, DUET_SETUP_HOOK_BA,
+			(void *)sbio->bio);
+#endif /* CONFIG_DUET_BTRFS */
 		btrfsic_submit_bio(READ, sbio->bio);
 	}
 }
@@ -3382,8 +3419,18 @@ leave_with_eio:
 		return -EIO;
 	}
 
+#ifdef CONFIG_DUET_BTRFS
+	duet_hook(0, DUET_SETUP_HOOK_BW_START, (void *)bio);
+#endif /* CONFIG_DUET_BTRFS */
 	if (btrfsic_submit_bio_wait(WRITE_SYNC, bio))
 		goto leave_with_eio;
+#ifdef CONFIG_DUET_BTRFS
+#ifdef CONFIG_DUET_DEBUG
+	printk(KERN_DEBUG "duet: hooking on write_page_nocow\n");
+#endif /* CONFIG_DUET_DEBUG */
+	duet_hook(DUET_HOOK_BTRFS_WRITE, DUET_SETUP_HOOK_BW_END,
+		(void *)bio);
+#endif /* CONFIG_DUET_BTRFS */
 
 	bio_put(bio);
 	return 0;

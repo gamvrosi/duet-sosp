@@ -21,17 +21,19 @@
 
 /* Hook types */
 enum {
-	DUET_SETUP_HOOK_BA = 1,	/* asynchronous: submit_bio */
-	DUET_SETUP_HOOK_BW,	/* synchronous: submit_bio_wait */
-	DUET_SETUP_HOOK_BH,	/* asynchronous: submit_bh */
+	DUET_SETUP_HOOK_BA = 1,		/* async: submit_bio */
+	DUET_SETUP_HOOK_BW_START,	/* sync: submit_bio_wait (before) */
+	DUET_SETUP_HOOK_BW_END,		/* sync: submit_bio_wait (after) */
+	DUET_SETUP_HOOK_BH,		/* async: submit_bh */
 };
+
+/* bio flag */
+#define BIO_DUET        22      /* duet has seen this bio */
 
 /* Hook codes */
 #ifdef CONFIG_DUET_BTRFS
-#define DUET_HOOK_BTRFS_FGR	(1 << 0)
-#define DUET_HOOK_BTRFS_FGW	(1 << 1)
-#define DUET_HOOK_BTRFS_BGR	(1 << 2)
-#define DUET_HOOK_BTRFS_BGW	(1 << 3)
+#define DUET_HOOK_BTRFS_READ	(1 << 0)
+#define DUET_HOOK_BTRFS_WRITE	(1 << 1)
 #endif /* CONFIG_DUET_BTRFS */
 
 /* Core interface functions */

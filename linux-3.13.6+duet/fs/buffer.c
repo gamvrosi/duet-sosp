@@ -42,6 +42,9 @@
 #include <linux/mpage.h>
 #include <linux/bit_spinlock.h>
 #include <trace/events/block.h>
+#ifdef CONFIG_DUET
+#include <linux/duet.h>
+#endif /* CONFIG_DUET */
 
 static int fsync_buffers_list(spinlock_t *lock, struct list_head *list);
 
@@ -3043,6 +3046,11 @@ int _submit_bh(int rw, struct buffer_head *bh, unsigned long bio_flags)
 	bio->bi_end_io = end_bio_bh_io_sync;
 	bio->bi_private = bh;
 	bio->bi_flags |= bio_flags;
+#ifdef CONFIG_DUET
+	/* Mark this bio as seen by the duet framework */
+	if (bh->b_end_io == duet_bh_endio)
+		set_bit(BIO_DUET, &bio->bi_flags);
+#endif /* CONFIG_DUET */
 
 	/* Take care of bh's that straddle the end of the device */
 	guard_bh_eod(rw, bio, bh);

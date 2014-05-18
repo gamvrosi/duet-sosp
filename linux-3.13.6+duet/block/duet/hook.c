@@ -34,6 +34,12 @@ struct duet_bh_private {
 	__u8		hook_code;
 };
 
+static inline void mark_bio_seen(struct bio *bio)
+{
+	/* Mark this bio as seen by the duet framework */
+	set_bit(BIO_DUET, &bio->bi_flags);
+}
+
 /* We're finally here. Just find tasks that are interested in this event,
  * and call their handlers. */
 static void duet_handle_hook(__u8 hook_code, __u64 lbn, __u32 len)
@@ -123,6 +129,7 @@ static void duet_ba_hook(__u8 hook_code, struct bio *bio)
 	private->size = bio->bi_size;
 
 	/* Fix up bio structure */
+	mark_bio_seen(bio);
 	bio->bi_end_io = duet_bio_endio;
 	bio->bi_private = (void *)private;
 }
@@ -178,7 +185,10 @@ void duet_hook(__u8 hook_code, __u8 hook_type, void *hook_data)
 #endif /* CONFIG_DUET_DEBUG */
 		duet_ba_hook(hook_code, (struct bio *)hook_data);
 		break;
-	case DUET_SETUP_HOOK_BW:
+	case DUET_SETUP_HOOK_BW_START:
+		mark_bio_seen((struct bio *)hook_data);
+		break;
+	case DUET_SETUP_HOOK_BW_END:
 #ifdef CONFIG_DUET_DEBUG
 		printk(KERN_INFO "duet: Setting up BW hook (code %u)\n",
 			hook_code);
