@@ -36,9 +36,9 @@ enum {
 };
 
 struct duet_rbnode {
-	__u64 lbn;
-	struct rb_node node;
-	__u8 *bmap;
+	__u64		lbn;
+	struct rb_node	node;
+	__u8		*bmap;
 };
 
 struct duet_task {
@@ -49,26 +49,26 @@ struct duet_task {
 	atomic_t		refcount;
 
 	/* bitmap tree */
-	__u32 blksize;			/* bytes per bitmap bit */
-	__u32 bmapsize;			/* bytes per bitmap */
-	struct mutex bmaptree_mutex;
-	struct rb_root bmaptree;
+	__u32			blksize;		/* bytes per bitmap bit */
+	__u32			bmapsize;		/* bytes per bitmap */
+	struct mutex		bmaptree_mutex;
+	struct rb_root		bmaptree;
 
 	/* hook handling */
-	//__u8 hflags;
-	//void (*hhandler) (__u8, __u8, __u64, __u32, void *);
+	__u8			hook_mask;
+	duet_hook_handler_t	*hook_handler;
 };
 
 struct duet_info {
-	atomic_t status;
+	atomic_t		status;
 
 	/*
 	 * all the registered tasks in the framework, protected by a mutex
 	 * so we can safely walk the list to find handlers without worrying
 	 * about add/remove operations
 	 */
-	struct mutex task_list_mutex;
-	struct list_head tasks;
+	struct mutex		task_list_mutex;
+	struct list_head	tasks;
 };
 
 extern struct duet_info duet_env;

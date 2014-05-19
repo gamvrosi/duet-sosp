@@ -19,6 +19,13 @@
 #ifndef _DUET_H
 #define _DUET_H
 
+/*
+ * Task-specific hook handling function. Should handle all hook codes
+ * registered in the hook_mask. Arguments: __u8 taskid, __u8 hook_code,
+ * __u64 lbn, __u32 len, void *private
+ */
+typedef void (duet_hook_handler_t) (__u8, __u8, __u64, __u32, void *);
+
 /* Hook types */
 enum {
 	DUET_SETUP_HOOK_BA = 1,		/* async: submit_bio */
@@ -38,7 +45,7 @@ enum {
 
 /* Core interface functions */
 int duet_task_register(__u8 *taskid, const char *name, __u32 blksize,
-	__u32 bmapsize);
+	__u32 bmapsize, __u8 hook_mask, duet_hook_handler_t hook_handler);
 int duet_task_deregister(__u8 taskid);
 
 /* Hook-related functions */

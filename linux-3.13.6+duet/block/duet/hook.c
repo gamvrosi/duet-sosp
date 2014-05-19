@@ -42,11 +42,23 @@ static inline void mark_bio_seen(struct bio *bio)
 
 /* We're finally here. Just find tasks that are interested in this event,
  * and call their handlers. */
+/* TODO: Implement */
 static void duet_handle_hook(__u8 hook_code, __u64 lbn, __u32 len)
 {
-	/* TODO: Implement */
+	struct duet_task *cur;
+
+#ifdef CONFIG_DUET_DEBUG
 	printk(KERN_INFO "duet hook: code %u, lbn %llu, len %u\n",
 		hook_code, lbn, len);
+#endif /* CONFIG_DUET_DEBUG */
+
+	/* Go over the task list, and look for a task whose hook */
+	rcu_read_lock();
+	list_for_each_entry_rcu(cur, &duet_env.tasks, task_list) {
+                if (cur->hook_mask & hook_code)
+			cur->hook_handler(cur->id, hook_code, lbn, len, NULL);
+	}
+	rcu_read_unlock();
 }
 
 /* Callback function for asynchronous bio calls. We first restore the normal

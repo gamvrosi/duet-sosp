@@ -336,9 +336,18 @@ static void bmaptree_dispose(struct rb_root *root)
 	}
 }
 
+static void echo_handler(__u8 taskid, __u8 hook_code, __u64 lbn, __u32 len,
+	void *private)
+{
+	printk(KERN_DEBUG "duet: echo_handler called\n"
+		"duet: taskid = %u, hook_code = %u, lbn = %llu, len = %u\n",
+		taskid, hook_code, lbn, len);
+}
+
 /* Properly allocate and initialize a task struct */
 static int duet_task_init(struct duet_task **task, const char *name,
-	__u32 blksize, __u32 bmapsize)
+	__u32 blksize, __u32 bmapsize, __u8 hook_mask,
+	duet_hook_handler_t hook_handler)
 {
 	*task = kzalloc(sizeof(**task), GFP_NOFS);
 	if (!(*task))
@@ -362,6 +371,12 @@ static int duet_task_init(struct duet_task **task, const char *name,
 
 	mutex_init(&(*task)->bmaptree_mutex);
 	(*task)->bmaptree = RB_ROOT;
+	(*task)->hook_mask = hook_mask;
+
+	if (hook_handler)
+		(*task)->hook_handler = hook_handler;
+	else
+		(*task)->hook_handler = echo_handler;
 
 	return 0;
 }
@@ -377,7 +392,7 @@ void duet_task_dispose(struct duet_task *task)
 }
 
 int duet_task_register(__u8 *taskid, const char *name, __u32 blksize,
-	__u32 bmapsize)
+	__u32 bmapsize, __u8 hook_mask, duet_hook_handler_t hook_handler)
 {
 	int ret;
 	struct list_head *last;
@@ -388,7 +403,8 @@ int duet_task_register(__u8 *taskid, const char *name, __u32 blksize,
 		return -EINVAL;
 	}
 
-	ret = duet_task_init(&task, name, blksize, bmapsize);
+	ret = duet_task_init(&task, name, blksize, bmapsize, hook_mask,
+		hook_handler);
 	if (ret) {
 		printk(KERN_ERR "duet: failed to initialize task\n");
 		return ret;

@@ -38,18 +38,20 @@ static const char * const cmd_tasks_list_usage[] = {
 };
 
 static const char * const cmd_tasks_reg_usage[] = {
-	"duet tasks register [-n name] [-b blocksize] [-m bitmapsize]",
+	"duet tasks register [-n name] [-b blocksize] [-m bmapsize] [-h mask]",
 	"Registers a new task with the currently active framework. The task",
 	"will be assigned an ID, and will be registered under the provided",
 	"name. The bitmaps that keep information on what has been processed",
 	"can be customized with a specific block size per bit, and a specific",
 	"size for each bitmap kept. Small (but not too small) bitmaps can",
-	"save space by being omitted when not needed. This command is mainly",
-	" used for debugging purposes.",
+	"save space by being omitted when not needed. The default echo hook",
+	"handler will be used for the task, with a the hook code mask provided",
+	"This command is mainly used for debugging purposes.",
 	"",
 	"-n     name under which to register the task",
 	"-b     block size in bytes per bitmap bit",
 	"-m     number of bytes per bitmap",
+	"-h     hook code mask describing the codes wired to the handler",
 	NULL
 };
 
@@ -78,14 +80,15 @@ static int cmd_tasks_list(int fd, int argc, char **argv)
 	}
 
 	/* Print out the list we received */
-	fprintf(stdout, "Task ID\tTask Name\tBlock size\tBmap size\n"
-			"-------\t---------\t----------\t---------\n");
+	fprintf(stdout, "ID\tTask Name\tBlock size\tBmap size\tHook mask\n"
+			"--\t---------\t----------\t---------\t---------\n");
 	for (i=0; i<MAX_TASKS; i++) {
 		if (!args.taskid[i])
 			break;
 
-		fprintf(stdout, "%7d\t%9s\t%10u\t%9u\n", args.taskid[i],
-			args.task_names[i], args.blksize[i], args.bmapsize[i]);
+		fprintf(stdout, "%2d\t%9s\t%10u\t%9u\t%08x\n",
+			args.taskid[i], args.task_names[i], args.blksize[i],
+			args.bmapsize[i], args.hook_mask[i]);
 	}
 
 	return ret;
@@ -100,7 +103,7 @@ static int cmd_tasks_reg(int fd, int argc, char **argv)
 	args.cmd_flags = DUET_TASKS_REGISTER;
 
 	optind = 1;
-	while ((c = getopt(argc, argv, "n:b:m:")) != -1) {
+	while ((c = getopt(argc, argv, "n:b:m:h:")) != -1) {
 		switch (c) {
 		case 'n':
 			len = strnlen(optarg, TASK_NAME_LEN);
@@ -124,6 +127,14 @@ static int cmd_tasks_reg(int fd, int argc, char **argv)
 			args.bmapsize[0] = (__u32)strtoll(optarg, NULL, 10);
 			if (errno) {
 				perror("strtoll: invalid bitmap size");
+				usage(cmd_tasks_reg_usage);
+			}
+			break;
+		case 'h':
+			errno = 0;
+			args.hook_mask[0] = (__u8)strtol(optarg, NULL, 10);
+			if (errno) {
+				perror("strtol: invalid hook mask");
 				usage(cmd_tasks_reg_usage);
 			}
 			break;

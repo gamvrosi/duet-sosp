@@ -130,6 +130,7 @@ static int duet_task_sendlist(struct duet_ioctl_tasks_args *ta)
 		memcpy(ta->task_names[i], cur->name, TASK_NAME_LEN);
 		ta->blksize[i] = cur->blksize;
 		ta->bmapsize[i] = cur->bmapsize;
+		ta->hook_mask[i] = cur->hook_mask;
 		i++;
 		if (i == MAX_TASKS)
 			break;
@@ -196,7 +197,8 @@ static int duet_ioctl_tasks(void __user *arg)
 		break;
 	case DUET_TASKS_REGISTER:
 		if (duet_task_register(&ta->taskid[0], ta->task_names[0],
-		    ta->blksize[0], ta->bmapsize[0])) {
+				ta->blksize[0], ta->bmapsize[0],
+				ta->hook_mask[0], NULL)) {
 			printk(KERN_ERR "duet: registration failed\n");
 			goto err;
 		}
