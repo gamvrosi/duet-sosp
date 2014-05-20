@@ -17,6 +17,7 @@
  */
 #include <linux/slab.h>
 #include <linux/uaccess.h>
+#include <linux/fs.h>
 #include <linux/duet.h>
 #include "ioctl.h"
 
@@ -24,6 +25,7 @@ int duet_is_online(void)
 {
 	return (atomic_read(&duet_env.status) == DUET_STATUS_ON);
 }
+EXPORT_SYMBOL_GPL(duet_is_online);
 
 int duet_bootstrap(void)
 {
@@ -198,7 +200,7 @@ static int duet_ioctl_tasks(void __user *arg)
 	case DUET_TASKS_REGISTER:
 		if (duet_task_register(&ta->taskid[0], ta->task_names[0],
 				ta->blksize[0], ta->bmapsize[0],
-				ta->hook_mask[0], NULL)) {
+				ta->hook_mask[0], NULL, NULL, NULL)) {
 			printk(KERN_ERR "duet: registration failed\n");
 			goto err;
 		}

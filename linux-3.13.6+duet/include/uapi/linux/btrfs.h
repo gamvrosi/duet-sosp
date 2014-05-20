@@ -87,6 +87,10 @@ struct btrfs_scrub_progress {
 	__u64 tree_extents_scrubbed;	/* # of tree extents scrubbed */
 	__u64 data_bytes_scrubbed;	/* # of data bytes scrubbed */
 	__u64 tree_bytes_scrubbed;	/* # of tree bytes scrubbed */
+#ifdef CONFIG_BTRFS_DUET_SCRUB
+	__u64 data_bytes_verified;	/* # of data bytes actually verified */
+	__u64 tree_bytes_verified;	/* # of tree bytes actually verified */
+#endif /* CONFIG_BTRFS_DUET_SCRUB */
 #ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
 	__u64 sync_errors;		/* # of sync errors encountered */
 #endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */

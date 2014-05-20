@@ -58,6 +58,8 @@ config BTRFS_FS_CHECK_INTEGRITY
 	  to verify the integrity of (super)-block write requests
 	  during the run of a regression test, say N
 
+menu "Btrfs maintenance tasks"
+
 choice
 	prompt "Btrfs scrubbing with I/O throttling (NEW)"
 	default BTRFS_FS_SCRUB_NONE
@@ -88,6 +90,29 @@ config BTRFS_FS_SCRUB_ADAPT
 	  foreground workload requests.
 endchoice
 
+config BTRFS_DUET_SCRUB
+	bool "Duet framework support for the btrfs scrubber"
+	depends on BTRFS_FS
+	select DUET
+	select DUET_BTRFS
+	help
+	  Adds support for the btrfs scrubber to collaborate with other tasks
+	  through the duet framework
+
+config BTRFS_FS_SCRUB_BOOST
+	bool "Btrfs scrubbing boost capability (EXPERIMENTAL)"
+	depends on BTRFS_FS_SCRUB_ADAPT
+	help
+	  Enables boosting functionality for the btrfs scrubber.
+
+config BTRFS_FS_SCRUB_READA
+	bool "Btrfs scrubbing enhanced readahead (EXPERIMENTAL)"
+	depends on BTRFS_FS_SCRUB_ADAPT
+	select DUET
+	select DUET_BTRFS
+	help
+	  Enables enhanced readahead functionality for the btrfs scrubber.
+
 config BTRFS_FS_SCRUB_DEBUG
 	bool "Btrfs scrubbing debug messages"
 	depends on BTRFS_FS
@@ -95,6 +120,8 @@ config BTRFS_FS_SCRUB_DEBUG
 	  Enables debugging messages for the btrfs scrubber.
 
 	  If unsure/not a developer, say N here.
+
+endmenu
 
 config BTRFS_FS_RUN_SANITY_TESTS
 	bool "Btrfs will run sanity tests upon loading"

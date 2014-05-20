@@ -114,6 +114,10 @@ static void print_scrub_full(struct btrfs_scrub_progress *sp)
 	printf("\tdata_bytes_scrubbed: %lld\n", sp->data_bytes_scrubbed);
 	printf("\ttree_bytes_scrubbed: %lld\n", sp->tree_bytes_scrubbed);
 #ifdef DUET_SCRUB
+	printf("\tdata_bytes_verified: %lld\n", sp->data_bytes_verified);
+	printf("\ttree_bytes_verified: %lld\n", sp->tree_bytes_verified);
+#endif
+#ifdef ADAPT_SCRUB
 	printf("\tsync_errors: %lld\n", sp->sync_errors);
 #endif
 	printf("\tread_errors: %lld\n", sp->read_errors);
@@ -155,11 +159,21 @@ static void print_scrub_summary(struct btrfs_scrub_progress *p)
 		printf("*** WARNING: memory allocation failed while scrubbing. "
 		       "results may be inaccurate\n");
 
+#ifdef DUET_SCRUB
+	printf("\ttotal bytes scrubbed: %s (%s in data, %s in trees)\n",
+		pretty_size(p->data_bytes_scrubbed + p->tree_bytes_scrubbed),
+		pretty_size(p->data_bytes_scrubbed),
+		pretty_size(p->tree_bytes_scrubbed));
+	printf("\ttotal bytes verified: %s (%s in data, %s in trees)\n",
+		pretty_size(p->data_bytes_verified + p->tree_bytes_verified),
+		pretty_size(p->data_bytes_verified),
+		pretty_size(p->tree_bytes_verified));
+#else
 	printf("\ttotal bytes scrubbed: %s with %llu errors\n",
 		pretty_size(p->data_bytes_scrubbed + p->tree_bytes_scrubbed),
 		max(err_cnt, err_cnt2));
-
-#ifdef DUET_SCRUB
+#endif
+#ifdef ADAPT_SCRUB
 	printf("\ttotal errors encountered: %llu actual, %llu sync\n",
 		max(err_cnt, err_cnt2), p->sync_errors);
 #else
@@ -214,6 +228,10 @@ static void add_to_fs_stat(struct btrfs_scrub_progress *p,
 	_SCRUB_FS_STAT(p, data_bytes_scrubbed, fs_stat);
 	_SCRUB_FS_STAT(p, tree_bytes_scrubbed, fs_stat);
 #ifdef DUET_SCRUB
+	_SCRUB_FS_STAT(p, data_bytes_verified, fs_stat);
+	_SCRUB_FS_STAT(p, tree_bytes_verified, fs_stat);
+#endif
+#ifdef ADAPT_SCRUB
 	_SCRUB_FS_STAT(p, sync_errors, fs_stat);
 #endif
 	_SCRUB_FS_STAT(p, read_errors, fs_stat);
@@ -601,6 +619,12 @@ again:
 			_SCRUB_KVREAD(ret, &i, tree_bytes_scrubbed, avail, l,
 					&p[curr]->p);
 #ifdef DUET_SCRUB
+			_SCRUB_KVREAD(ret, &i, data_bytes_verified, avail, l,
+					&p[curr]->p);
+			_SCRUB_KVREAD(ret, &i, tree_bytes_verified, avail, l,
+					&p[curr]->p);
+#endif
+#ifdef ADAPT_SCRUB
 			_SCRUB_KVREAD(ret, &i, sync_errors, avail, l,
 					&p[curr]->p);
 #endif
@@ -700,6 +724,10 @@ static struct scrub_progress *scrub_resumed_stats(struct scrub_progress *data,
 	_SCRUB_SUM(dest, data, data_bytes_scrubbed);
 	_SCRUB_SUM(dest, data, tree_bytes_scrubbed);
 #ifdef DUET_SCRUB
+	_SCRUB_SUM(dest, data, data_bytes_verified);
+	_SCRUB_SUM(dest, data, tree_bytes_verified);
+#endif
+#ifdef ADAPT_SCRUB
 	_SCRUB_SUM(dest, data, sync_errors);
 #endif
 	_SCRUB_SUM(dest, data, read_errors);
@@ -767,6 +795,10 @@ static int scrub_write_file(int fd, const char *fsid,
 		    _SCRUB_KVWRITE(fd, buf, data_bytes_scrubbed, use) ||
 		    _SCRUB_KVWRITE(fd, buf, tree_bytes_scrubbed, use) ||
 #ifdef DUET_SCRUB
+		    _SCRUB_KVWRITE(fd, buf, data_bytes_verified, use) ||
+		    _SCRUB_KVWRITE(fd, buf, tree_bytes_verified, use) ||
+#endif
+#ifdef ADAPT_SCRUB
 		    _SCRUB_KVWRITE(fd, buf, sync_errors, use) ||
 #endif
 		    _SCRUB_KVWRITE(fd, buf, read_errors, use) ||
@@ -1123,7 +1155,7 @@ static int scrub_start(int argc, char **argv, int resume)
 	void *terr;
 	u64 devid;
 	DIR *dirstream = NULL;
-#ifdef DUET_SCRUB
+#ifdef ADAPT_SCRUB
 	u64 deadline = 0;
 	u8 enumerate = 0;
 	u8 boost = 0;
@@ -1161,7 +1193,7 @@ static int scrub_start(int argc, char **argv, int resume)
 		case 'n':
 			ioprio_classdata = (int)strtol(optarg, NULL, 10);
 			break;
-#ifdef DUET_SCRUB
+#ifdef ADAPT_SCRUB
 		case 'E':
 			enumerate = 1;
 			break;
@@ -1287,7 +1319,7 @@ static int scrub_start(int argc, char **argv, int resume)
 
 	for (i = 0; i < fi_args.num_devices; ++i) {
 		devid = di_args[i].devid;
-#ifdef DUET_SCRUB
+#ifdef ADAPT_SCRUB
 		sp[i].scrub_args.deadline = deadline;
 		sp[i].scrub_args.bgflags |= (enumerate ? BTRFS_BGSC_ENUM : 0);
 		sp[i].scrub_args.bgflags |= (boost ? BTRFS_BGSC_BOOST : 0);
@@ -1578,7 +1610,7 @@ out:
 }
 
 static const char * const cmd_scrub_start_usage[] = {
-#ifdef DUET_SCRUB
+#ifdef ADAPT_SCRUB
 	"btrfs scrub start [-BdqrREDN] [-c ioprio_class -n ioprio_classdata] <path>|<device>",
 #else
 	"btrfs scrub start [-BdqrRN] [-c ioprio_class -n ioprio_classdata] <path>|<device>",
@@ -1592,7 +1624,7 @@ static const char * const cmd_scrub_start_usage[] = {
 	"-R     raw print mode, print full data instead of summary"
 	"-c     set ioprio class (see ionice(1) manpage)",
 	"-n     set ioprio classdata (see ionice(1) manpage)",
-#ifdef DUET_SCRUB
+#ifdef ADAPT_SCRUB
 	"-E     enumerate allocated extents before estimating scrub rate",
 	"-b     enable boosting to ensure scrubbing deadline is met",
 	"-D     set scrubbing deadline (in seconds)",

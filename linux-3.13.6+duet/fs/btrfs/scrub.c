@@ -38,6 +38,9 @@
 #define BTRFS_SCRUB_WAIT_TO	1+5*HZ/1000 /* Wait timeout */
 #define MAX_BIOS_PER_SCTX	1024
 #endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
+#ifdef CONFIG_BTRFS_FS_SCRUB_READA
+#define BTRFS_SCRUB_MAX_READA	20 /* Max concurrent readahead sessions */
+#endif /* CONFIG_BTRFS_FS_SCRUB_READA */
 
 /*
  * This is only the first step towards a full-features scrub. It reads all
@@ -181,6 +184,10 @@ struct scrub_ctx {
 	 */
 	struct btrfs_scrub_progress stat;
 	spinlock_t		stat_lock;
+
+#ifdef CONFIG_BTRFS_DUET_SCRUB
+	__u8			taskid;
+#endif /* CONFIG_BTRFS_DUET_SCRUB */
 };
 
 struct scrub_fixup_nodatasum {
@@ -384,6 +391,12 @@ static noinline_for_stack void scrub_free_ctx(struct scrub_ctx *sctx)
 		return;
 
 	scrub_free_wr_ctx(&sctx->wr_ctx);
+
+#ifdef CONFIG_BTRFS_DUET_SCRUB
+	/* Register the task with the duet framework */
+	if (duet_task_deregister(sctx->taskid))
+		printk(KERN_ERR "scrub: failed to deregister from duet framework\n");
+#endif /* CONFIG_BTRFS_DUET_SCRUB */
 
 	/* this can happen when scrub is cancelled */
 	if (sctx->curr != -1) {
@@ -620,6 +633,32 @@ out:
 }
 #endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
 
+#ifdef CONFIG_BTRFS_DUET_SCRUB
+static void btrfs_scrub_duet_handler(__u8 taskid, __u8 hook_code,
+	struct block_device *bdev, __u64 lbn, __u32 len, void *privdata)
+{
+	//struct scrub_ctx *sctx = (struct scrub_ctx *)privdata;
+
+	printk(KERN_DEBUG "duet: In the btrfs_scrub_duet_handler\n");
+
+	/* Since we got all the way here, we're on the right device.
+	 * Handle the hook now */
+	if (hook_code & DUET_HOOK_BTRFS_WRITE) {
+		if (duet_mark_todo(taskid, lbn, len))
+			printk(KERN_ERR "duet: failed to mark_todo [%llu, "
+				"%llu] range for task #%d\n", lbn, lbn+len,
+				taskid);
+	}
+
+	if (hook_code & DUET_HOOK_BTRFS_READ) {
+		if (duet_mark_done(taskid, lbn, len))
+			printk(KERN_ERR "duet: failed to mark_done [%llu, "
+				"%llu] range for task #%d\n", lbn, lbn+len,
+				taskid);
+	}
+}
+#endif /* CONFIG_BTRFS_DUET_SCRUB */
+
 static noinline_for_stack
 #ifdef CONFIG_BTRFS_FS_SCRUB_NONE
 struct scrub_ctx *scrub_setup_ctx(struct btrfs_device *dev, int is_dev_replace)
@@ -775,6 +814,17 @@ struct scrub_ctx *scrub_setup_ctx(struct btrfs_device *dev, u64 deadline,
 		scrub_free_ctx(sctx);
 		return ERR_PTR(ret);
 	}
+
+#ifdef CONFIG_BTRFS_DUET_SCRUB
+	/* Register the task with the duet framework */
+	if (duet_task_register(&sctx->taskid, "btrfs-scrub",
+			fs_info->sb->s_blocksize, 32768 /* 32Kb */,
+			DUET_HOOK_BTRFS_READ | DUET_HOOK_BTRFS_WRITE, dev->bdev,
+			btrfs_scrub_duet_handler, (void *)sctx)) {
+		printk(KERN_ERR "scrub: failed to register with the duet framework\n");
+		return ERR_PTR(-EFAULT);
+	}
+#endif /* CONFIG_BTRFS_DUET_SCRUB */
 	return sctx;
 
 nomem:
@@ -2765,10 +2815,10 @@ static void scrub_bio_end_io_timer(unsigned long arg)
 }
 #endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
 
-#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+#ifdef CONFIG_BTRFS_FS_SCRUB_BOOST
 /* ioprio of boosted scrubbing is set to best-effort, with priority 4 */
 #define BTRFS_IOPRIO_BOOSTED (IOPRIO_PRIO_VALUE(IOPRIO_CLASS_BE, 4))
-#endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
+#endif /* CONFIG_BTRFS_FS_SCRUB_BOOST */
 static void scrub_bio_end_io_wrapup_worker(struct btrfs_work *work)
 {
 	struct scrub_bio *sbio = container_of(work, struct scrub_bio,
@@ -2804,6 +2854,7 @@ static void scrub_bio_end_io_wrapup_worker(struct btrfs_work *work)
 		/* Check if we fell behind, or if we're ahead by more than min_inc */
 		if (elapsed > sctx->deadline || progress + min_inc < goal ||
 		    goal + min_inc < progress) {
+#ifdef CONFIG_BTRFS_FS_SCRUB_BOOST
 			if (sctx->bgflags & BTRFS_BGSC_BOOST) {
 				if (progress + 100 * min_inc < goal) {
 					sctx->old_ioprio = IOPRIO_PRIO_VALUE(
@@ -2818,6 +2869,7 @@ static void scrub_bio_end_io_wrapup_worker(struct btrfs_work *work)
 					sctx->old_ioprio = -1;
 				}
 			}
+#endif /* CONFIG_BTRFS_FS_SCRUB_BOOST */
 
 			mutex_lock(&sctx->bios_lock);
 #ifdef CONFIG_BTRFS_FS_SCRUB_DEBUG
@@ -2952,7 +3004,7 @@ static int scrub_extent(struct scrub_ctx *sctx, u64 logical, u64 len,
 			u64 physical, struct btrfs_device *dev, u64 flags,
 			u64 gen, int mirror_num, u64 physical_for_dev_replace)
 {
-	int ret;
+	int ret=0;
 	u8 csum[BTRFS_CSUM_SIZE];
 	u32 blocksize;
 
@@ -2977,6 +3029,28 @@ static int scrub_extent(struct scrub_ctx *sctx, u64 logical, u64 len,
 	while (len) {
 		u64 l = min_t(u64, len, blocksize);
 		int have_csum = 0;
+
+#ifdef CONFIG_BTRFS_DUET_SCRUB
+		/* Check that: we're not replacing a device, and chk_done gives
+		 * us the green light. Only then we *skip* this block. Note
+		 * that chk_done does not verify we're on the right device;
+		 * this should be de facto since we're calling it from here */
+		if (!sctx->is_dev_replace && duet_chk_done(sctx->taskid,
+					physical /* lbn */, l /* len */)) {
+			goto behind_scrub_pages;
+		} else if (!sctx->is_dev_replace) {
+			/* We're actually getting verified */
+			if (flags & BTRFS_EXTENT_FLAG_DATA) {
+				spin_lock(&sctx->stat_lock);
+				sctx->stat.data_bytes_verified += l;
+				spin_unlock(&sctx->stat_lock);
+			} else if (flags & BTRFS_EXTENT_FLAG_TREE_BLOCK) {
+				spin_lock(&sctx->stat_lock);
+				sctx->stat.tree_bytes_verified += l;
+				spin_unlock(&sctx->stat_lock);
+			}
+		}
+#endif /* CONFIG_BTRFS_DUET_SCRUB */
 
 		if (flags & BTRFS_EXTENT_FLAG_DATA) {
 			/* push csums to sbio */
@@ -3052,6 +3126,15 @@ static noinline_for_stack int scrub_stripe(struct scrub_ctx *sctx,
 	struct btrfs_device *extent_dev;
 	int extent_mirror_num;
 	int stop_loop = 0;
+#ifdef CONFIG_BTRFS_FS_SCRUB_READA
+	u64 de_physical;
+	u64 lstart, lend, p_increment;
+	struct reada_control **readarr = NULL;
+	int i, reada_maxidx;
+#endif /* CONFIG_BTRFS_FS_SCRUB_READA */
+#ifdef CONFIG_BTRFS_DUET_SCRUB
+	u64 tot_skipped = 0;
+#endif /* CONFIG_BTRFS_DUET_SCRUB */
 
 	if (map->type & (BTRFS_BLOCK_GROUP_RAID5 |
 			 BTRFS_BLOCK_GROUP_RAID6)) {
@@ -3107,28 +3190,124 @@ static noinline_for_stack int scrub_stripe(struct scrub_ctx *sctx,
 	atomic_inc(&fs_info->scrubs_paused);
 	wake_up(&fs_info->scrub_pause_wait);
 
-	/* FIXME it might be better to start readahead at commit root */
-	key_start.objectid = logical;
-	key_start.type = BTRFS_EXTENT_ITEM_KEY;
-	key_start.offset = (u64)0;
-	key_end.objectid = base + offset + nstripes * increment;
-	key_end.type = BTRFS_METADATA_ITEM_KEY;
-	key_end.offset = (u64)-1;
-	reada1 = btrfs_reada_add(root, &key_start, &key_end);
+#ifdef CONFIG_BTRFS_FS_SCRUB_READA
+	if (!sctx->is_dev_replace && !duet_is_online()) {
+vanilla_reada:
+		printk(KERN_INFO "scrub: vanilla readahead started\n");
+#endif /* CONFIG_BTRFS_FS_SCRUB_READA */
+		/* FIXME it might be better to start readahead at commit root */
+		key_start.objectid = logical;
+		key_start.type = BTRFS_EXTENT_ITEM_KEY;
+		key_start.offset = (u64)0;
+		key_end.objectid = base + offset + nstripes * increment;
+		key_end.type = BTRFS_METADATA_ITEM_KEY;
+		key_end.offset = (u64)-1;
+		reada1 = btrfs_reada_add(root, &key_start, &key_end);
 
-	key_start.objectid = BTRFS_EXTENT_CSUM_OBJECTID;
-	key_start.type = BTRFS_EXTENT_CSUM_KEY;
-	key_start.offset = logical;
-	key_end.objectid = BTRFS_EXTENT_CSUM_OBJECTID;
-	key_end.type = BTRFS_EXTENT_CSUM_KEY;
-	key_end.offset = base + offset + nstripes * increment;
-	reada2 = btrfs_reada_add(csum_root, &key_start, &key_end);
+		key_start.objectid = BTRFS_EXTENT_CSUM_OBJECTID;
+		key_start.type = BTRFS_EXTENT_CSUM_KEY;
+		key_start.offset = logical;
+		key_end.objectid = BTRFS_EXTENT_CSUM_OBJECTID;
+		key_end.type = BTRFS_EXTENT_CSUM_KEY;
+		key_end.offset = base + offset + nstripes * increment;
+		reada2 = btrfs_reada_add(csum_root, &key_start, &key_end);
 
-	//printk(KERN_INFO "btrfs scrub: readahead started at %lu.\n", jiffies);
-	if (!IS_ERR(reada1))
-		btrfs_reada_wait(reada1);
-	if (!IS_ERR(reada2))
-		btrfs_reada_wait(reada2);
+		//printk(KERN_INFO "btrfs scrub: readahead started at %lu.\n", jiffies);
+		if (!IS_ERR(reada1))
+			btrfs_reada_wait(reada1);
+		if (!IS_ERR(reada2))
+			btrfs_reada_wait(reada2);
+#ifdef CONFIG_BTRFS_FS_SCRUB_READA
+		printk(KERN_INFO "scrub: vanilla readahead ended\n");
+	} else if (!sctx->is_dev_replace) {
+		printk(KERN_INFO "scrub: selective readahead started\n");
+		/* Only dispatch readahead requests for those ranges that
+		 * won't get filtered out */
+		logical = base + offset;
+		physical = map->stripes[num].physical;
+		logic_end = logical + increment * nstripes;
+		p_increment = map->stripe_len;
+		de_physical = physical;
+
+		/* Allocate readahead handle array */
+		readarr = kmalloc_array(2*BTRFS_SCRUB_MAX_READA,
+			sizeof(struct reada_control *), GFP_NOFS);
+		if (!readarr) {
+			printk(KERN_INFO "scrub: failed to create reada array,"
+				" trying vanilla readahead");
+			goto vanilla_reada;
+		}
+		reada_maxidx = 0;
+
+		while (logical < logic_end) {
+			ret = 0;
+			while (logical < logic_end) {
+				/* Check if this stripe should be skipped */
+				if (!duet_chk_done(sctx->taskid,
+						physical /* lbn */,
+						p_increment /* len */)) {
+					ret = 1;
+					break;
+				} else {
+					logical += increment;
+					physical += p_increment;
+				}
+			}
+
+			if (!ret)
+				break;
+			lstart = logical;
+
+			while (logical <= logic_end) {
+				/* Check if this stripe should _not_ be skipped */
+				if (!duet_chk_done(sctx->taskid,
+						physical /* lbn */,
+						p_increment /* len */)) {
+					break;
+				} else {
+					logical += increment;
+					physical += p_increment;
+				}
+			}
+			lend = logical;
+
+			/* Dispatch readahead and keep handles */
+			/* FIXME it might be better to start readahead at commit root */
+			key_start.objectid = lstart;
+			key_start.type = BTRFS_EXTENT_ITEM_KEY;
+			key_start.offset = (u64)0;
+			key_end.objectid = lend;
+			key_end.type = BTRFS_METADATA_ITEM_KEY;
+			key_end.offset = (u64)-1;
+			readarr[reada_maxidx] = btrfs_reada_add(root, &key_start, &key_end);
+			reada_maxidx++;
+
+			key_start.objectid = BTRFS_EXTENT_CSUM_OBJECTID;
+			key_start.type = BTRFS_EXTENT_CSUM_KEY;
+			key_start.offset = lstart;
+			key_end.objectid = BTRFS_EXTENT_CSUM_OBJECTID;
+			key_end.type = BTRFS_EXTENT_CSUM_KEY;
+			key_end.offset = lend;
+			readarr[reada_maxidx] = btrfs_reada_add(csum_root, &key_start, &key_end);
+			reada_maxidx++;
+
+			if (reada_maxidx == BTRFS_SCRUB_MAX_READA) {
+				for (i=0; i<reada_maxidx; i++)
+					if (!IS_ERR(readarr[i]))
+						btrfs_reada_wait(readarr[i]);
+				reada_maxidx = 0;
+			}
+
+			logical += increment;
+			physical += p_increment;
+		}
+
+		for (i=0; i<reada_maxidx; i++)
+			if (!IS_ERR(readarr[i]))
+				btrfs_reada_wait(readarr[i]);
+		printk(KERN_INFO "scrub: selective readahead ended\n");
+	}
+#endif /* CONFIG_BTRFS_FS_SCRUB_READA */
 
 	mutex_lock(&fs_info->scrub_lock);
 	while (atomic_read(&fs_info->scrub_pause_req)) {
@@ -3146,7 +3325,6 @@ static noinline_for_stack int scrub_stripe(struct scrub_ctx *sctx,
 	 * the scrub. This might currently (crc32) end up to be about 1MB
 	 */
 	blk_start_plug(&plug);
-	//printk(KERN_INFO "btrfs scrub: readahead finished at %lu.\n", jiffies);
 
 	/*
 	 * now find all extents for each stripe and scrub them
@@ -3336,6 +3514,27 @@ again:
 						   &extent_dev,
 						   &extent_mirror_num);
 
+#ifdef CONFIG_BTRFS_DUET_SCRUB
+			/* Check whether we can skip this extent portion to
+			 * save time and IO needed to look into the checksum
+			 * tree. Criteria: if the entire extent portion can be
+			 * filtered out, skip. */
+			if (!is_dev_replace && duet_chk_done(sctx->taskid,
+					extent_physical, extent_len)) {
+				tot_skipped++;
+				if (flags & BTRFS_EXTENT_FLAG_DATA) {
+					spin_lock(&sctx->stat_lock);
+					sctx->stat.data_bytes_scrubbed += extent_len;
+					spin_unlock(&sctx->stat_lock);
+				} else if (flags & BTRFS_EXTENT_FLAG_TREE_BLOCK) {
+					spin_lock(&sctx->stat_lock);
+					sctx->stat.tree_bytes_scrubbed += extent_len;
+					spin_unlock(&sctx->stat_lock);
+				}
+				goto skip_extent;
+			}
+#endif /* CONFIG_BTRFS_DUET_SCRUB */
+
 			ret = btrfs_lookup_csums_range(csum_root, logical,
 						logical + map->stripe_len - 1,
 						&sctx->csum_list, 1);
@@ -3350,6 +3549,9 @@ again:
 				goto out;
 
 			scrub_free_csums(sctx);
+#ifdef CONFIG_BTRFS_DUET_SCRUB
+skip_extent:
+#endif /* CONFIG_BTRFS_DUET_SCRUB */
 			if (extent_logical + extent_len <
 			    key.objectid + bytes) {
 				logical += increment;
@@ -3390,6 +3592,10 @@ out:
 
 	blk_finish_plug(&plug);
 	btrfs_free_path(path);
+#ifdef CONFIG_BTRFS_DUET_SCRUB
+	printk(KERN_DEBUG "btrfs scrub: Skipped a total of %llu extent chunks\n",
+		tot_skipped);
+#endif /* CONFIG_BTRFS_DUET_SCRUB */
 	return ret < 0 ? ret : 0;
 }
 

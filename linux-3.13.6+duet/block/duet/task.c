@@ -300,28 +300,28 @@ int duet_chk_done(__u8 taskid, __u64 lbn, __u32 len)
 {
 	return duet_mark_chkupd(taskid, lbn, len, 1, 1);
 }
-//EXPORT_SYMBOL_GPL(duet_chk_done);
+EXPORT_SYMBOL_GPL(duet_chk_done);
 
 /* Checks the blocks in the range from lbn to lbn+len as todo */
 int duet_chk_todo(__u8 taskid, __u64 lbn, __u32 len)
 {
 	return duet_mark_chkupd(taskid, lbn, len, 0, 1);
 }
-//EXPORT_SYMBOL_GPL(duet_chk_todo);
+EXPORT_SYMBOL_GPL(duet_chk_todo);
 
 /* Marks the blocks in the range from lbn to lbn+len as done */
 int duet_mark_done(__u8 taskid, __u64 lbn, __u32 len)
 {
 	return duet_mark_chkupd(taskid, lbn, len, 1, 0);
 }
-//EXPORT_SYMBOL_GPL(duet_mark_done);
+EXPORT_SYMBOL_GPL(duet_mark_done);
 
 /* Unmarks the blocks in the range from lbn to lbn+len as done */
 int duet_mark_todo(__u8 taskid, __u64 lbn, __u32 len)
 {
 	return duet_mark_chkupd(taskid, lbn, len, 0, 0);
 }
-//EXPORT_SYMBOL_GPL(duet_mark_todo);
+EXPORT_SYMBOL_GPL(duet_mark_todo);
 
 /* Disposes of the red-black bitmap tree */
 static void bmaptree_dispose(struct rb_root *root)
@@ -336,8 +336,8 @@ static void bmaptree_dispose(struct rb_root *root)
 	}
 }
 
-static void echo_handler(__u8 taskid, __u8 hook_code, __u64 lbn, __u32 len,
-	void *private)
+static void echo_handler(__u8 taskid, __u8 hook_code,
+	struct block_device *bdev, __u64 lbn, __u32 len, void *privdata)
 {
 	printk(KERN_DEBUG "duet: echo_handler called\n"
 		"duet: taskid = %u, hook_code = %u, lbn = %llu, len = %u\n",
@@ -347,7 +347,8 @@ static void echo_handler(__u8 taskid, __u8 hook_code, __u64 lbn, __u32 len,
 /* Properly allocate and initialize a task struct */
 static int duet_task_init(struct duet_task **task, const char *name,
 	__u32 blksize, __u32 bmapsize, __u8 hook_mask,
-	duet_hook_handler_t hook_handler)
+	struct block_device *bdev, duet_hook_handler_t hook_handler,
+	void *privdata)
 {
 	*task = kzalloc(sizeof(**task), GFP_NOFS);
 	if (!(*task))
@@ -371,7 +372,9 @@ static int duet_task_init(struct duet_task **task, const char *name,
 
 	mutex_init(&(*task)->bmaptree_mutex);
 	(*task)->bmaptree = RB_ROOT;
+	(*task)->privdata = privdata;
 	(*task)->hook_mask = hook_mask;
+	(*task)->bdev = bdev;
 
 	if (hook_handler)
 		(*task)->hook_handler = hook_handler;
@@ -392,7 +395,8 @@ void duet_task_dispose(struct duet_task *task)
 }
 
 int duet_task_register(__u8 *taskid, const char *name, __u32 blksize,
-	__u32 bmapsize, __u8 hook_mask, duet_hook_handler_t hook_handler)
+	__u32 bmapsize, __u8 hook_mask, struct block_device *bdev,
+	duet_hook_handler_t hook_handler, void *privdata)
 {
 	int ret;
 	struct list_head *last;
@@ -404,7 +408,7 @@ int duet_task_register(__u8 *taskid, const char *name, __u32 blksize,
 	}
 
 	ret = duet_task_init(&task, name, blksize, bmapsize, hook_mask,
-		hook_handler);
+		bdev, hook_handler, privdata);
 	if (ret) {
 		printk(KERN_ERR "duet: failed to initialize task\n");
 		return ret;

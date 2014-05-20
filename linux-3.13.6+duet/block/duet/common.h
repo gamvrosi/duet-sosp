@@ -49,14 +49,16 @@ struct duet_task {
 	atomic_t		refcount;
 
 	/* bitmap tree */
-	__u32			blksize;		/* bytes per bitmap bit */
-	__u32			bmapsize;		/* bytes per bitmap */
+	__u32			blksize;		/* bytes per bmap bit */
+	__u32			bmapsize;		/* bytes per bmap */
+	struct block_device	*bdev;			/* task block device */
 	struct mutex		bmaptree_mutex;
 	struct rb_root		bmaptree;
 
 	/* hook handling */
 	__u8			hook_mask;
 	duet_hook_handler_t	*hook_handler;
+	void			*privdata;
 };
 
 struct duet_info {
@@ -83,14 +85,9 @@ int duet_bmap_chk(__u8 *bmap, __u32 bmap_bytelen, __u64 first_byte,
 
 /* task.c -- not in linux/duet.h */
 void duet_task_dispose(struct duet_task *task);
-int duet_chk_done(__u8 taskid, __u64 lbn, __u32 len);
-int duet_chk_todo(__u8 taskid, __u64 lbn, __u32 len);
-int duet_mark_done(__u8 taskid, __u64 lbn, __u32 len);
-int duet_mark_todo(__u8 taskid, __u64 lbn, __u32 len);
 int duet_print_rbt(__u8 taskid);
 
 /* ioctl.c */
-int duet_is_online(void);
 int duet_bootstrap(void);
 int duet_shutdown(void);
 long duet_ioctl(struct file *file, unsigned int cmd, unsigned long arg);

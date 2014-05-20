@@ -42,8 +42,8 @@ static inline void mark_bio_seen(struct bio *bio)
 
 /* We're finally here. Just find tasks that are interested in this event,
  * and call their handlers. */
-/* TODO: Implement */
-static void duet_handle_hook(__u8 hook_code, __u64 lbn, __u32 len)
+static void duet_handle_hook(__u8 hook_code, struct block_device *bdev,
+	__u64 lbn, __u32 len)
 {
 	struct duet_task *cur;
 
@@ -55,8 +55,9 @@ static void duet_handle_hook(__u8 hook_code, __u64 lbn, __u32 len)
 	/* Go over the task list, and look for a task whose hook */
 	rcu_read_lock();
 	list_for_each_entry_rcu(cur, &duet_env.tasks, task_list) {
-                if (cur->hook_mask & hook_code)
-			cur->hook_handler(cur->id, hook_code, lbn, len, NULL);
+                if (cur->bdev == bdev && cur->hook_mask & hook_code)
+			cur->hook_handler(cur->id, hook_code, bdev, lbn, len,
+								cur->privdata);
 	}
 	rcu_read_unlock();
 }
@@ -69,11 +70,13 @@ static void duet_bio_endio(struct bio *bio, int err)
 	__u8 hook_code;
 	__u64 lbn;
 	__u32 len;
+	struct block_device *bdev;
 
 	/* Grab data from bio */
 	private = bio->bi_private;
 	lbn = bio->bi_sector << 9;
 	len = private->size;
+	bdev = bio->bi_bdev;
 	hook_code = private->hook_code;
 
 	/* Restore real values */
@@ -86,17 +89,18 @@ static void duet_bio_endio(struct bio *bio, int err)
 
 	/* Transfer control to hook handler */
 	if (!err)
-		duet_handle_hook(hook_code, lbn, len);
+		duet_handle_hook(hook_code, bdev, lbn, len);
 }
 
 /* Callback function for asynchronous bh calls. We first restore the normal
  * callback (and call it), and then proceed to call duet_handle_hook. */
-static void duet_bh_endio(struct buffer_head *bh, int uptodate)
+void duet_bh_endio(struct buffer_head *bh, int uptodate)
 {
 	struct duet_bh_private *private;
 	__u8 hook_code;
 	__u64 lbn = 0;
 	__u32 len = 0;
+	struct block_device *bdev;
 
 	/* Grab data from buffer head */
 	private = bh->b_private;
@@ -108,6 +112,7 @@ static void duet_bh_endio(struct buffer_head *bh, int uptodate)
 
 	lbn += bh->b_blocknr * bh->b_size;
 	len = bh->b_size;
+	bdev = bh->b_bdev;
 	hook_code = private->hook_code;
 
 	/* Restore real values */
@@ -119,8 +124,9 @@ static void duet_bh_endio(struct buffer_head *bh, int uptodate)
 	bh->b_end_io(bh, uptodate);
 
 	/* Transfer control to hook handler */
-	duet_handle_hook(hook_code, lbn, len);
+	duet_handle_hook(hook_code, bdev, lbn, len);
 }
+EXPORT_SYMBOL_GPL(duet_bh_endio); /* export to check at _submit_bh */
 
 /* Function that is paired to submit_bio calls. We need to hijack the bio
  * with a duet callback, duet_bio_endio. */
@@ -153,13 +159,15 @@ static void duet_bw_hook(__u8 hook_code, struct bio *bio)
 {
 	__u64 lbn;
 	__u32 len;
+	struct block_device *bdev;
 
 	/* Collect data from bio */
 	lbn = bio->bi_sector << 9;
 	len = bio->bi_size;
+	bdev = bio->bi_bdev;
 
 	/* Transfer control to hook handler */
-	duet_handle_hook(hook_code, lbn, len);
+	duet_handle_hook(hook_code, bdev, lbn, len);
 }
 
 /* Function that is paired to submit_bh calls. We need to hijack the bh
