@@ -32,6 +32,12 @@
 #ifdef CONFIG_DUET_BTRFS
 #include <linux/duet.h>
 #endif /* CONFIG_DUET_BTRFS */
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+#include <linux/timer.h>
+
+#define BTRFS_SCRUB_WAIT_TO	1+5*HZ/1000 /* Wait timeout */
+#define MAX_BIOS_PER_SCTX	1024
+#endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
 
 /*
  * This is only the first step towards a full-features scrub. It reads all
@@ -57,7 +63,6 @@ struct scrub_ctx;
  */
 #define SCRUB_PAGES_PER_RD_BIO	32	/* 128k per bio */
 #define SCRUB_PAGES_PER_WR_BIO	32	/* 128k per bio */
-#define SCRUB_BIOS_PER_SCTX	64	/* 8MB per device in flight */
 
 /*
  * the following value times PAGE_SIZE needs to be large enough to match the
@@ -100,6 +105,16 @@ struct scrub_bio {
 	int			page_count;
 	int			next_free;
 	struct btrfs_work	work;
+	struct btrfs_work	work_end;
+
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+	/* Timer-related fields for delayed bio deallocation */
+	unsigned long		t_start;	/* jiffies at bio issue time */
+	unsigned long		t_wasted;	/* wasted: timer => wqueue */
+	struct timer_list	timer;
+	unsigned long		timer_start;	/* jiffies, timer issued */
+	unsigned long		timer_expires;	/* jiffies, timer expiration */
+#endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
 };
 
 struct scrub_block {
@@ -125,7 +140,23 @@ struct scrub_wr_ctx {
 };
 
 struct scrub_ctx {
-	struct scrub_bio	*bios[SCRUB_BIOS_PER_SCTX];
+	struct scrub_bio	**bios;
+	u16			bios_per_sctx;
+	u16			bios_alloc_size;
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+	struct mutex		bios_lock;
+	atomic_t		bios_allocated;
+	spinlock_t		curr_lock;
+
+	/* Trickle rate vars */
+	u8			bgflags;
+	int			old_ioprio;
+	u64			deadline;
+	u64			used_bytes; 		/* bytes in extents */
+	atomic_t		pending_removals;
+	atomic64_t		delay;			/* delay b/w bios */
+	struct timeval		t_start;
+#endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
 	struct btrfs_root	*dev_root;
 	int			first_free;
 	int			curr;
@@ -235,6 +266,10 @@ static int scrub_pages(struct scrub_ctx *sctx, u64 logical, u64 len,
 		       u64 physical_for_dev_replace);
 static void scrub_bio_end_io(struct bio *bio, int err);
 static void scrub_bio_end_io_worker(struct btrfs_work *work);
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+static void scrub_bio_end_io_timer(unsigned long arg);
+#endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
+static void scrub_bio_end_io_wrapup_worker(struct btrfs_work *work);
 static void scrub_block_complete(struct scrub_block *sblock);
 static void scrub_remap_extent(struct btrfs_fs_info *fs_info,
 			       u64 extent_logical, u64 extent_len,
@@ -259,7 +294,23 @@ static int copy_nocow_pages_for_inode(u64 inum, u64 offset, u64 root,
 static int copy_nocow_pages(struct scrub_ctx *sctx, u64 logical, u64 len,
 			    int mirror_num, u64 physical_for_dev_replace);
 static void copy_nocow_pages_worker(struct btrfs_work *work);
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+static void scrub_adjust_rate(struct scrub_ctx *sctx, u64 elapsed,
+	u64 total_scrubbed, u16 *bios_per_sctx, long *delay);
+static int scrub_realloc_bios_array(struct scrub_ctx *sctx, u16 new_size);
+static int scrub_remove_bio(struct scrub_ctx *sctx, u16 idx);
 
+static void scrub_pending_bio_alloc_inc(struct scrub_ctx *sctx)
+{
+	atomic_inc(&sctx->bios_allocated);
+}
+
+static void scrub_pending_bio_alloc_dec(struct scrub_ctx *sctx)
+{
+	atomic_dec(&sctx->bios_allocated);
+	wake_up(&sctx->list_wait);
+}
+#endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
 
 static void scrub_pending_bio_inc(struct scrub_ctx *sctx)
 {
@@ -345,7 +396,15 @@ static noinline_for_stack void scrub_free_ctx(struct scrub_ctx *sctx)
 		bio_put(sbio->bio);
 	}
 
-	for (i = 0; i < SCRUB_BIOS_PER_SCTX; ++i) {
+	/* Before freeing anything, print some stats */
+	printk(KERN_INFO "btrfs scrub: Total scrubbed is %llu, of which %llu "
+		"were in data extents, and %llu were in tree extents.\n",
+		sctx->stat.data_bytes_scrubbed + sctx->stat.tree_bytes_scrubbed,
+		sctx->stat.data_bytes_scrubbed, sctx->stat.tree_bytes_scrubbed);
+
+	/* We waited for all pending requests before we got here,
+	 * so no need to lock before destroying */
+	for (i = 0; i < sctx->bios_per_sctx; ++i) {
 		struct scrub_bio *sbio = sctx->bios[i];
 
 		if (!sbio)
@@ -353,18 +412,230 @@ static noinline_for_stack void scrub_free_ctx(struct scrub_ctx *sctx)
 		kfree(sbio);
 	}
 
+	kfree(sctx->bios);
 	scrub_free_csums(sctx);
 	kfree(sctx);
 }
 
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+/* Make sure bios_lock mutex is held before getting in here */
+static void scrub_adjust_rate(struct scrub_ctx *sctx, u64 elapsed,
+	u64 total_scrubbed, u16 *bios_per_sctx, long *delay)
+{
+	u64 rem_bytes = 64 * PAGE_SIZE * SCRUB_PAGES_PER_RD_BIO;
+	u64 rem_time = 1;
+	u64 bytes_per_sec;
+	struct timeval cur;
+
+	/* Get current time first */
+	if (!elapsed) {
+		do_gettimeofday(&cur);
+		elapsed = cur.tv_sec - sctx->t_start.tv_sec;
+	}
+
+	if (sctx->used_bytes > total_scrubbed)
+		rem_bytes = sctx->used_bytes - total_scrubbed;
+
+	if (elapsed < sctx->deadline) {
+		rem_time = sctx->deadline - elapsed;
+	} else {
+		*bios_per_sctx = 64;
+		*delay = 0;
+		return;
+	}
+
+	bytes_per_sec = rem_bytes / rem_time;
+	if (rem_bytes % rem_time)
+		bytes_per_sec++;
+
+	/* Convert bytes per sec to bios_in_flight and delay */
+	if (bytes_per_sec < (SCRUB_PAGES_PER_RD_BIO * PAGE_SIZE)) {
+		*bios_per_sctx = 1;
+		*delay = (SCRUB_PAGES_PER_RD_BIO * PAGE_SIZE) / bytes_per_sec;
+	} else {
+		*delay = 1;
+		*bios_per_sctx = bytes_per_sec /
+			(SCRUB_PAGES_PER_RD_BIO * PAGE_SIZE);
+		if (bytes_per_sec % (SCRUB_PAGES_PER_RD_BIO * PAGE_SIZE))
+			(*bios_per_sctx)++;
+		if (*bios_per_sctx > MAX_BIOS_PER_SCTX)
+			*bios_per_sctx = MAX_BIOS_PER_SCTX;
+	}
+}
+
+/* Make sure mutex bios_lock is held *before* calling this function! */
+static int scrub_realloc_bios_array(struct scrub_ctx *sctx, u16 new_size)
+{
+	int i;
+	u16 old_size;
+	struct scrub_bio **buf, **old_ptr;
+
+	spin_lock(&sctx->list_lock);
+	old_ptr = sctx->bios;
+	old_size = sctx->bios_per_sctx;
+
+	BUG_ON(old_size > new_size);
+
+	/*
+	 * We check the current allocation size for **bios, and avoid
+	 * reallocating if there's unused memory due to removals.
+	 */
+	if (new_size > sctx->bios_alloc_size) {
+		buf = kcalloc(new_size, sizeof(struct scrub_bio *), GFP_NOFS);
+		if (!buf)
+			goto nomem;
+
+		memcpy(buf, sctx->bios, sctx->bios_per_sctx *
+			sizeof(struct scrub_bio *));
+		sctx->bios = buf;
+	}
+
+	sctx->bios_per_sctx = new_size;
+
+	/* Now initialize the _new_ bios! */
+	for (i = old_size; i < sctx->bios_per_sctx; ++i) {
+		struct scrub_bio *sbio;
+
+		sbio = kzalloc(sizeof(*sbio), GFP_NOFS);
+		if (!sbio)
+			goto nomembios;
+		sctx->bios[i] = sbio;
+
+		sbio->index = i;
+		sbio->sctx = sctx;
+		sbio->page_count = 0;
+		sbio->work.func = scrub_bio_end_io_worker;
+		sbio->work_end.func = scrub_bio_end_io_wrapup_worker;
+
+		init_timer(&sbio->timer);
+		sbio->t_wasted = 0;
+
+		/*
+		 * We are daisy-chaining all new bios, and adding them
+		 * in the beginning of the free list
+		 */
+		if (i != sctx->bios_per_sctx - 1)
+			sctx->bios[i]->next_free = i + 1;
+		else
+			sctx->bios[i]->next_free = sctx->first_free;
+	}
+
+	sctx->first_free = old_size;
+
+	if (new_size > sctx->bios_alloc_size) {
+		sctx->bios_alloc_size = new_size;
+		spin_unlock(&sctx->list_lock);
+		kfree(old_ptr);
+	} else {
+		spin_unlock(&sctx->list_lock);
+	}
+
+	return 0;
+
+nomembios:
+	for (i = old_size; i < sctx->bios_per_sctx; ++i)
+		if (sctx->bios[i])
+			kfree(sctx->bios[i]);
+	kfree(sctx->bios);
+
+nomem:
+	sctx->bios = old_ptr;
+	sctx->bios_per_sctx = old_size;
+	spin_unlock(&sctx->list_lock);
+	printk("btrfs scrub: Ran out of memory!\n");
+	return -ENOMEM;
+}
+
+/* Make sure mutex bios_lock is held *before* calling this function! */
+static int scrub_remove_bio(struct scrub_ctx *sctx, u16 idx)
+{
+	int cur;
+
+	if (atomic_read(&sctx->pending_removals) == 0) {
+#ifdef CONFIG_BTRFS_FS_SCRUB_DEBUG
+		printk(KERN_DEBUG "btrfs scrub: pending_removals == 0");
+#endif /* CONFIG_BTRFS_FS_SCRUB_DEBUG */
+
+		/* This guy will not be getting removed, so add it to
+		 * the list before returning */
+		sctx->bios[idx]->t_wasted = jiffies - sctx->bios[idx]->t_wasted;
+		spin_lock(&sctx->list_lock);
+		sctx->bios[idx]->next_free = sctx->first_free;
+		sctx->first_free = idx;
+		spin_unlock(&sctx->list_lock);
+		goto out;
+	}
+
+	if (idx >= sctx->bios_per_sctx) {
+		printk(KERN_ERR "btrfs scrub: idx too large for "
+			"scrub_remove_bio (%u)!\n", idx);
+		goto out;
+	}
+
+	/* First, we need to free this bio. No ritual needed, it's not used */
+	if (!sctx->bios[idx]) {
+		printk(KERN_ERR "btrfs scrub: bios[idx] doesn't exist at "
+			"scrub_remove_bio!\n");
+		goto out;
+	}
+	kfree(sctx->bios[idx]);
+	if (idx == sctx->bios_per_sctx-1) {
+		sctx->bios_per_sctx--;
+		atomic_dec(&sctx->pending_removals);
+		goto out;
+	}
+
+	/*
+	 * Now take the last bio, and place it where the removed bio was.
+	 * Then, traverse the free bio list, and if the idx of the moved
+	 * bio is found, update. Also update bios_per_sctx. The bio that
+	 * we removed was not free, so we're good with that one.
+	 */
+	sctx->bios[idx] = sctx->bios[sctx->bios_per_sctx-1];
+	sctx->bios[idx]->index = idx;
+	spin_lock(&sctx->list_lock);
+	if (sctx->first_free == sctx->bios_per_sctx - 1) {
+		sctx->first_free = idx;
+	} else {
+		cur = sctx->first_free;
+		while (cur != -1) {
+			if (sctx->bios[cur]->next_free == sctx->bios_per_sctx-1) {
+				sctx->bios[cur]->next_free = idx;
+				break;
+			}
+			cur = sctx->bios[cur]->next_free;
+		}
+	}
+	spin_unlock(&sctx->list_lock);
+
+	spin_lock(&sctx->curr_lock);
+	if (sctx->curr == sctx->bios_per_sctx - 1)
+		sctx->curr = idx;
+	spin_unlock(&sctx->curr_lock);
+
+	sctx->bios_per_sctx--;
+	atomic_dec(&sctx->pending_removals);
+out:
+	return 0;
+}
+#endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
+
 static noinline_for_stack
+#ifdef CONFIG_BTRFS_FS_SCRUB_NONE
 struct scrub_ctx *scrub_setup_ctx(struct btrfs_device *dev, int is_dev_replace)
+#else /* Adaptive scrubber code */
+struct scrub_ctx *scrub_setup_ctx(struct btrfs_device *dev, u64 deadline,
+	u8 bgflags, int is_dev_replace)
+#endif /* CONFIG_BTRFS_FS_SCRUB_NONE */
 {
 	struct scrub_ctx *sctx;
-	int		i;
 	struct btrfs_fs_info *fs_info = dev->dev_root->fs_info;
 	int pages_per_rd_bio;
-	int ret;
+	int i, ret;
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+	long delay;
+	struct timeval cur;
+#endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
 
 	/*
 	 * the setting of pages_per_rd_bio is correct for scrub but might
@@ -385,7 +656,78 @@ struct scrub_ctx *scrub_setup_ctx(struct btrfs_device *dev, int is_dev_replace)
 	sctx->pages_per_rd_bio = pages_per_rd_bio;
 	sctx->curr = -1;
 	sctx->dev_root = dev->dev_root;
-	for (i = 0; i < SCRUB_BIOS_PER_SCTX; ++i) {
+#ifdef CONFIG_BTRFS_FS_SCRUB_NONE
+	sctx->bios_per_sctx = 64;
+
+	printk(KERN_INFO "btrfs scrubber: device size = %llu bytes; device "
+		"used size = %llu bytes; bios per sctx = %u.\n",
+		dev->disk_total_bytes, dev->bytes_used, sctx->bios_per_sctx);
+#else /* Adaptive scrubber code */
+	/*
+	 * Find the rate at which the disk needs to be scrubbed, in order to
+	 * meet our deadline (say, R MB/sec). We want >= 128kB per bio, so if
+	 * R < 128kB, find the number of seconds by which we need to separate
+	 * 128kB, and pick that as the delay. If deadline is zero, leave
+	 * default values in place.
+	 */
+	sctx->bgflags = bgflags;
+	sctx->old_ioprio = -1;
+	sctx->deadline = deadline;
+	sctx->used_bytes = 0;
+	atomic_set(&sctx->pending_removals, 0);
+
+	if (!sctx->deadline) {
+		sctx->bios_per_sctx = 64;
+		atomic64_set(&sctx->delay, 0);
+	} else {
+		/* Record time when scrub starts */
+		do_gettimeofday(&sctx->t_start);
+		if (sctx->bgflags & BTRFS_BGSC_ENUM) {
+			/*
+			 * Let's try and enumerate all extents on device to
+			 * estimate bytes to scrubbed (~14sec/2GB of metadata)
+			 */
+			printk(KERN_INFO "btrfs scrub: begin devext enum\n");
+
+			if (btrfs_calc_dev_extents_size(dev, 0,
+			    dev->total_bytes, &sctx->used_bytes)) {
+				printk(KERN_INFO "btrfs scrub: enum error\n");
+
+				/* Assume all chunks are allocated */
+				sctx->used_bytes = dev->bytes_used;
+			}
+
+			do_gettimeofday(&cur);
+			sctx->deadline -= cur.tv_sec - sctx->t_start.tv_sec;
+			sctx->t_start.tv_sec = cur.tv_sec;
+			sctx->t_start.tv_usec = cur.tv_usec;
+		} else {
+			/* Assume we're going to scrub the entire device */
+			sctx->used_bytes = dev->bytes_used;
+		}
+		printk(KERN_INFO "btrfs scrub: dev uses %llu bytes\n",
+			sctx->used_bytes);
+
+		scrub_adjust_rate(sctx, 0/* elapsed */, 0/* bytes scrubbed */,
+			&sctx->bios_per_sctx, &delay);
+		atomic64_set(&sctx->delay, delay);
+	}
+
+	printk(KERN_INFO "btrfs scrubber:\n\tdeadline = %llu sec\n"
+		"\tdevice = %llu (%llu in chunks, %llu allocated to extents)\n"
+		"\tbios per sctx = %u\n\tdelay = %ld (HZ=%u)\n",
+		sctx->deadline, dev->disk_total_bytes, dev->bytes_used,
+		sctx->used_bytes, sctx->bios_per_sctx,
+		atomic64_read(&sctx->delay), HZ);
+#endif /* CONFIG_BTRFS_FS_SCRUB_NONE */
+
+	/* Now that we know how many bios we need, allocate them */
+	sctx->bios = kcalloc(sctx->bios_per_sctx, sizeof(struct scrub_bio *),
+		GFP_NOFS);
+	sctx->bios_alloc_size = sctx->bios_per_sctx;
+
+	/* Finally, create/initialize bios */
+	for (i = 0; i < sctx->bios_per_sctx; ++i) {
 		struct scrub_bio *sbio;
 
 		sbio = kzalloc(sizeof(*sbio), GFP_NOFS);
@@ -397,8 +739,12 @@ struct scrub_ctx *scrub_setup_ctx(struct btrfs_device *dev, int is_dev_replace)
 		sbio->sctx = sctx;
 		sbio->page_count = 0;
 		sbio->work.func = scrub_bio_end_io_worker;
-
-		if (i != SCRUB_BIOS_PER_SCTX - 1)
+		sbio->work_end.func = scrub_bio_end_io_wrapup_worker;
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+		init_timer(&sbio->timer);
+		sbio->t_wasted = 0;
+#endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
+		if (i != sctx->bios_per_sctx - 1)
 			sctx->bios[i]->next_free = i + 1;
 		else
 			sctx->bios[i]->next_free = -1;
@@ -412,6 +758,12 @@ struct scrub_ctx *scrub_setup_ctx(struct btrfs_device *dev, int is_dev_replace)
 	atomic_set(&sctx->cancel_req, 0);
 	sctx->csum_size = btrfs_super_csum_size(fs_info->super_copy);
 	INIT_LIST_HEAD(&sctx->csum_list);
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+	atomic_set(&sctx->bios_allocated, 0);
+
+	mutex_init(&sctx->bios_lock);
+	spin_lock_init(&sctx->curr_lock);
+#endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
 
 	spin_lock_init(&sctx->list_lock);
 	spin_lock_init(&sctx->stat_lock);
@@ -1587,6 +1939,9 @@ static void scrub_wr_submit(struct scrub_ctx *sctx)
 	wr_ctx->wr_curr_bio = NULL;
 	WARN_ON(!sbio->bio->bi_bdev);
 	scrub_pending_bio_inc(sctx);
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+	scrub_pending_bio_alloc_inc(sctx);
+#endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
 #ifdef CONFIG_DUET_BTRFS
 #ifdef CONFIG_DUET_DEBUG
 	printk(KERN_DEBUG "duet: hooking on scrub_wr_submit\n");
@@ -1639,7 +1994,126 @@ static void scrub_wr_bio_end_io_worker(struct btrfs_work *work)
 	bio_put(sbio->bio);
 	kfree(sbio);
 	scrub_pending_bio_dec(sctx);
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+	scrub_pending_bio_alloc_dec(sctx);
+#endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
 }
+
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+#define MAX_ORDERED_SUM_BYTES(r) ((PAGE_SIZE - \
+			sizeof(struct btrfs_ordered_sum)) / \
+			sizeof(u32) * (r)->sectorsize)
+
+static int scrub_lookup_block_csum(struct scrub_block *sblock, u8 *csum)
+{
+	struct btrfs_key key;
+	struct btrfs_path *path;
+	struct extent_buffer *leaf;
+	struct btrfs_root *root = sblock->sctx->dev_root->fs_info->csum_root;
+	u16 csum_size = btrfs_super_csum_size(root->fs_info->super_copy);
+	struct btrfs_csum_item *item;
+	unsigned long offset;
+	u64 start, end, csum_end;
+	size_t size;
+	int i, ret, newidx;
+	u32 tmpcsum;
+
+	/* Assuming the pages in the block are contiguous? */
+	start = sblock->pagev[0]->logical;
+	end = start + (sblock->page_count * PAGE_SIZE) - 1;
+
+	path = btrfs_alloc_path();
+	if (!path)
+		return -ENOMEM;
+
+	path->skip_locking = 1;
+	path->reada = 2;
+	path->search_commit_root = 1;
+
+	key.objectid = BTRFS_EXTENT_CSUM_OBJECTID;
+	key.offset = start;
+	key.type = BTRFS_EXTENT_CSUM_KEY;
+
+	ret = btrfs_search_slot(NULL, root, &key, path, 0, 0);
+	if (ret < 0)
+		goto fail;
+	if (ret > 0 && path->slots[0] > 0) {
+		leaf = path->nodes[0];
+		btrfs_item_key_to_cpu(leaf, &key, path->slots[0] - 1);
+		if (key.objectid == BTRFS_EXTENT_CSUM_OBJECTID &&
+		    key.type == BTRFS_EXTENT_CSUM_KEY) {
+			offset = (start - key.offset) >>
+				root->fs_info->sb->s_blocksize_bits;
+			if (offset * csum_size < btrfs_item_size_nr(leaf,
+			    path->slots[0] - 1))
+				path->slots[0]--;
+		}
+	}
+
+	while (start <= end) {
+		leaf = path->nodes[0];
+		if (path->slots[0] >= btrfs_header_nritems(leaf)) {
+			ret = btrfs_next_leaf(root, path);
+			if (ret < 0)
+				goto fail;
+			if (ret > 0)
+				break;
+			leaf = path->nodes[0];
+		}
+
+		btrfs_item_key_to_cpu(leaf, &key, path->slots[0]);
+		if (key.objectid != BTRFS_EXTENT_CSUM_OBJECTID ||
+		    key.type != BTRFS_EXTENT_CSUM_KEY)
+			break;
+
+		btrfs_item_key_to_cpu(leaf, &key, path->slots[0]);
+		if (key.offset > end)
+			break;
+		if (key.offset > start)
+			start = key.offset;
+
+		size = btrfs_item_size_nr(leaf, path->slots[0]);
+		csum_end = key.offset + (size / csum_size) * root->sectorsize;
+		if (csum_end <= start) {
+			path->slots[0]++;
+			continue;
+		}
+
+		csum_end = min(csum_end, end + 1);
+		item = btrfs_item_ptr(path->nodes[0], path->slots[0],
+			struct btrfs_csum_item);
+		while (start < csum_end) {
+			size = min_t(size_t, csum_end - start,
+				MAX_ORDERED_SUM_BYTES(root));
+
+			offset = (start - key.offset) >>
+				root->fs_info->sb->s_blocksize_bits;
+			offset *= csum_size;
+
+			newidx = 0;
+			while (size > 0) {
+				read_extent_buffer(path->nodes[0], &tmpcsum,
+					((unsigned long)item) + offset,
+					csum_size);
+				for (i = 0; i < csum_size; i++) {
+					csum[newidx+i] = (u8) tmpcsum & 0xff;
+					tmpcsum = tmpcsum >> 8;
+				}
+				newidx += csum_size;
+
+				size -= root->sectorsize;
+				start += root->sectorsize;
+				offset += csum_size;
+			}
+		}
+		path->slots[0]++;
+	}
+	ret = 0;
+fail:
+	btrfs_free_path(path);
+	return ret;
+}
+#endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
 
 static int scrub_checksum(struct scrub_block *sblock)
 {
@@ -1657,8 +2131,10 @@ static int scrub_checksum(struct scrub_block *sblock)
 		(void)scrub_checksum_super(sblock);
 	else
 		WARN_ON(1);
-	if (ret)
+	if (ret) {
+		printk(KERN_DEBUG "scrub_checksum: calling scrub_handle_errored_block");
 		scrub_handle_errored_block(sblock);
+	}
 
 	return ret;
 }
@@ -1674,6 +2150,11 @@ static int scrub_checksum_data(struct scrub_block *sblock)
 	int fail = 0;
 	u64 len;
 	int index;
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+	u8 new_csum[BTRFS_CSUM_SIZE];
+	char buf[256];
+	int i;
+#endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
 
 	BUG_ON(sblock->page_count < 1);
 	if (!sblock->pagev[0]->have_csum)
@@ -1701,8 +2182,41 @@ static int scrub_checksum_data(struct scrub_block *sblock)
 	}
 
 	btrfs_csum_final(crc, csum);
-	if (memcmp(csum, on_disk_csum, sctx->csum_size))
+	if (memcmp(csum, on_disk_csum, sctx->csum_size)) {
+#ifdef CONFIG_BTRFS_FS_SCRUB_NONE
 		fail = 1;
+#else /* Adaptive scrub code */
+		/*
+		 * Make sure the checksum we hold is not stale by re-reading
+		 * it. We don't go through this process for metadata blocks,
+		 * because "check-summing" for them means field sanity checking.
+		 */
+		sprintf(buf, "scrub_checksum_data: couldn't verify %02x",
+			csum[0]);
+		for (i = 1; i < sctx->csum_size; i++)
+			sprintf(buf, "%s:%02x", buf, csum[i]);
+
+		sprintf(buf, "%s, with ondisk checksum %02x", buf,
+			on_disk_csum[0]);
+		for (i = 1; i < sctx->csum_size; i++)
+			sprintf(buf, "%s:%02x", buf, on_disk_csum[i]);
+
+		scrub_lookup_block_csum(sblock, new_csum);
+
+		sprintf(buf, "%s (re-read yielded %02x", buf, new_csum[0]);
+		for (i = 1; i < sctx->csum_size; i++)
+			sprintf(buf, "%s:%02x", buf, new_csum[i]);
+		printk(KERN_DEBUG "%s).\n", buf);
+
+		if (memcmp(csum, new_csum, sctx->csum_size)) {
+			fail = 1;
+		} else {
+			spin_lock(&sctx->stat_lock);
+			sctx->stat.sync_errors++;
+			spin_unlock(&sctx->stat_lock);
+		}
+#endif /* CONFIG_BTRFS_FS_SCRUB_NONE */
+	}
 
 	return fail;
 }
@@ -1891,12 +2405,30 @@ static void scrub_submit(struct scrub_ctx *sctx)
 {
 	struct scrub_bio *sbio;
 
-	if (sctx->curr == -1)
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+	if (sctx->deadline) {
+		/* keep remove_bio() out while grabbing curr */
+		spin_lock(&sctx->curr_lock);
+	}
+#endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
+	if (sctx->curr == -1) {
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+		if (sctx->deadline)
+			spin_unlock(&sctx->curr_lock);
+#endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
 		return;
+	}
 
 	sbio = sctx->bios[sctx->curr];
 	sctx->curr = -1;
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+	if (sctx->deadline)
+		spin_unlock(&sctx->curr_lock);
+#endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
 	scrub_pending_bio_inc(sctx);
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+	scrub_pending_bio_alloc_inc(sctx);
+#endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
 
 	if (!sbio->bio->bi_bdev) {
 		/*
@@ -1942,7 +2474,29 @@ again:
 			spin_unlock(&sctx->list_lock);
 		} else {
 			spin_unlock(&sctx->list_lock);
+#ifdef CONFIG_BTRFS_FS_SCRUB_NONE
 			wait_event(sctx->list_wait, sctx->first_free != -1);
+#else /* Adaptive scrub code */
+			if (sctx->deadline) {
+				if (atomic_read(&sctx->dev_root->fs_info->scrub_pause_req)) {
+					mutex_lock(&sctx->bios_lock);
+#ifdef CONFIG_BTRFS_FS_SCRUB_DEBUG
+					printk(KERN_DEBUG "scrub_add_page_to_rd_bio: allocating"
+						"another bio (%u).\n", sctx->bios_per_sctx + 1);
+#endif /* CONFIG_BTRFS_FS_SCRUB_DEBUG */
+					scrub_realloc_bios_array(sctx, sctx->bios_per_sctx + 1);
+
+					if (!sctx->deadline)
+						atomic_inc(&sctx->pending_removals);
+					mutex_unlock(&sctx->bios_lock);
+				}
+
+				wait_event_timeout(sctx->list_wait,
+					sctx->first_free != -1, BTRFS_SCRUB_WAIT_TO);
+			} else {
+				wait_event(sctx->list_wait, sctx->first_free != -1);
+			}
+#endif /* CONFIG_BTRFS_FS_SCRUB_NONE */
 		}
 	}
 	sbio = sctx->bios[sctx->curr];
@@ -1965,6 +2519,10 @@ again:
 		bio->bi_bdev = sbio->dev->bdev;
 		bio->bi_sector = sbio->physical >> 9;
 		sbio->err = 0;
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+		/* We only need to do this for a fresh bio */
+		sbio->t_start = jiffies;
+#endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
 	} else if (sbio->physical + sbio->page_count * PAGE_SIZE !=
 		   spage->physical ||
 		   sbio->logical + sbio->page_count * PAGE_SIZE !=
@@ -2085,6 +2643,10 @@ static void scrub_bio_end_io(struct bio *bio, int err)
 	sbio->err = err;
 	sbio->bio = bio;
 
+#ifdef CONFIG_BTRFS_FS_SCRUB_DEBUG
+	printk(KERN_DEBUG "scrub_bio_end_io: queueing work (bio %d)\n",
+		sbio->index);
+#endif /* CONFIG_BTRFS_FS_SCRUB_DEBUG */
 	btrfs_queue_worker(&fs_info->scrub_workers, &sbio->work);
 }
 
@@ -2093,6 +2655,9 @@ static void scrub_bio_end_io_worker(struct btrfs_work *work)
 	struct scrub_bio *sbio = container_of(work, struct scrub_bio, work);
 	struct scrub_ctx *sctx = sbio->sctx;
 	int i;
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+	unsigned long j, scaled_delay, diffjiff = 0;
+#endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
 
 	BUG_ON(sbio->page_count > SCRUB_PAGES_PER_RD_BIO);
 	if (sbio->err) {
@@ -2116,10 +2681,8 @@ static void scrub_bio_end_io_worker(struct btrfs_work *work)
 
 	bio_put(sbio->bio);
 	sbio->bio = NULL;
-	spin_lock(&sctx->list_lock);
-	sbio->next_free = sctx->first_free;
-	sctx->first_free = sbio->index;
-	spin_unlock(&sctx->list_lock);
+	/* Normally, we'd add the bio in the pool now, but we'll have to
+	 * hold on to it in case we need to throttle scrubber bandwidth */
 
 	if (sctx->is_dev_replace &&
 	    atomic_read(&sctx->wr_ctx.flush_all_writes)) {
@@ -2128,7 +2691,206 @@ static void scrub_bio_end_io_worker(struct btrfs_work *work)
 		mutex_unlock(&sctx->wr_ctx.wr_lock);
 	}
 
+#ifdef CONFIG_BTRFS_FS_SCRUB_NONE
+	scrub_bio_end_io_wrapup_worker(&sbio->work_end);
+#else /* Adaptive scrubber code */
+	if (sctx->deadline) {
+		/* Calling scrub_pending_bio_dec(sctx) would also wake
+		 * up people waiting on list_wait; no need to disturb them
+		 * though. Call atomic_dec directly, instead. */
+		atomic_dec(&sctx->bios_in_flight);
+
+		if (atomic_read(&sctx->dev_root->fs_info->scrub_pause_req)) {
+			/* We can't delay now. Keep going (finish stripe), and
+			 * we'll adjust for slower scrubbing in the future. When
+			 * the scrubber is unpaused, it'll check if the delays
+			 * for all bios are over. If not, it will wait. */
+#ifdef CONFIG_BTRFS_FS_SCRUB_DEBUG
+			printk(KERN_DEBUG "scrub_bio_end_io_worker: no delay "
+				"(bio %d, in-flight %d)\n", sbio->index,
+				atomic_read(&sctx->bios_in_flight));
+#endif /* CONFIG_BTRFS_FS_SCRUB_DEBUG */
+			scrub_bio_end_io_wrapup_worker(&sbio->work_end);
+		} else {
+			/* Introduce delay to control scrubbing rate. We hold
+			 * the bio for sctx->delay seconds, and set a timer to
+			 * release it afterwards. */
+			j = jiffies;
+			scaled_delay = ((HZ * atomic64_read(&sctx->delay) *
+				sbio->page_count) / SCRUB_PAGES_PER_RD_BIO);
+
+			if (scaled_delay > (j - sbio->t_start) + sbio->t_wasted)
+				diffjiff = scaled_delay - ((j -
+					sbio->t_start) + sbio->t_wasted);
+
+			sbio->timer_start = j;
+			sbio->timer_expires = diffjiff;
+#ifdef CONFIG_BTRFS_FS_SCRUB_DEBUG
+			printk(KERN_DEBUG "scrub_bio_end_io_worker: being "
+				"delayed (exp %ld, bio %d, in-flight %d)\n",
+				j+diffjiff, sbio->index,
+				atomic_read(&sctx->bios_in_flight));
+#endif /* CONFIG_BTRFS_FS_SCRUB_DEBUG */
+			if (diffjiff > 0) {
+				sbio->timer.function = scrub_bio_end_io_timer;
+				sbio->timer.data = (unsigned long)sbio;
+				sbio->timer.expires = j + diffjiff;
+
+				/* Add timer to list of active timers */
+				add_timer(&sbio->timer);
+			} else {
+				sbio->t_wasted = jiffies;
+				scrub_bio_end_io_wrapup_worker(&sbio->work_end);
+			}
+		}
+	} else {
+		scrub_bio_end_io_wrapup_worker(&sbio->work_end);
+	}
+#endif /* CONFIG_BTRFS_FS_SCRUB_NONE */
+}
+
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+static void scrub_bio_end_io_timer(unsigned long arg)
+{
+	struct scrub_bio *sbio = (struct scrub_bio *)arg;
+	struct btrfs_fs_info *fs_info = sbio->dev->dev_root->fs_info;
+
+#ifdef CONFIG_BTRFS_FS_SCRUB_DEBUG
+	printk(KERN_DEBUG "btrfs scrub: In [scrub_bio_end_io_timer] "
+		"(jiffies=%ld, bio %d, in-flight %d)\n", jiffies,
+		sbio->index, atomic_read(&sbio->sctx->bios_in_flight));
+#endif /* CONFIG_BTRFS_FS_SCRUB_DEBUG */
+	sbio->t_wasted = jiffies;
+	btrfs_queue_worker(&fs_info->scrub_workers, &sbio->work_end);
+}
+#endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
+
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+/* ioprio of boosted scrubbing is set to best-effort, with priority 4 */
+#define BTRFS_IOPRIO_BOOSTED (IOPRIO_PRIO_VALUE(IOPRIO_CLASS_BE, 4))
+#endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
+static void scrub_bio_end_io_wrapup_worker(struct btrfs_work *work)
+{
+	struct scrub_bio *sbio = container_of(work, struct scrub_bio,
+		work_end);
+	struct scrub_ctx *sctx = sbio->sctx;
+#ifdef CONFIG_BTRFS_FS_SCRUB_NONE
+
+	spin_lock(&sctx->list_lock);
+	sbio->next_free = sctx->first_free;
+	sctx->first_free = sbio->index;
+	spin_unlock(&sctx->list_lock);
+
+	/* We still need to do this, because we linked to the bio from the free
+	 * list, so interested threads should be informed. Also decrements bios
+	 * in flight, so we can proceed with pause requests. */
 	scrub_pending_bio_dec(sctx);
+#else /* Adaptive scrubber code */
+	u64 progress, goal, min_inc, elapsed;
+	u16 bios_per_sctx;
+	struct timeval cur;
+	long delay;
+
+	if (sctx->deadline) {
+		do_gettimeofday(&cur);
+		elapsed = cur.tv_sec - sctx->t_start.tv_sec;
+
+		/* Goal, progress, and min_inc all calculated in bytes */
+		goal = (elapsed * sctx->used_bytes) / sctx->deadline;
+		progress = sctx->stat.data_bytes_scrubbed +
+			sctx->stat.tree_bytes_scrubbed;
+		min_inc = PAGE_SIZE * SCRUB_PAGES_PER_RD_BIO; /* 1bio = 128kb */
+
+		/* Check if we fell behind, or if we're ahead by more than min_inc */
+		if (elapsed > sctx->deadline || progress + min_inc < goal ||
+		    goal + min_inc < progress) {
+			if (sctx->bgflags & BTRFS_BGSC_BOOST) {
+				if (progress + 100 * min_inc < goal) {
+					sctx->old_ioprio = IOPRIO_PRIO_VALUE(
+						task_nice_ioclass(current),
+						task_nice_ioprio(current));
+					set_task_ioprio(current,
+						BTRFS_IOPRIO_BOOSTED);
+				} else if (progress > goal &&
+					   sctx->old_ioprio != -1) {
+					set_task_ioprio(current,
+						sctx->old_ioprio);
+					sctx->old_ioprio = -1;
+				}
+			}
+
+			mutex_lock(&sctx->bios_lock);
+#ifdef CONFIG_BTRFS_FS_SCRUB_DEBUG
+			printk(KERN_INFO "btrfs scrub: About to adjust "
+				"(goal %llu, progress %llu, min_inc %llu).\n",
+				goal, progress, min_inc);
+#endif /* CONFIG_BTRFS_FS_SCRUB_DEBUG */
+			scrub_adjust_rate(sctx, elapsed, progress,
+				&bios_per_sctx, &delay);
+			if (bios_per_sctx > sctx->bios_per_sctx) {
+				/* Allocate new bios, update bios_per_sctx */
+				printk(KERN_INFO "btrfs scrub: Need to allocate"
+					" more bios -- %u to %u.\n",
+					sctx->bios_per_sctx, bios_per_sctx);
+				scrub_realloc_bios_array(sctx, bios_per_sctx);
+			} else if (bios_per_sctx < sctx->bios_per_sctx) {
+				/* Update pending_removals, also marking this
+				 * bio to be freed */
+				atomic_set(&sctx->pending_removals,
+					sctx->bios_per_sctx - bios_per_sctx);
+				printk(KERN_INFO "btrfs scrub: Need to free "
+					"some bios -- %u to %u.\n",
+					sctx->bios_per_sctx, bios_per_sctx);
+			}
+			mutex_unlock(&sctx->bios_lock);
+
+			/*
+			 * Delay decreased: speed things up by increasing bios
+			 * Delay increased: slow down by deleting some bios, or
+			 * just increase the delay
+			 * We go ahead and update delay (if needed) right away
+			 */
+			if (atomic64_read(&sctx->delay) != delay) {
+				printk(KERN_INFO "btrfs scrub: adjusting delay"
+					" -- %ld to %ld.\n",
+					atomic64_read(&sctx->delay), delay);
+				atomic64_set(&sctx->delay, delay);
+			}
+		}
+
+		if (!atomic_read(&sctx->pending_removals)) {
+			/* account for lost time */
+			sbio->t_wasted = jiffies - sbio->t_wasted;
+			spin_lock(&sctx->list_lock);
+			sbio->next_free = sctx->first_free;
+			sctx->first_free = sbio->index;
+			spin_unlock(&sctx->list_lock);
+		} else {
+#ifdef CONFIG_BTRFS_FS_SCRUB_DEBUG
+			printk(KERN_DEBUG "scrub_bio_end_io_wrapup_worker: "
+				"(removing bio %d -- pending removals: %d)\n",
+				sbio->index, atomic_read(&sctx->pending_removals));
+#endif /* CONFIG_BTRFS_FS_SCRUB_DEBUG */
+			mutex_lock(&sctx->bios_lock);
+			scrub_remove_bio(sctx, sbio->index);
+			mutex_unlock(&sctx->bios_lock);
+		}
+	} else {
+		/* account for lost time */
+		sbio->t_wasted = jiffies - sbio->t_wasted;
+		spin_lock(&sctx->list_lock);
+		sbio->next_free = sctx->first_free;
+		sctx->first_free = sbio->index;
+		spin_unlock(&sctx->list_lock);
+
+		/* We don't need to wake anyone up yet, we'll do this outside
+		 * this block when scrub_pending_bio_alloc_dec() is called */
+		atomic_dec(&sctx->bios_in_flight);
+	}
+
+	/* Still need this, because we linked the bio from the free list */
+	scrub_pending_bio_alloc_dec(sctx);
+#endif /* CONFIG_BTRFS_FS_SCRUB_NONE */
 }
 
 static void scrub_block_complete(struct scrub_block *sblock)
@@ -2180,6 +2942,12 @@ static int scrub_find_csum(struct scrub_ctx *sctx, u64 logical, u64 len,
 }
 
 /* scrub extent tries to collect up to 64 kB for each bio */
+/*
+ * Starts by breaking the extent down to segments of size min(u64, extent_length,
+ * block_size), and calls scrub_pages for them. We advance between segments by
+ * incrementing logical and physical by the segment size, since within a segment,
+ * everything is contiguous in both the logical and physical space.
+ */
 static int scrub_extent(struct scrub_ctx *sctx, u64 logical, u64 len,
 			u64 physical, struct btrfs_device *dev, u64 flags,
 			u64 gen, int mirror_num, u64 physical_for_dev_replace)
@@ -2236,6 +3004,19 @@ behind_scrub_pages:
 	return 0;
 }
 
+/*
+ * Starts with the first stripe of a chunk, and proceeds by finding all the
+ * extents within that stripe (btrfs_search_slot) and scrubbing them through
+ * scrub_extent. Extends that span more than the current stripe are split
+ * between separate scrub_extent calls. In any other case, we manually
+ * proceed to the next stripe by adding _increment_ bytes to the current
+ * logical address (starts at base=chunk_offset). The value of _increment_
+ * is calculated based on the stripe length and the type of RAID scheme used
+ * (e.g. equal to stripe length for RAID-1).
+ * For each extent, its physical mapping extents from [start, end], where
+ * start=stripe_physical+(extent_objectid-stripe_logical) -- since objectid
+ * corresponds to the logical offset of the extent, and end=start+extent_offset.
+ */
 static noinline_for_stack int scrub_stripe(struct scrub_ctx *sctx,
 					   struct map_lookup *map,
 					   struct btrfs_device *scrub_dev,
@@ -2270,7 +3051,7 @@ static noinline_for_stack int scrub_stripe(struct scrub_ctx *sctx,
 	u64 extent_len;
 	struct btrfs_device *extent_dev;
 	int extent_mirror_num;
-	int stop_loop;
+	int stop_loop = 0;
 
 	if (map->type & (BTRFS_BLOCK_GROUP_RAID5 |
 			 BTRFS_BLOCK_GROUP_RAID6)) {
@@ -2343,6 +3124,7 @@ static noinline_for_stack int scrub_stripe(struct scrub_ctx *sctx,
 	key_end.offset = base + offset + nstripes * increment;
 	reada2 = btrfs_reada_add(csum_root, &key_start, &key_end);
 
+	//printk(KERN_INFO "btrfs scrub: readahead started at %lu.\n", jiffies);
 	if (!IS_ERR(reada1))
 		btrfs_reada_wait(reada1);
 	if (!IS_ERR(reada2))
@@ -2364,6 +3146,7 @@ static noinline_for_stack int scrub_stripe(struct scrub_ctx *sctx,
 	 * the scrub. This might currently (crc32) end up to be about 1MB
 	 */
 	blk_start_plug(&plug);
+	//printk(KERN_INFO "btrfs scrub: readahead finished at %lu.\n", jiffies);
 
 	/*
 	 * now find all extents for each stripe and scrub them
@@ -2385,7 +3168,14 @@ static noinline_for_stack int scrub_stripe(struct scrub_ctx *sctx,
 		 * check to see if we have to pause
 		 */
 		if (atomic_read(&fs_info->scrub_pause_req)) {
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+pause_properly:
+#endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
 			/* push queued extents */
+#ifdef CONFIG_BTRFS_FS_SCRUB_DEBUG
+			printk(KERN_DEBUG "btrfs scrub: Pause requested. "
+				"Waiting for bios (%lu).\n", jiffies);
+#endif /* CONFIG_BTRFS_FS_SCRUB_DEBUG */
 			atomic_set(&sctx->wr_ctx.flush_all_writes, 1);
 			scrub_submit(sctx);
 			mutex_lock(&sctx->wr_ctx.wr_lock);
@@ -2395,19 +3185,42 @@ static noinline_for_stack int scrub_stripe(struct scrub_ctx *sctx,
 				   atomic_read(&sctx->bios_in_flight) == 0);
 			atomic_set(&sctx->wr_ctx.flush_all_writes, 0);
 			atomic_inc(&fs_info->scrubs_paused);
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+			/* At this point, we're officially paused */
+back_to_paused:
+#endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
 			wake_up(&fs_info->scrub_pause_wait);
 			mutex_lock(&fs_info->scrub_lock);
+			/* Time to wait for the transaction to be over */
 			while (atomic_read(&fs_info->scrub_pause_req)) {
 				mutex_unlock(&fs_info->scrub_lock);
 				wait_event(fs_info->scrub_pause_wait,
 				   atomic_read(&fs_info->scrub_pause_req) == 0);
 				mutex_lock(&fs_info->scrub_lock);
 			}
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+			if (sctx->deadline && sctx->first_free == -1) {
+#ifdef CONFIG_BTRFS_FS_SCRUB_DEBUG
+				printk(KERN_DEBUG "btrfs scrub: Waiting for "
+					"free bios (%lu).\n", jiffies);
+#endif
+				mutex_unlock(&fs_info->scrub_lock);
+				wait_event(sctx->list_wait,
+					sctx->first_free != -1);
+				mutex_lock(&fs_info->scrub_lock);
+				if (atomic_read(&fs_info->scrub_pause_req))
+					goto back_to_paused;
+			}
+#endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
+			/* We have woken up again */
 			atomic_dec(&fs_info->scrubs_paused);
 			mutex_unlock(&fs_info->scrub_lock);
 			wake_up(&fs_info->scrub_pause_wait);
 		}
 
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+		btrfs_release_path(path);
+#endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
 		key.objectid = logical;
 		key.type = BTRFS_EXTENT_ITEM_KEY;
 		key.offset = (u64)-1;
@@ -2484,6 +3297,20 @@ static noinline_for_stack int scrub_stripe(struct scrub_ctx *sctx,
 			}
 
 again:
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+			if (atomic_read(&fs_info->scrub_pause_req)) {
+				/* We were asked to pause in the middle of an
+				 * extent. When we come back, we'll continue
+				 * from the logical offset we left off. Then
+				 * we'll look for an extent all over again. */
+#ifdef CONFIG_BTRFS_FS_SCRUB_DEBUG
+				printk(KERN_DEBUG "btrfs scrub: Interrupted "
+					"while scrubbing extent. Backing up. "
+					"(%lu).\n", jiffies);
+#endif /* CONFIG_BTRFS_FS_SCRUB_DEBUG */
+				goto pause_properly;
+			}
+#endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
 			extent_logical = key.objectid;
 			extent_len = bytes;
 
@@ -2566,6 +3393,13 @@ out:
 	return ret < 0 ? ret : 0;
 }
 
+/*
+ * Different devices are scrubbed in parallel, and each device is scrubbed
+ * sequentially, chunk by chunk (technically that's device extents, the portion
+ * of a chunk on a single device). Here we initiate scrubbing of the chunk.
+ * Looks up the map of stripes for this extent, then passes it down to
+ * scrub_stripe that takes care of initiating scrubbing at the chunk.
+ */
 static noinline_for_stack int scrub_chunk(struct scrub_ctx *sctx,
 					  struct btrfs_device *scrub_dev,
 					  u64 chunk_tree, u64 chunk_objectid,
@@ -2684,6 +3518,8 @@ int scrub_enumerate_chunks(struct scrub_ctx *sctx,
 		chunk_tree = btrfs_dev_extent_chunk_tree(l, dev_extent);
 		chunk_objectid = btrfs_dev_extent_chunk_objectid(l, dev_extent);
 		chunk_offset = btrfs_dev_extent_chunk_offset(l, dev_extent);
+		printk(KERN_INFO "btrfs scrub: Chunk <obj=%llu, off=%llu> to "
+			"be scrubbed.\n", chunk_objectid, chunk_offset);
 
 		/*
 		 * get a reference on the corresponding block group to prevent
@@ -2754,6 +3590,8 @@ int scrub_enumerate_chunks(struct scrub_ctx *sctx,
 
 		key.offset = found_key.offset + length;
 		btrfs_release_path(path);
+		printk(KERN_INFO "btrfs scrub: Done scrubbing chunk [%llu] "
+			"(%lu)\n", chunk_offset, jiffies);
 	}
 
 	btrfs_free_path(path);
@@ -2845,9 +3683,15 @@ static noinline_for_stack void scrub_workers_put(struct btrfs_fs_info *fs_info)
 	WARN_ON(fs_info->scrub_workers_refcnt < 0);
 }
 
+#ifdef CONFIG_BTRFS_FS_SCRUB_NONE
 int btrfs_scrub_dev(struct btrfs_fs_info *fs_info, u64 devid, u64 start,
 		    u64 end, struct btrfs_scrub_progress *progress,
 		    int readonly, int is_dev_replace)
+#else /* Adaptive scrubber code */
+int btrfs_scrub_dev(struct btrfs_fs_info *fs_info, u64 devid, u64 start,
+		    u64 end, struct btrfs_scrub_progress *progress,
+		    int readonly, u64 deadline, u8 bgflags, int is_dev_replace)
+#endif /* CONFIG_BTRFS_FS_SCRUB_NONE */
 {
 	struct scrub_ctx *sctx;
 	int ret;
@@ -2936,7 +3780,11 @@ int btrfs_scrub_dev(struct btrfs_fs_info *fs_info, u64 devid, u64 start,
 		return ret;
 	}
 
+#ifdef CONFIG_BTRFS_FS_SCRUB_NONE
 	sctx = scrub_setup_ctx(dev, is_dev_replace);
+#else /* Adaptive scrubber code */
+	sctx = scrub_setup_ctx(dev, deadline, bgflags, is_dev_replace);
+#endif /* CONFIG_BTRFS_FS_SCRUB_NONE */
 	if (IS_ERR(sctx)) {
 		mutex_unlock(&fs_info->scrub_lock);
 		mutex_unlock(&fs_info->fs_devices->device_list_mutex);
@@ -2961,7 +3809,12 @@ int btrfs_scrub_dev(struct btrfs_fs_info *fs_info, u64 devid, u64 start,
 	if (!ret)
 		ret = scrub_enumerate_chunks(sctx, dev, start, end,
 					     is_dev_replace);
+	//printk(KERN_INFO "btrfs scrub: Done enumerating chunks at %lu.\n",
+	//	jiffies);
 
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+	wait_event(sctx->list_wait, atomic_read(&sctx->bios_allocated) == 0);
+#endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
 	wait_event(sctx->list_wait, atomic_read(&sctx->bios_in_flight) == 0);
 	atomic_dec(&fs_info->scrubs_running);
 	wake_up(&fs_info->scrub_pause_wait);
@@ -2987,6 +3840,11 @@ void btrfs_scrub_pause(struct btrfs_root *root)
 
 	mutex_lock(&fs_info->scrub_lock);
 	atomic_inc(&fs_info->scrub_pause_req);
+#ifdef CONFIG_BTRFS_FS_SCRUB_DEBUG
+	printk(KERN_DEBUG "bgtask scrubber: Pause requested (P=%d,R=%d).\n",
+		atomic_read(&fs_info->scrubs_paused),
+		atomic_read(&fs_info->scrubs_running));
+#endif /* CONFIG_BTRFS_FS_SCRUB_DEBUG */
 	while (atomic_read(&fs_info->scrubs_paused) !=
 	       atomic_read(&fs_info->scrubs_running)) {
 		mutex_unlock(&fs_info->scrub_lock);
@@ -2995,6 +3853,9 @@ void btrfs_scrub_pause(struct btrfs_root *root)
 			   atomic_read(&fs_info->scrubs_running));
 		mutex_lock(&fs_info->scrub_lock);
 	}
+#ifdef CONFIG_BTRFS_FS_SCRUB_DEBUG
+	printk(KERN_DEBUG "bgtask scrubber: Scrubber paused.\n");
+#endif /* CONFIG_BTRFS_FS_SCRUB_DEBUG */
 	mutex_unlock(&fs_info->scrub_lock);
 }
 

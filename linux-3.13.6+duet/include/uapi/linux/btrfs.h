@@ -87,6 +87,9 @@ struct btrfs_scrub_progress {
 	__u64 tree_extents_scrubbed;	/* # of tree extents scrubbed */
 	__u64 data_bytes_scrubbed;	/* # of data bytes scrubbed */
 	__u64 tree_bytes_scrubbed;	/* # of tree bytes scrubbed */
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+	__u64 sync_errors;		/* # of sync errors encountered */
+#endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
 	__u64 read_errors;		/* # of read errors encountered (EIO) */
 	__u64 csum_errors;		/* # of failed csum checks */
 	__u64 verify_errors;		/* # of occurences, where the metadata
@@ -121,10 +124,25 @@ struct btrfs_ioctl_scrub_args {
 	__u64 start;				/* in */
 	__u64 end;				/* in */
 	__u64 flags;				/* in */
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+	__u64 deadline;				/* in */
+	__u8 bgflags;				/* in */
+#endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
 	struct btrfs_scrub_progress progress;	/* out */
 	/* pad to 1k */
+#ifdef CONFIG_BTRFS_FS_SCRUB_NONE
 	__u64 unused[(1024-32-sizeof(struct btrfs_scrub_progress))/8];
+#else /* Adaptive scrubber code */
+	__u64 unused[(1024-41-sizeof(struct btrfs_scrub_progress))/8];
+#endif /* CONFIG_BTRFS_FS_SCRUB_NONE */
 };
+
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+enum { /* bgtask-enhanced scrubbing flags */
+	BTRFS_BGSC_ENUM		= 1 << 0,
+	BTRFS_BGSC_BOOST	= 1 << 1,
+};
+#endif
 
 #define BTRFS_IOCTL_DEV_REPLACE_CONT_READING_FROM_SRCDEV_MODE_ALWAYS	0
 #define BTRFS_IOCTL_DEV_REPLACE_CONT_READING_FROM_SRCDEV_MODE_AVOID	1

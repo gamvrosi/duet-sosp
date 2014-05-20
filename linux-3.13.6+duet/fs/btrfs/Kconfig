@@ -58,6 +58,44 @@ config BTRFS_FS_CHECK_INTEGRITY
 	  to verify the integrity of (super)-block write requests
 	  during the run of a regression test, say N
 
+choice
+	prompt "Btrfs scrubbing with I/O throttling (NEW)"
+	default BTRFS_FS_SCRUB_NONE
+
+config BTRFS_FS_SCRUB_NONE
+	bool "No throttling"
+	depends on BTRFS_FS
+	help
+	  This is the stock scrubber currently shipped with btrfs. Once a scrub
+	  is initiated from the btrfs tools command, it proceeds at full speed
+	  (unless throttled using a low IO priority), utilizing a fixed number
+	  of bios that can be in flight at any time. This puts an upper bound
+	  and how much disk bandwidth will be consumed, but the bound is
+	  hardcoded.
+
+	  Downside: Aggressive bandwidth consumption by the scrubber.
+
+config BTRFS_FS_SCRUB_ADAPT
+	bool "Adaptive throttling"
+	depends on BTRFS_FS
+	help
+	  Adds code that enforces adaptive I/O throttling for the btrfs
+	  scrubber. With the updated version of the btrfs tools, you can
+	  specify a deadline for the scrubber (-D). Then, the scrubber will
+	  adapt the number of bios in flight, as well as the delays introduced
+	  between them throughout the scrub, in order to meet the predefined
+	  deadline. This approach takes into account possible slowdowns due to
+	  foreground workload requests.
+endchoice
+
+config BTRFS_FS_SCRUB_DEBUG
+	bool "Btrfs scrubbing debug messages"
+	depends on BTRFS_FS
+	help
+	  Enables debugging messages for the btrfs scrubber.
+
+	  If unsure/not a developer, say N here.
+
 config BTRFS_FS_RUN_SANITY_TESTS
 	bool "Btrfs will run sanity tests upon loading"
 	depends on BTRFS_FS

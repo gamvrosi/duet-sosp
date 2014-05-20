@@ -3933,9 +3933,15 @@ int btrfs_reloc_post_snapshot(struct btrfs_trans_handle *trans,
 			      struct btrfs_pending_snapshot *pending);
 
 /* scrub.c */
+#ifdef CONFIG_BTRFS_FS_SCRUB_NONE
 int btrfs_scrub_dev(struct btrfs_fs_info *fs_info, u64 devid, u64 start,
 		    u64 end, struct btrfs_scrub_progress *progress,
 		    int readonly, int is_dev_replace);
+#else /* Adaptive scrubbing */
+int btrfs_scrub_dev(struct btrfs_fs_info *fs_info, u64 devid, u64 start,
+		    u64 end, struct btrfs_scrub_progress *progress,
+		    int readonly, u64 deadline, u8 bgflags, int is_dev_replace);
+#endif /* CONFIG_BTRFS_FS_SCRUB_NONE */
 void btrfs_scrub_pause(struct btrfs_root *root);
 void btrfs_scrub_continue(struct btrfs_root *root);
 int btrfs_scrub_cancel(struct btrfs_fs_info *info);

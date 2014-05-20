@@ -355,6 +355,10 @@ unsigned long btrfs_full_stripe_len(struct btrfs_root *root,
 int btrfs_finish_chunk_alloc(struct btrfs_trans_handle *trans,
 				struct btrfs_root *extent_root,
 				u64 chunk_offset, u64 chunk_size);
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+int btrfs_calc_dev_extents_size(struct btrfs_device *dev, u64 start, u64 end,
+				u64 *size);
+#endif
 static inline void btrfs_dev_stat_inc(struct btrfs_device *dev,
 				      int index)
 {

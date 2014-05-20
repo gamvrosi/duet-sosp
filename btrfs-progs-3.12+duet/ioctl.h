@@ -90,6 +90,9 @@ struct btrfs_scrub_progress {
 	__u64 tree_extents_scrubbed;
 	__u64 data_bytes_scrubbed;
 	__u64 tree_bytes_scrubbed;
+#ifdef DUET_SCRUB
+	__u64 sync_errors;
+#endif
 	__u64 read_errors;
 	__u64 csum_errors;
 	__u64 verify_errors;
@@ -109,10 +112,25 @@ struct btrfs_ioctl_scrub_args {
 	__u64 start;				/* in */
 	__u64 end;				/* in */
 	__u64 flags;				/* in */
+#ifdef DUET_SCRUB
+	__u64 deadline;				/* in */
+	__u8 bgflags;				/* in */
+#endif
 	struct btrfs_scrub_progress progress;	/* out */
 	/* pad to 1k */
+#ifdef DUET_SCRUB
+	__u64 unused[(1024-41-sizeof(struct btrfs_scrub_progress))/8];
+#else
 	__u64 unused[(1024-32-sizeof(struct btrfs_scrub_progress))/8];
+#endif
 };
+
+#ifdef DUET_SCRUB
+enum { /* enhanced scrubbing flags */
+	BTRFS_BGSC_ENUM		= 1 << 0,
+	BTRFS_BGSC_BOOST	= 1 << 1,
+};
+#endif
 
 #define BTRFS_IOCTL_DEV_REPLACE_CONT_READING_FROM_SRCDEV_MODE_ALWAYS	0
 #define BTRFS_IOCTL_DEV_REPLACE_CONT_READING_FROM_SRCDEV_MODE_AVOID	1

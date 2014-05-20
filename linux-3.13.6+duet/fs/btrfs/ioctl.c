@@ -3590,9 +3590,17 @@ static long btrfs_ioctl_scrub(struct file *file, void __user *arg)
 			goto out;
 	}
 
+	printk(KERN_INFO "btrfs scrub: scrubbing started at %lu.\n", jiffies);
+#ifdef CONFIG_BTRFS_FS_SCRUB_NONE
 	ret = btrfs_scrub_dev(root->fs_info, sa->devid, sa->start, sa->end,
 			      &sa->progress, sa->flags & BTRFS_SCRUB_READONLY,
 			      0);
+#else /* Adaptive scrubbing */
+	ret = btrfs_scrub_dev(root->fs_info, sa->devid, sa->start, sa->end,
+			      &sa->progress, sa->flags & BTRFS_SCRUB_READONLY,
+			      sa->deadline, sa->bgflags, 0);
+#endif /* CONFIG_BTRFS_FS_SCRUB_NONE */
+	printk(KERN_INFO "btrfs scrub: scrubbing ended at %lu.\n", jiffies);
 
 	if (copy_to_user(arg, sa, sizeof(*sa)))
 		ret = -EFAULT;

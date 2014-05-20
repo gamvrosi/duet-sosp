@@ -405,9 +405,16 @@ int btrfs_dev_replace_start(struct btrfs_root *root,
 	WARN_ON(ret);
 
 	/* the disk copy procedure reuses the scrub code */
+#ifdef CONFIG_BTRFS_FS_SCRUB_NONE
 	ret = btrfs_scrub_dev(fs_info, src_device->devid, 0,
 			      src_device->total_bytes,
 			      &dev_replace->scrub_progress, 0, 1);
+#else /* Adaptive scrubbing */
+	ret = btrfs_scrub_dev(fs_info, src_device->devid, 0,
+			      src_device->total_bytes,
+			      &dev_replace->scrub_progress, 0,
+			      0 /*no deadline*/, 0 /*no flags*/, 1);
+#endif /* CONFIG_BTRFS_FS_SCRUB_NONE */
 
 	ret = btrfs_dev_replace_finishing(root->fs_info, ret);
 	WARN_ON(ret);
@@ -775,10 +782,18 @@ static int btrfs_dev_replace_continue_on_mount(struct btrfs_fs_info *fs_info)
 	struct btrfs_dev_replace *dev_replace = &fs_info->dev_replace;
 	int ret;
 
+#ifdef CONFIG_BTRFS_FS_SCRUB_NONE
 	ret = btrfs_scrub_dev(fs_info, dev_replace->srcdev->devid,
 			      dev_replace->committed_cursor_left,
 			      dev_replace->srcdev->total_bytes,
 			      &dev_replace->scrub_progress, 0, 1);
+#else /* Adaptive scrubbing */
+	ret = btrfs_scrub_dev(fs_info, dev_replace->srcdev->devid,
+			      dev_replace->committed_cursor_left,
+			      dev_replace->srcdev->total_bytes,
+			      &dev_replace->scrub_progress, 0,
+			      0 /*no deadline*/, 0 /*no flags*/, 1);
+#endif /* CONFIG_BTRFS_FS_SCRUB_NONE */
 	ret = btrfs_dev_replace_finishing(fs_info, ret);
 	WARN_ON(ret);
 	return 0;

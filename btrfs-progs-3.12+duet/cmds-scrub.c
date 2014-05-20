@@ -34,6 +34,7 @@
 #include <ctype.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <limits.h>	/* Added for optarg manipulation */
 
 #include "ctree.h"
 #include "ioctl.h"
@@ -112,6 +113,9 @@ static void print_scrub_full(struct btrfs_scrub_progress *sp)
 	printf("\ttree_extents_scrubbed: %lld\n", sp->tree_extents_scrubbed);
 	printf("\tdata_bytes_scrubbed: %lld\n", sp->data_bytes_scrubbed);
 	printf("\ttree_bytes_scrubbed: %lld\n", sp->tree_bytes_scrubbed);
+#ifdef DUET_SCRUB
+	printf("\tsync_errors: %lld\n", sp->sync_errors);
+#endif
 	printf("\tread_errors: %lld\n", sp->read_errors);
 	printf("\tcsum_errors: %lld\n", sp->csum_errors);
 	printf("\tverify_errors: %lld\n", sp->verify_errors);
@@ -154,6 +158,14 @@ static void print_scrub_summary(struct btrfs_scrub_progress *p)
 	printf("\ttotal bytes scrubbed: %s with %llu errors\n",
 		pretty_size(p->data_bytes_scrubbed + p->tree_bytes_scrubbed),
 		max(err_cnt, err_cnt2));
+
+#ifdef DUET_SCRUB
+	printf("\ttotal errors encountered: %llu actual, %llu sync\n",
+		max(err_cnt, err_cnt2), p->sync_errors);
+#else
+	printf("\ttotal errors encountered: %llu actual\n",
+		max(err_cnt, err_cnt2));
+#endif
 
 	if (err_cnt || err_cnt2) {
 		printf("\terror details:");
@@ -201,6 +213,9 @@ static void add_to_fs_stat(struct btrfs_scrub_progress *p,
 	_SCRUB_FS_STAT(p, tree_extents_scrubbed, fs_stat);
 	_SCRUB_FS_STAT(p, data_bytes_scrubbed, fs_stat);
 	_SCRUB_FS_STAT(p, tree_bytes_scrubbed, fs_stat);
+#ifdef DUET_SCRUB
+	_SCRUB_FS_STAT(p, sync_errors, fs_stat);
+#endif
 	_SCRUB_FS_STAT(p, read_errors, fs_stat);
 	_SCRUB_FS_STAT(p, csum_errors, fs_stat);
 	_SCRUB_FS_STAT(p, verify_errors, fs_stat);
@@ -296,12 +311,14 @@ static void free_history(struct scrub_file_record **last_scrubs)
  * cancels a running scrub and makes the master process record the current
  * progress status before exiting.
  */
+static int cancel_request = 0;
 static int cancel_fd = -1;
 static void scrub_sigint_record_progress(int signal)
 {
 	int ret;
 
 	ret = ioctl(cancel_fd, BTRFS_IOC_SCRUB_CANCEL, NULL);
+	cancel_request = 1;
 	if (ret < 0)
 		perror("Scrub cancel failed");
 }
@@ -583,6 +600,10 @@ again:
 					&p[curr]->p);
 			_SCRUB_KVREAD(ret, &i, tree_bytes_scrubbed, avail, l,
 					&p[curr]->p);
+#ifdef DUET_SCRUB
+			_SCRUB_KVREAD(ret, &i, sync_errors, avail, l,
+					&p[curr]->p);
+#endif
 			_SCRUB_KVREAD(ret, &i, read_errors, avail, l,
 					&p[curr]->p);
 			_SCRUB_KVREAD(ret, &i, csum_errors, avail, l,
@@ -678,6 +699,9 @@ static struct scrub_progress *scrub_resumed_stats(struct scrub_progress *data,
 	_SCRUB_SUM(dest, data, tree_extents_scrubbed);
 	_SCRUB_SUM(dest, data, data_bytes_scrubbed);
 	_SCRUB_SUM(dest, data, tree_bytes_scrubbed);
+#ifdef DUET_SCRUB
+	_SCRUB_SUM(dest, data, sync_errors);
+#endif
 	_SCRUB_SUM(dest, data, read_errors);
 	_SCRUB_SUM(dest, data, csum_errors);
 	_SCRUB_SUM(dest, data, verify_errors);
@@ -742,6 +766,9 @@ static int scrub_write_file(int fd, const char *fsid,
 		    _SCRUB_KVWRITE(fd, buf, tree_extents_scrubbed, use) ||
 		    _SCRUB_KVWRITE(fd, buf, data_bytes_scrubbed, use) ||
 		    _SCRUB_KVWRITE(fd, buf, tree_bytes_scrubbed, use) ||
+#ifdef DUET_SCRUB
+		    _SCRUB_KVWRITE(fd, buf, sync_errors, use) ||
+#endif
 		    _SCRUB_KVWRITE(fd, buf, read_errors, use) ||
 		    _SCRUB_KVWRITE(fd, buf, csum_errors, use) ||
 		    _SCRUB_KVWRITE(fd, buf, verify_errors, use) ||
@@ -1096,9 +1123,20 @@ static int scrub_start(int argc, char **argv, int resume)
 	void *terr;
 	u64 devid;
 	DIR *dirstream = NULL;
+#ifdef DUET_SCRUB
+	u64 deadline = 0;
+	u8 enumerate = 0;
+	u8 boost = 0;
+	char *optstr = "BdqrREbD:c:n:N:";
+#else
+	char *optstr = "BdqrRc:n:N:";
+#endif
+	int nscrubs = 1;
+
+	cancel_request = 0;
 
 	optind = 1;
-	while ((c = getopt(argc, argv, "BdqrRc:n:")) != -1) {
+	while ((c = getopt(argc, argv, optstr)) != -1) {
 		switch (c) {
 		case 'B':
 			do_background = 0;
@@ -1122,6 +1160,30 @@ static int scrub_start(int argc, char **argv, int resume)
 			break;
 		case 'n':
 			ioprio_classdata = (int)strtol(optarg, NULL, 10);
+			break;
+#ifdef DUET_SCRUB
+		case 'E':
+			enumerate = 1;
+			break;
+		case 'b':
+			boost = 1;
+			break;
+		case 'D':
+			deadline = atoll(optarg);
+			if (deadline < 0 || deadline == LLONG_MAX) {
+				ERR(!do_quiet, "invalid scrub deadline (%s),"
+					" converting to zero.\n", optarg);
+				deadline = 0;
+			}
+			break;
+#endif
+		case 'N':
+			nscrubs = atoi(optarg);
+			if (nscrubs < 0) {
+				ERR(!do_quiet, "invalid scrubbing rounds (%s),"
+					" converting to one.\n", optarg);
+				nscrubs = 1;
+			}
 			break;
 		case '?':
 		default:
@@ -1225,6 +1287,11 @@ static int scrub_start(int argc, char **argv, int resume)
 
 	for (i = 0; i < fi_args.num_devices; ++i) {
 		devid = di_args[i].devid;
+#ifdef DUET_SCRUB
+		sp[i].scrub_args.deadline = deadline;
+		sp[i].scrub_args.bgflags |= (enumerate ? BTRFS_BGSC_ENUM : 0);
+		sp[i].scrub_args.bgflags |= (boost ? BTRFS_BGSC_BOOST : 0);
+#endif
 		ret = pthread_mutex_init(&sp[i].progress_mutex, NULL);
 		if (ret) {
 			ERR(!do_quiet, "ERROR: pthread_mutex_init failed: "
@@ -1358,6 +1425,7 @@ static int scrub_start(int argc, char **argv, int resume)
 
 	scrub_handle_sigint_child(fdmnt);
 
+again:
 	for (i = 0; i < fi_args.num_devices; ++i) {
 		if (sp[i].skip) {
 			sp[i].scrub_args.progress = sp[i].resumed->p;
@@ -1482,6 +1550,9 @@ static int scrub_start(int argc, char **argv, int resume)
 		}
 	}
 
+	if (!cancel_request && (!nscrubs || --nscrubs))
+		goto again;
+
 	scrub_handle_sigint_child(-1);
 
 out:
@@ -1507,7 +1578,11 @@ out:
 }
 
 static const char * const cmd_scrub_start_usage[] = {
-	"btrfs scrub start [-BdqrR] [-c ioprio_class -n ioprio_classdata] <path>|<device>",
+#ifdef DUET_SCRUB
+	"btrfs scrub start [-BdqrREDN] [-c ioprio_class -n ioprio_classdata] <path>|<device>",
+#else
+	"btrfs scrub start [-BdqrRN] [-c ioprio_class -n ioprio_classdata] <path>|<device>",
+#endif
 	"Start a new scrub",
 	"",
 	"-B     do not background",
@@ -1517,6 +1592,12 @@ static const char * const cmd_scrub_start_usage[] = {
 	"-R     raw print mode, print full data instead of summary"
 	"-c     set ioprio class (see ionice(1) manpage)",
 	"-n     set ioprio classdata (see ionice(1) manpage)",
+#ifdef DUET_SCRUB
+	"-E     enumerate allocated extents before estimating scrub rate",
+	"-b     enable boosting to ensure scrubbing deadline is met",
+	"-D     set scrubbing deadline (in seconds)",
+#endif
+	"-N     set times to repeat the scrub",
 	NULL
 };
 

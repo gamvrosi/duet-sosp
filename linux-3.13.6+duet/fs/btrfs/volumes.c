@@ -6312,3 +6312,289 @@ int btrfs_scratch_superblock(struct btrfs_device *device)
 
 	return 0;
 }
+
+#ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
+int btrfs_calc_dev_extents_size(struct btrfs_device *dev, u64 start, u64 end,
+	u64 *size)
+{
+	/* Stuff required when going over chunks/dev_extents */
+	struct btrfs_dev_extent *dev_extent = NULL;
+	struct btrfs_path *de_path;
+	struct btrfs_root *root = dev->dev_root;
+	struct btrfs_fs_info *fs_info = root->fs_info;
+	u64 de_length;
+	u64 chunk_tree, chunk_objectid, chunk_offset;
+	int de_slot;
+	struct extent_buffer *de_leaf;
+	struct btrfs_key de_key, found_key;
+	struct btrfs_block_group_cache *cache;
+	u64 dev_offset;
+	int ret = 0;
+
+	/* Extra stuff requires for enumerating the stripes */
+	struct btrfs_mapping_tree *map_tree = &fs_info->mapping_tree;
+	struct map_lookup *map;
+	struct extent_map *em;
+	int curstripe;
+
+	/* Extra stuff requires for enumerating the extents */
+	struct btrfs_path *e_path;
+	struct btrfs_root *e_root = fs_info->extent_root;
+	struct btrfs_extent_item *extent;
+	u64 flags;
+	int e_slot;
+	u64 nstripes;
+	struct extent_buffer *e_leaf;
+	struct btrfs_key e_key;
+	u64 physical, logical;
+	int mirror_num;
+	u64 increment;
+	u64 offset;
+	int e_curstripe;
+
+	/* Readahead stuff */
+	struct reada_control *reada;
+	struct btrfs_key key_start;
+	struct btrfs_key key_end;
+
+	/* Init size */
+	*size = 0;
+
+	/* Init dev_extent_path */
+	de_path = btrfs_alloc_path();
+	if (!de_path) return -ENOMEM;
+	de_path->reada = 2;
+	de_path->search_commit_root = 1;
+	de_path->skip_locking = 1;
+
+	/* Init dev_extent_key */
+	de_key.objectid = dev->devid;
+	de_key.offset = 0ull;
+	de_key.type = BTRFS_DEV_EXTENT_KEY;
+
+	printk(KERN_INFO "enum DEs: commencing enumeration of dev extents\n");
+	while (1) {
+		ret = btrfs_search_slot(NULL, root, &de_key, de_path, 0, 0);
+		if (ret < 0)
+			break;
+		if (ret > 0) {
+			if (de_path->slots[0] >=
+			    btrfs_header_nritems(de_path->nodes[0])) {
+				ret = btrfs_next_leaf(root, de_path);
+				if (ret)
+					break;
+			}
+		}
+
+		de_leaf = de_path->nodes[0];
+		de_slot = de_path->slots[0];
+		btrfs_item_key_to_cpu(de_leaf, &found_key, de_slot);
+
+		if (found_key.objectid != dev->devid)
+			break;
+		if (btrfs_key_type(&found_key) != BTRFS_DEV_EXTENT_KEY)
+			break;
+		if (found_key.offset >= end)
+			break;
+		if (found_key.offset < de_key.offset)
+			break;
+
+		dev_extent = btrfs_item_ptr(de_leaf, de_slot,
+			struct btrfs_dev_extent);
+		de_length = btrfs_dev_extent_length(de_leaf, dev_extent);
+
+		if (found_key.offset + de_length <= start) {
+			de_key.offset = found_key.offset + de_length;
+			btrfs_release_path(de_path);
+			continue;
+		}
+
+		chunk_tree = btrfs_dev_extent_chunk_tree(de_leaf, dev_extent);
+		chunk_objectid = btrfs_dev_extent_chunk_objectid(de_leaf,
+					dev_extent);
+		chunk_offset = btrfs_dev_extent_chunk_offset(de_leaf,
+					dev_extent);
+
+		/*
+		 * get a reference on the corresponding block group to prevent
+		 * the chunk from going away while we are accessing it
+		 */
+		cache = btrfs_lookup_block_group(fs_info, chunk_offset);
+		if (!cache) {
+			ret = -ENOENT;
+			break;
+		}
+
+		/* Enumerate the stripes for this chunk: scrub_dev = dev */
+		dev_offset = found_key.offset;
+		read_lock(&map_tree->map_tree.lock);
+		em = lookup_extent_mapping(&map_tree->map_tree,
+				chunk_offset, 1);
+		read_unlock(&map_tree->map_tree.lock);
+
+		if (!em) {
+			ret = -EINVAL;
+			goto dev_out;
+		}
+
+		map = (struct map_lookup *)em->bdev;
+		if (em->start != chunk_offset)
+			goto chunk_out;
+		if (em->len < de_length)
+			goto chunk_out;
+
+		for (curstripe = 0; curstripe < map->num_stripes; ++curstripe) {
+			if (map->stripes[curstripe].dev->bdev == dev->bdev &&
+			    map->stripes[curstripe].physical == dev_offset) {
+
+				nstripes = de_length;
+				offset = 0;
+				do_div(nstripes, map->stripe_len);
+
+				if (map->type & BTRFS_BLOCK_GROUP_RAID0) {
+					offset = map->stripe_len * curstripe;
+					increment = map->stripe_len *
+						map->num_stripes;
+					mirror_num = 1;
+				} else if (map->type & BTRFS_BLOCK_GROUP_RAID10) {
+					int factor = map->num_stripes /
+						map->sub_stripes;
+					offset = map->stripe_len * (curstripe /
+						map->sub_stripes);
+					increment = map->stripe_len * factor;
+					mirror_num = curstripe %
+						map->sub_stripes + 1;
+				} else if (map->type & BTRFS_BLOCK_GROUP_RAID1) {
+					increment = map->stripe_len;
+					mirror_num = curstripe %
+						map->num_stripes + 1;
+				} else if (map->type & BTRFS_BLOCK_GROUP_DUP) {
+					increment = map->stripe_len;
+					mirror_num = curstripe %
+						map->num_stripes + 1;
+				} else {
+					increment = map->stripe_len;
+					mirror_num = 1;
+				}
+
+				e_path = btrfs_alloc_path();
+				if (!e_path) {
+					ret = -ENOMEM;
+					goto chunk_out;
+				}
+				e_path->search_commit_root = 1;
+				e_path->skip_locking = 1;
+
+				/* trigger the readahead for the extent tree
+				 * and wait for completion */
+				logical = chunk_offset + offset;
+
+				/* FIXME it might be better to start readahead
+				 * at commit root */
+				key_start.objectid = logical;
+				key_start.type = BTRFS_EXTENT_ITEM_KEY;
+				key_start.offset = (u64)0;
+				key_end.objectid = chunk_offset + offset +
+					nstripes * increment;
+				key_end.type = BTRFS_EXTENT_ITEM_KEY;
+				key_end.offset = (u64)0;
+				reada = btrfs_reada_add(e_root, &key_start,
+					&key_end);
+
+				if (!IS_ERR(reada))
+					//btrfs_reada_wait(reada);
+					btrfs_reada_detach(reada);
+
+				/* now find all extents for each stripe and
+				 * scrub them */
+				logical = chunk_offset + offset;
+				physical = map->stripes[curstripe].physical;
+
+				printk(KERN_INFO "enum DEs: commencing "
+					"enumeration of chunk stripes\n");
+				for (e_curstripe = 0; e_curstripe < nstripes; ++e_curstripe) {
+					e_key.objectid = logical;
+					e_key.type = BTRFS_EXTENT_ITEM_KEY;
+					e_key.offset = (u64)0;
+
+					ret = btrfs_search_slot(NULL, e_root, &e_key, e_path, 0, 0);
+					if (ret < 0)
+						goto stripe_out;
+					if (ret > 0) {
+						ret = btrfs_previous_item(e_root,
+							e_path, 0, BTRFS_EXTENT_ITEM_KEY);
+						if (ret < 0) goto stripe_out;
+						if (ret > 0) {
+							/* there's no smaller item, so stick with the larger one */
+							btrfs_release_path(e_path);
+							ret = btrfs_search_slot(NULL, e_root, &e_key, e_path, 0, 0);
+							if (ret < 0) goto stripe_out;
+						}
+					}
+					//printk(KERN_INFO "enum DEs: commencing enumeration of chunk stripe extents\n");
+					while (1) {
+						e_leaf = e_path->nodes[0];
+						e_slot = e_path->slots[0];
+						if (e_slot >= btrfs_header_nritems(e_leaf)) {
+							ret = btrfs_next_leaf(e_root, e_path);
+							if (ret == 0) continue;
+							if (ret < 0) goto stripe_out;
+							break;
+						}
+						btrfs_item_key_to_cpu(e_leaf, &e_key, e_slot);
+
+						if (e_key.objectid + e_key.offset <= logical) goto next_slot;
+						if (e_key.objectid >= logical + map->stripe_len) break;
+						if (btrfs_key_type(&e_key) != BTRFS_EXTENT_ITEM_KEY) goto next_slot;
+
+						extent = btrfs_item_ptr(e_leaf, e_slot, struct btrfs_extent_item);
+						flags = btrfs_extent_flags(e_leaf, extent);
+
+						if (e_key.objectid < logical && (flags & BTRFS_EXTENT_FLAG_TREE_BLOCK)) {
+							printk(KERN_ERR "btrfs scrub: tree block %llu spanning stripes, "
+								"ignored. logical=%llu\n", (unsigned long long)e_key.objectid,
+								(unsigned long long)logical);
+							goto next_slot;
+						}
+
+						/* trim extent to this stripe */
+						if (e_key.objectid < logical) {
+							e_key.offset -= logical - e_key.objectid;
+							e_key.objectid = logical;
+						}
+						if (e_key.objectid + e_key.offset > logical + map->stripe_len)
+							e_key.offset = logical + map->stripe_len - e_key.objectid;
+
+						/* We account for each extent's length here */
+						*size += e_key.offset;
+next_slot:
+						e_path->slots[0]++;
+					}
+					btrfs_release_path(e_path);
+					logical += increment;
+					physical += map->stripe_len;
+				}
+stripe_out:
+				btrfs_free_path(e_path);
+				//printk(KERN_INFO "At stripe_out: ret = %d\n", ret);
+				if (ret < 0) goto chunk_out;
+				else ret = 0;
+			}
+		}
+chunk_out:
+		free_extent_map(em);
+		btrfs_put_block_group(cache);
+		if (ret) break;
+
+		de_key.offset = found_key.offset + de_length;
+		btrfs_release_path(de_path);
+	}
+
+dev_out:
+	/* This is where we clean after the dev_extent search stuff */
+	btrfs_free_path(de_path);
+
+	/* ret can still be 1 from search_slot or next_leaf, that's not an error */
+	return ret < 0 ? ret : 0;
+}
+#endif

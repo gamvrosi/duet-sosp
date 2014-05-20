@@ -19,3 +19,9 @@ foreground workload), we need to intercept the following functions:
 - btrfsic_submit_bio_wait, and submit_bio_wait when called directly
 - btrfsic_submit_bh, and submit_bh when called directly
   (currently only used by disk-io.c:write_supers, and ignored there)
+
+Readahead:
+----------
+
+readahead only prefetches metadata, and inline data. extents are usually not
+stored in the extent tree (unless the data is inlined).
