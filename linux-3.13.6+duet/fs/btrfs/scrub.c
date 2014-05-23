@@ -3039,8 +3039,8 @@ static int scrub_extent(struct scrub_ctx *sctx, u64 logical, u64 len,
 		 * this should be de facto since we're calling it from here */
 		printk(KERN_INFO "duet-scrub: calling chk_done for range [%llu,"
 			" %llu]\n", physical, physical+l);
-		if (!sctx->is_dev_replace && duet_chk_done(sctx->taskid,
-				dev->bdev, physical /* lbn */, l /* len */)) {
+		if (!sctx->is_dev_replace && (duet_chk_done(sctx->taskid,
+		    dev->bdev, physical /* lbn */, l /* len */) == 1)) {
 			goto behind_scrub_pages;
 		} else if (!sctx->is_dev_replace) {
 			/* We're actually getting verified */
@@ -3525,9 +3525,8 @@ again:
 			 * save time and IO needed to look into the checksum
 			 * tree. Criteria: if the entire extent portion can be
 			 * filtered out, skip. */
-			if (!is_dev_replace && duet_chk_done(sctx->taskid,
-					scrub_dev->bdev, extent_physical,
-					extent_len)) {
+			if (!is_dev_replace && (duet_chk_done(sctx->taskid,
+			    scrub_dev->bdev, extent_physical, extent_len) == 1)) {
 				tot_skipped++;
 				if (flags & BTRFS_EXTENT_FLAG_DATA) {
 					spin_lock(&sctx->stat_lock);
