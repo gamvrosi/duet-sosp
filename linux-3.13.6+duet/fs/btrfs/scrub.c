@@ -639,19 +639,21 @@ static void btrfs_scrub_duet_handler(__u8 taskid, __u8 hook_code,
 {
 	//struct scrub_ctx *sctx = (struct scrub_ctx *)privdata;
 
+#ifdef CONFIG_BTRFS_FS_SCRUB_DEBUG
 	printk(KERN_DEBUG "duet: In the btrfs_scrub_duet_handler\n");
+#endif /* CONFIG_BTRFS_FS_SCRUB_DEBUG */
 
 	/* Since we got all the way here, we're on the right device.
 	 * Handle the hook now */
 	if (hook_code & DUET_HOOK_BTRFS_WRITE) {
-		if (duet_mark_todo(taskid, lbn, len))
+		if (duet_mark_todo(taskid, bdev, lbn, len) == -1)
 			printk(KERN_ERR "duet: failed to mark_todo [%llu, "
 				"%llu] range for task #%d\n", lbn, lbn+len,
 				taskid);
 	}
 
 	if (hook_code & DUET_HOOK_BTRFS_READ) {
-		if (duet_mark_done(taskid, lbn, len))
+		if (duet_mark_done(taskid, bdev, lbn, len) == -1)
 			printk(KERN_ERR "duet: failed to mark_done [%llu, "
 				"%llu] range for task #%d\n", lbn, lbn+len,
 				taskid);
@@ -3035,8 +3037,10 @@ static int scrub_extent(struct scrub_ctx *sctx, u64 logical, u64 len,
 		 * us the green light. Only then we *skip* this block. Note
 		 * that chk_done does not verify we're on the right device;
 		 * this should be de facto since we're calling it from here */
+		printk(KERN_INFO "duet-scrub: calling chk_done for range [%llu,"
+			" %llu]\n", physical, physical+l);
 		if (!sctx->is_dev_replace && duet_chk_done(sctx->taskid,
-					physical /* lbn */, l /* len */)) {
+				dev->bdev, physical /* lbn */, l /* len */)) {
 			goto behind_scrub_pages;
 		} else if (!sctx->is_dev_replace) {
 			/* We're actually getting verified */
@@ -3191,7 +3195,7 @@ static noinline_for_stack int scrub_stripe(struct scrub_ctx *sctx,
 	wake_up(&fs_info->scrub_pause_wait);
 
 #ifdef CONFIG_BTRFS_FS_SCRUB_READA
-	if (!sctx->is_dev_replace && !duet_is_online()) {
+	if (!sctx->is_dev_replace || !duet_is_online()) {
 vanilla_reada:
 		printk(KERN_INFO "scrub: vanilla readahead started\n");
 #endif /* CONFIG_BTRFS_FS_SCRUB_READA */
@@ -3244,6 +3248,7 @@ vanilla_reada:
 			while (logical < logic_end) {
 				/* Check if this stripe should be skipped */
 				if (!duet_chk_done(sctx->taskid,
+						scrub_dev->bdev,
 						physical /* lbn */,
 						p_increment /* len */)) {
 					ret = 1;
@@ -3261,6 +3266,7 @@ vanilla_reada:
 			while (logical <= logic_end) {
 				/* Check if this stripe should _not_ be skipped */
 				if (!duet_chk_done(sctx->taskid,
+						scrub_dev->bdev,
 						physical /* lbn */,
 						p_increment /* len */)) {
 					break;
@@ -3520,7 +3526,8 @@ again:
 			 * tree. Criteria: if the entire extent portion can be
 			 * filtered out, skip. */
 			if (!is_dev_replace && duet_chk_done(sctx->taskid,
-					extent_physical, extent_len)) {
+					scrub_dev->bdev, extent_physical,
+					extent_len)) {
 				tot_skipped++;
 				if (flags & BTRFS_EXTENT_FLAG_DATA) {
 					spin_lock(&sctx->stat_lock);

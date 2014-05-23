@@ -43,7 +43,8 @@ void duet_bmap_print(__u8 *bmap, __u32 byte_len)
 	for (i=0; i<byte_len; i++) {
 		m = i % 32;
 		if (m == 0) {
-			if (i > 0) printk(KERN_DEBUG "%s\n", buf);
+			if (i > 0)
+				printk(KERN_DEBUG "%s\n", buf);
 			sprintf(buf, "bgtask: [%5u] %02x", i, bmap[i]);
 		} else {
 			sprintf(buf, "%s:%02x", buf, bmap[i]);
@@ -106,9 +107,10 @@ static void duet_bmap_set_bits(__u8 *bmap, __u32 start, __u32 num, __u8 set)
 }
 
 /*
- * Generic function to (un)mark a bitmap. We ned information on the bitmap,
+ * Generic function to (un)mark a bitmap. We need information on the bitmap,
  * and information on the byte range it represents, and the byte range that
  * needs to be (un)marked.
+ * A return value of 0 implies success, while -1 implies failure.
  */
 int duet_bmap_set(__u8 *bmap, __u32 bmap_bytelen, __u64 first_byte,
 	__u32 blksize, __u64 req_byte, __u32 req_bytelen, __u8 set)
@@ -188,7 +190,7 @@ static int duet_bmap_chk_bits(__u8 *bmap, __u32 start, __u32 num, __u8 set)
 }
 
 /* Returns 1, if all bytes in [req_bytes, req_bytes+req_bytelen) are set/reset,
- * 0 otherwise */
+ * 0 otherwise. If an error occurs, then -1 is returned. */
 int duet_bmap_chk(__u8 *bmap, __u32 bmap_bytelen, __u64 first_byte,
 	__u32 blksize, __u64 req_byte, __u32 req_bytelen, __u8 set)
 {

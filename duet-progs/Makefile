@@ -13,6 +13,7 @@ prefix ?= /usr/local
 bindir = $(prefix)/bin
 LIBS = #-luuid -lblkid -lm -lz -llzo2 -L.
 libdir ?= $(prefix)/lib
+incdir = $(prefix)/include/duet
 
 MAKE = @make
 MAKEOPTS = --no-print-directory

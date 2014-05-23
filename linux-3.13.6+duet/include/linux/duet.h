@@ -51,10 +51,10 @@ int duet_task_register(__u8 *taskid, const char *name, __u32 blksize,
 int duet_task_deregister(__u8 taskid);
 int duet_is_online(void);
 
-int duet_chk_done(__u8 taskid, __u64 lbn, __u32 len);
-int duet_chk_todo(__u8 taskid, __u64 lbn, __u32 len);
-int duet_mark_done(__u8 taskid, __u64 lbn, __u32 len);
-int duet_mark_todo(__u8 taskid, __u64 lbn, __u32 len);
+int duet_chk_done(__u8 taskid, struct block_device *bdev, __u64 lbn, __u32 len);
+int duet_chk_todo(__u8 taskid, struct block_device *bdev, __u64 lbn, __u32 len);
+int duet_mark_done(__u8 taskid, struct block_device *bdev, __u64 lbn, __u32 len);
+int duet_mark_todo(__u8 taskid, struct block_device *bdev, __u64 lbn, __u32 len);
 
 /* Hook-related functions */
 void duet_hook(__u8 hook_code, __u8 hook_type, void *hook_data);

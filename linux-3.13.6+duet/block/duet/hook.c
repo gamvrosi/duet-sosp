@@ -18,7 +18,6 @@
 #include <linux/buffer_head.h>
 #include <linux/blk_types.h>
 #include <linux/fs.h>
-#include <linux/genhd.h>
 #include "common.h"
 
 struct duet_bio_private {
@@ -48,14 +47,23 @@ static void duet_handle_hook(__u8 hook_code, struct block_device *bdev,
 	struct duet_task *cur;
 
 #ifdef CONFIG_DUET_DEBUG
-	printk(KERN_INFO "duet hook: code %u, lbn %llu, len %u\n",
-		hook_code, lbn, len);
+	printk(KERN_INFO "duet hook: code %u, *bdev %p, devid %u, contains %p,"
+		" lbn %llu, len %u\n", hook_code, bdev, bdev ? bdev->bd_dev :
+		0, bdev->bd_contains ? bdev->bd_contains : 0, lbn, len);
 #endif /* CONFIG_DUET_DEBUG */
 
-	/* Go over the task list, and look for a task whose hook */
+	/* Go over the task list, and look for a task referring to the bdev
+	 * and where the hook code matches the hook mask */
 	rcu_read_lock();
 	list_for_each_entry_rcu(cur, &duet_env.tasks, task_list) {
-                if (cur->bdev == bdev && cur->hook_mask & hook_code)
+#ifdef CONFIG_DUET_DEBUG
+		printk(KERN_INFO "duet hook: checking task with *bdev %p, "
+			"devid %u, contains %p, hook mask %u\n", cur->bdev,
+			cur->bdev->bd_dev, cur->bdev->bd_contains ?
+			cur->bdev->bd_contains : 0, cur->hook_mask);
+#endif /* CONFIG_DUET_DEBUG */
+		if (cur->bdev == bdev->bd_contains &&
+		    (cur->hook_mask & hook_code))
 			cur->hook_handler(cur->id, hook_code, bdev, lbn, len,
 								cur->privdata);
 	}
@@ -90,6 +98,8 @@ static void duet_bio_endio(struct bio *bio, int err)
 	/* Transfer control to hook handler */
 	if (!err)
 		duet_handle_hook(hook_code, bdev, lbn, len);
+	else
+		printk(KERN_ERR "duet_bio_endio: something went wrong %d", err);
 }
 
 /* Callback function for asynchronous bh calls. We first restore the normal
@@ -98,19 +108,13 @@ void duet_bh_endio(struct buffer_head *bh, int uptodate)
 {
 	struct duet_bh_private *private;
 	__u8 hook_code;
-	__u64 lbn = 0;
-	__u32 len = 0;
+	__u64 lbn;
+	__u32 len;
 	struct block_device *bdev;
 
 	/* Grab data from buffer head */
 	private = bh->b_private;
-
-	/* The b_blocknr of the buffer head is relative to the beginning
-	 * of the device/partition, so let's find the start of that first */
-	if (bh->b_bdev && bh->b_bdev->bd_part)
-		lbn = bh->b_bdev->bd_part->start_sect << 9;
-
-	lbn += bh->b_blocknr * bh->b_size;
+	lbn = bh->b_blocknr * bh->b_size;
 	len = bh->b_size;
 	bdev = bh->b_bdev;
 	hook_code = private->hook_code;

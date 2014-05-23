@@ -15,6 +15,7 @@
  * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
  * Boston, MA 021110-1307, USA.
  */
+#include <linux/genhd.h>
 #include "common.h"
 
 /*
@@ -77,39 +78,42 @@ static void dnode_dispose(struct duet_rbnode *dnode, struct rb_node *rbnode,
  * (or unmarks them depending on the value of set, or just checks whether
  * they are set or not based on the value of chk), spilling over to
  * subsequent nodes and inserting them if needed.
- * If chk is set and the function returns zero, all relevant LBNs are marked
- * correctly. If chk is not set, then a return value of zero denotes that all
- * relevant LBNs have been marked; otherwise, an error occured.
+ * If chk is set then:
+ * - a return value of 1 means all relevant LBNs are marked as expected
+ * - a return value of 0 means some of the LBNs were not marked as expected
+ * - a return value of -1 denotes the occurrence of an error
+ * If chk is not set then:
+ * - a return value of 0 means all LBNs were marked properly
+ * - a return value of -1 denotes the occurrence of an error
  */
-static int bmaptree_chkupd(struct duet_task *task, __u64 lbn, __u32 len,
-	__u8 set, __u8 chk)
+static int bmaptree_chkupd(struct duet_task *task, struct block_device *bdev,
+	__u64 lbn, __u32 len, __u8 set, __u8 chk)
 {
 	int ret, found;
-	__u64 cur_lbn, node_lbn, lbn_gran, cur_len;
+	__u64 cur_lbn, node_lbn, lbn_gran, cur_len, rlbn;
 	__u32 i, rem_len;
 	struct rb_node **link, *parent;
 	struct duet_rbnode *dnode = NULL;
 
+	/* The lbn given is relative to the beginning of the partition.
+	 * Make it absolute to the beginning of the block device. */
+	rlbn = lbn + (bdev->bd_part->start_sect << 9);
+
 #ifdef CONFIG_DUET_DEBUG
 	printk(KERN_INFO "duet: chkupd on task #%d for range [%llu, %llu] "
-		"(set=%u, chk=%u)\n", task->id, lbn, lbn+len, set, chk);
+		"(set=%u, chk=%u)\n", task->id, rlbn, rlbn+len, set, chk);
 #endif /* CONFIG_DUET_DEBUG */
 
-	cur_lbn = lbn;
+	cur_lbn = rlbn;
 	rem_len = len;
 	lbn_gran = task->blksize * task->bmapsize * 8;
-	node_lbn = lbn - (lbn % lbn_gran);
+	node_lbn = rlbn - (rlbn % lbn_gran);
 
 	while (rem_len) {
 		/* Look up node_lbn */
 		found = 0;
 		link = &task->bmaptree.rb_node;
 		parent = NULL;
-
-#ifdef CONFIG_DUET_DEBUG
-		printk(KERN_DEBUG "duet: looking up node with LBN %llu\n",
-			node_lbn);
-#endif /* CONFIG_DUET_DEBUG */
 
 		while (*link) {
 			parent = *link;
@@ -126,7 +130,8 @@ static int bmaptree_chkupd(struct duet_task *task, __u64 lbn, __u32 len,
 		}
 
 #ifdef CONFIG_DUET_DEBUG
-		printk(KERN_DEBUG "duet: node %sfound\n", found ? "" : "not ");
+		printk(KERN_DEBUG "duet: node with LBN %llu %sfound\n",
+			node_lbn, found ? "" : "not ");
 #endif /* CONFIG_DUET_DEBUG */
 
 		/*
@@ -164,27 +169,41 @@ static int bmaptree_chkupd(struct duet_task *task, __u64 lbn, __u32 len,
 				rb_insert_color(&dnode->node, &task->bmaptree);
 			} else if (!found && chk) {
 				/* Looking for set bits, node didn't exist */
-				return 1;
+				return 0;
 			}
 
 			/* Set the bits */
 			if (!chk && duet_bmap_set(dnode->bmap, task->bmapsize,
-			    dnode->lbn, task->blksize, cur_lbn, cur_len, 1))
-				return 1;
+			    dnode->lbn, task->blksize, cur_lbn, cur_len, 1)) {
+				/* We got -1, something went wrong */
+				return -1;
 			/* Check the bits */
-			else if (chk && duet_bmap_chk(dnode->bmap, task->bmapsize,
-			    dnode->lbn, task->blksize, cur_lbn, cur_len, 1))
-				return 1;
+			} else if (chk) {
+				ret = duet_bmap_chk(dnode->bmap, task->bmapsize,
+					dnode->lbn, task->blksize, cur_lbn,
+					cur_len, 1);
+				/* Check if we failed, or found a bit set/unset
+				 * when it shouldn't be */
+				if (ret != 1)
+					return ret;
+			}
 
 		} else if (found) {
 			/* Clear the bits */
 			if (!chk && duet_bmap_set(dnode->bmap, task->bmapsize,
-			    dnode->lbn, task->blksize, cur_lbn, cur_len, 0))
-				return 1;
+			    dnode->lbn, task->blksize, cur_lbn, cur_len, 0)) {
+				/* We got -1, something went wrong */
+				return -1;
 			/* Check the bits */
-			else if (chk && duet_bmap_chk(dnode->bmap, task->bmapsize,
-			    dnode->lbn, task->blksize, cur_lbn, cur_len, 0))
-				return 1;
+			} else if (chk) {
+				ret = duet_bmap_chk(dnode->bmap, task->bmapsize,
+					dnode->lbn, task->blksize, cur_lbn,
+					cur_len, 0);
+				/* Check if we failed, or found a bit set/unset
+				 * when it shouldn't be */
+				if (ret != 1)
+					return ret;
+			}
 
 			if (!chk) {
 				/* Dispose of the node? */
@@ -203,10 +222,17 @@ static int bmaptree_chkupd(struct duet_task *task, __u64 lbn, __u32 len,
 		}
 
 		rem_len -= cur_len;
-		node_lbn = cur_lbn += cur_len;
+		cur_lbn += cur_len;
+		node_lbn = cur_lbn;
 	}
 
-	return 0;
+	/* If we managed to get here, then everything worked as planned.
+	 * Return 0 for success in the case that chk is not set, or 1 for
+	 * success when chk is set. */
+	if (!chk)
+		return 0;
+	else
+		return 1;
 }
 
 /* Find task and increment its refcount */
@@ -249,27 +275,29 @@ static int bmaptree_print(struct duet_task *task)
 	return 0;
 }
 
-static int duet_mark_chkupd(__u8 taskid, __u64 lbn, __u32 len, __u8 set,
-	__u8 chk)
+static int duet_mark_chkupd(__u8 taskid, struct block_device *bdev, __u64 lbn,
+	__u32 len, __u8 set, __u8 chk)
 {
+	int ret = 0;
 	struct duet_task *task;
 
 	task = find_task(taskid);
 	if (!task)
 		return -ENOENT;
 
-	if (bmaptree_chkupd(task, lbn, len, set, chk)) {
+	ret = bmaptree_chkupd(task, bdev, lbn, len, set, chk);
+
+	if (ret == -1) {
 		printk(KERN_ERR "duet: blocks were not %s as %s for task %d\n",
 			chk ? "found" : "set", set ? "marked" : "unmarked",
 			task->id);
-		return -1;
 	}
 
 	/* decref and wake up cleaner if needed */
 	if (atomic_dec_and_test(&task->refcount))
 		wake_up(&task->cleaner_queue);
 
-	return 0;
+	return ret;
 }
 
 /* Do a preorder print of the red-black bitmap tree */
@@ -296,30 +324,38 @@ int duet_print_rbt(__u8 taskid)
 //EXPORT_SYMBOL_GPL(duet_print_rbt);
 
 /* Checks the blocks in the range from lbn to lbn+len are done */
-int duet_chk_done(__u8 taskid, __u64 lbn, __u32 len)
+int duet_chk_done(__u8 taskid, struct block_device *bdev, __u64 lbn, __u32 len)
 {
-	return duet_mark_chkupd(taskid, lbn, len, 1, 1);
+	if (!duet_is_online())
+		return -1;
+	return duet_mark_chkupd(taskid, bdev, lbn, len, 1, 1);
 }
 EXPORT_SYMBOL_GPL(duet_chk_done);
 
 /* Checks the blocks in the range from lbn to lbn+len as todo */
-int duet_chk_todo(__u8 taskid, __u64 lbn, __u32 len)
+int duet_chk_todo(__u8 taskid, struct block_device *bdev, __u64 lbn, __u32 len)
 {
-	return duet_mark_chkupd(taskid, lbn, len, 0, 1);
+	if (!duet_is_online())
+		return -1;
+	return duet_mark_chkupd(taskid, bdev, lbn, len, 0, 1);
 }
 EXPORT_SYMBOL_GPL(duet_chk_todo);
 
 /* Marks the blocks in the range from lbn to lbn+len as done */
-int duet_mark_done(__u8 taskid, __u64 lbn, __u32 len)
+int duet_mark_done(__u8 taskid, struct block_device *bdev, __u64 lbn, __u32 len)
 {
-	return duet_mark_chkupd(taskid, lbn, len, 1, 0);
+	if (!duet_is_online())
+		return -1;
+	return duet_mark_chkupd(taskid, bdev, lbn, len, 1, 0);
 }
 EXPORT_SYMBOL_GPL(duet_mark_done);
 
 /* Unmarks the blocks in the range from lbn to lbn+len as done */
-int duet_mark_todo(__u8 taskid, __u64 lbn, __u32 len)
+int duet_mark_todo(__u8 taskid, struct block_device *bdev, __u64 lbn, __u32 len)
 {
-	return duet_mark_chkupd(taskid, lbn, len, 0, 0);
+	if (!duet_is_online())
+		return -1;
+	return duet_mark_chkupd(taskid, bdev, lbn, len, 0, 0);
 }
 EXPORT_SYMBOL_GPL(duet_mark_todo);
 
@@ -374,7 +410,13 @@ static int duet_task_init(struct duet_task **task, const char *name,
 	(*task)->bmaptree = RB_ROOT;
 	(*task)->privdata = privdata;
 	(*task)->hook_mask = hook_mask;
-	(*task)->bdev = bdev;
+	if (bdev) {
+		(*task)->bdev = bdev;
+		while ((*task)->bdev != bdev->bd_contains)
+			(*task)->bdev = bdev->bd_contains;
+	} else {
+		(*task)->bdev = NULL;
+	}
 
 	if (hook_handler)
 		(*task)->hook_handler = hook_handler;
