@@ -3037,8 +3037,6 @@ static int scrub_extent(struct scrub_ctx *sctx, u64 logical, u64 len,
 		 * us the green light. Only then we *skip* this block. Note
 		 * that chk_done does not verify we're on the right device;
 		 * this should be de facto since we're calling it from here */
-		printk(KERN_INFO "duet-scrub: calling chk_done for range [%llu,"
-			" %llu]\n", physical, physical+l);
 		if (!sctx->is_dev_replace && (duet_chk_done(sctx->taskid,
 		    dev->bdev, physical /* lbn */, l /* len */) == 1)) {
 			goto behind_scrub_pages;
