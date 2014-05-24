@@ -55,9 +55,9 @@ struct duet_task {
 	struct mutex		bmaptree_mutex;
 	struct rb_root		bmaptree;
 
-	/* hook handling */
-	__u8			hook_mask;
-	duet_hook_handler_t	*hook_handler;
+	/* event handling */
+	__u8			event_mask;
+	duet_event_handler_t	*event_handler;
 	void			*privdata;
 };
 

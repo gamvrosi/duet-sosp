@@ -634,7 +634,7 @@ out:
 #endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
 
 #ifdef CONFIG_BTRFS_DUET_SCRUB
-static void btrfs_scrub_duet_handler(__u8 taskid, __u8 hook_code,
+static void btrfs_scrub_duet_handler(__u8 taskid, __u8 event_code,
 	struct block_device *bdev, __u64 lbn, __u32 len, void *privdata)
 {
 	//struct scrub_ctx *sctx = (struct scrub_ctx *)privdata;
@@ -644,15 +644,15 @@ static void btrfs_scrub_duet_handler(__u8 taskid, __u8 hook_code,
 #endif /* CONFIG_BTRFS_FS_SCRUB_DEBUG */
 
 	/* Since we got all the way here, we're on the right device.
-	 * Handle the hook now */
-	if (hook_code & DUET_HOOK_BTRFS_WRITE) {
+	 * Handle the event now */
+	if (event_code & DUET_EVENT_BTRFS_WRITE) {
 		if (duet_mark_todo(taskid, bdev, lbn, len) == -1)
 			printk(KERN_ERR "duet: failed to mark_todo [%llu, "
 				"%llu] range for task #%d\n", lbn, lbn+len,
 				taskid);
 	}
 
-	if (hook_code & DUET_HOOK_BTRFS_READ) {
+	if (event_code & DUET_EVENT_BTRFS_READ) {
 		if (duet_mark_done(taskid, bdev, lbn, len) == -1)
 			printk(KERN_ERR "duet: failed to mark_done [%llu, "
 				"%llu] range for task #%d\n", lbn, lbn+len,
@@ -821,8 +821,8 @@ struct scrub_ctx *scrub_setup_ctx(struct btrfs_device *dev, u64 deadline,
 	/* Register the task with the duet framework */
 	if (duet_task_register(&sctx->taskid, "btrfs-scrub",
 			fs_info->sb->s_blocksize, 32768 /* 32Kb */,
-			DUET_HOOK_BTRFS_READ | DUET_HOOK_BTRFS_WRITE, dev->bdev,
-			btrfs_scrub_duet_handler, (void *)sctx)) {
+			DUET_EVENT_BTRFS_READ | DUET_EVENT_BTRFS_WRITE,
+			dev->bdev, btrfs_scrub_duet_handler, (void *)sctx)) {
 		printk(KERN_ERR "scrub: failed to register with the duet framework\n");
 		return ERR_PTR(-EFAULT);
 	}
@@ -1727,7 +1727,7 @@ static void scrub_recheck_block(struct btrfs_fs_info *fs_info,
 #ifdef CONFIG_DUET_DEBUG
 		printk(KERN_DEBUG "duet: hooking on scrub_recheck_block\n");
 #endif /* CONFIG_DUET_DEBUG */
-		duet_hook(DUET_HOOK_BTRFS_READ, DUET_SETUP_HOOK_BW_END,
+		duet_hook(DUET_EVENT_BTRFS_READ, DUET_SETUP_HOOK_BW_END,
 			(void *)bio);
 #endif /* CONFIG_DUET_BTRFS */
 
@@ -1868,7 +1868,7 @@ static int scrub_repair_page_from_good_copy(struct scrub_block *sblock_bad,
 #ifdef CONFIG_DUET_DEBUG
 		printk(KERN_DEBUG "duet: hooking on scrub_repair_page_from_good_copy\n");
 #endif /* CONFIG_DUET_DEBUG */
-		duet_hook(DUET_HOOK_BTRFS_WRITE, DUET_SETUP_HOOK_BW_END,
+		duet_hook(DUET_EVENT_BTRFS_WRITE, DUET_SETUP_HOOK_BW_END,
 			(void *)bio);
 #endif /* CONFIG_DUET_BTRFS */
 		bio_put(bio);
@@ -1998,7 +1998,7 @@ static void scrub_wr_submit(struct scrub_ctx *sctx)
 #ifdef CONFIG_DUET_DEBUG
 	printk(KERN_DEBUG "duet: hooking on scrub_wr_submit\n");
 #endif /* CONFIG_DUET_DEBUG */
-	duet_hook(DUET_HOOK_BTRFS_WRITE, DUET_SETUP_HOOK_BA,
+	duet_hook(DUET_EVENT_BTRFS_WRITE, DUET_SETUP_HOOK_BA,
 		(void *)sbio->bio);
 #endif /* CONFIG_DUET_BTRFS */
 	/* process all writes in a single worker thread. Then the block layer
@@ -2498,7 +2498,7 @@ static void scrub_submit(struct scrub_ctx *sctx)
 #ifdef CONFIG_DUET_DEBUG
 		printk(KERN_DEBUG "duet: hooking on scrub_submit\n");
 #endif /* CONFIG_DUET_DEBUG */
-		duet_hook(DUET_HOOK_BTRFS_READ, DUET_SETUP_HOOK_BA,
+		duet_hook(DUET_EVENT_BTRFS_READ, DUET_SETUP_HOOK_BA,
 			(void *)sbio->bio);
 #endif /* CONFIG_DUET_BTRFS */
 		btrfsic_submit_bio(READ, sbio->bio);
@@ -4499,7 +4499,7 @@ leave_with_eio:
 #ifdef CONFIG_DUET_DEBUG
 	printk(KERN_DEBUG "duet: hooking on write_page_nocow\n");
 #endif /* CONFIG_DUET_DEBUG */
-	duet_hook(DUET_HOOK_BTRFS_WRITE, DUET_SETUP_HOOK_BW_END,
+	duet_hook(DUET_EVENT_BTRFS_WRITE, DUET_SETUP_HOOK_BW_END,
 		(void *)bio);
 #endif /* CONFIG_DUET_BTRFS */
 

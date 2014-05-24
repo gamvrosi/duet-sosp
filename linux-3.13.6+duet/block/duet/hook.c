@@ -23,14 +23,14 @@
 struct duet_bio_private {
 	bio_end_io_t	*real_end_io;
 	void 		*real_private;
-	__u8		hook_code;
+	__u8		event_code;
 	__u32		size;
 };
 
 struct duet_bh_private {
 	bh_end_io_t	*real_end_io;
 	void		*real_private;
-	__u8		hook_code;
+	__u8		event_code;
 };
 
 static inline void mark_bio_seen(struct bio *bio)
@@ -41,41 +41,41 @@ static inline void mark_bio_seen(struct bio *bio)
 
 /* We're finally here. Just find tasks that are interested in this event,
  * and call their handlers. */
-static void duet_handle_hook(__u8 hook_code, struct block_device *bdev,
+static void duet_handle_event(__u8 event_code, struct block_device *bdev,
 	__u64 lbn, __u32 len)
 {
 	struct duet_task *cur;
 
 #ifdef CONFIG_DUET_DEBUG
-	printk(KERN_INFO "duet hook: code %u, *bdev %p, devid %u, contains %p,"
-		" lbn %llu, len %u\n", hook_code, bdev, bdev ? bdev->bd_dev :
+	printk(KERN_INFO "duet event: code %u, bdev %p, devid %u, contains %p,"
+		" lbn %llu, len %u\n", event_code, bdev, bdev ? bdev->bd_dev :
 		0, bdev->bd_contains ? bdev->bd_contains : 0, lbn, len);
 #endif /* CONFIG_DUET_DEBUG */
 
 	/* Go over the task list, and look for a task referring to the bdev
-	 * and where the hook code matches the hook mask */
+	 * and where the event code matches the event mask */
 	rcu_read_lock();
 	list_for_each_entry_rcu(cur, &duet_env.tasks, task_list) {
 #ifdef CONFIG_DUET_DEBUG
-		printk(KERN_INFO "duet hook: checking task with *bdev %p, "
-			"devid %u, contains %p, hook mask %u\n", cur->bdev,
+		printk(KERN_INFO "duet event: checking task with *bdev %p, "
+			"devid %u, contains %p, event mask %u\n", cur->bdev,
 			cur->bdev->bd_dev, cur->bdev->bd_contains ?
-			cur->bdev->bd_contains : 0, cur->hook_mask);
+			cur->bdev->bd_contains : 0, cur->event_mask);
 #endif /* CONFIG_DUET_DEBUG */
 		if (cur->bdev == bdev->bd_contains &&
-		    (cur->hook_mask & hook_code))
-			cur->hook_handler(cur->id, hook_code, bdev, lbn, len,
+		    (cur->event_mask & event_code))
+			cur->event_handler(cur->id, event_code, bdev, lbn, len,
 								cur->privdata);
 	}
 	rcu_read_unlock();
 }
 
 /* Callback function for asynchronous bio calls. We first restore the normal
- * callback (and call it), and then proceed to call duet_handle_hook. */
+ * callback (and call it), and then proceed to call duet_handle_event. */
 static void duet_bio_endio(struct bio *bio, int err)
 {
 	struct duet_bio_private *private;
-	__u8 hook_code;
+	__u8 event_code;
 	__u64 lbn;
 	__u32 len;
 	struct block_device *bdev;
@@ -85,7 +85,7 @@ static void duet_bio_endio(struct bio *bio, int err)
 	lbn = bio->bi_sector << 9;
 	len = private->size;
 	bdev = bio->bi_bdev;
-	hook_code = private->hook_code;
+	event_code = private->event_code;
 
 	/* Restore real values */
 	bio->bi_end_io = private->real_end_io;
@@ -95,19 +95,19 @@ static void duet_bio_endio(struct bio *bio, int err)
 	/* Call the real callback */
 	bio->bi_end_io(bio, err);
 
-	/* Transfer control to hook handler */
+	/* Transfer control to the duet event handler */
 	if (!err)
-		duet_handle_hook(hook_code, bdev, lbn, len);
+		duet_handle_event(event_code, bdev, lbn, len);
 	else
 		printk(KERN_ERR "duet_bio_endio: something went wrong %d", err);
 }
 
 /* Callback function for asynchronous bh calls. We first restore the normal
- * callback (and call it), and then proceed to call duet_handle_hook. */
+ * callback (and call it), and then proceed to call duet_handle_event. */
 void duet_bh_endio(struct buffer_head *bh, int uptodate)
 {
 	struct duet_bh_private *private;
-	__u8 hook_code;
+	__u8 event_code;
 	__u64 lbn;
 	__u32 len;
 	struct block_device *bdev;
@@ -117,7 +117,7 @@ void duet_bh_endio(struct buffer_head *bh, int uptodate)
 	lbn = bh->b_blocknr * bh->b_size;
 	len = bh->b_size;
 	bdev = bh->b_bdev;
-	hook_code = private->hook_code;
+	event_code = private->event_code;
 
 	/* Restore real values */
 	bh->b_end_io = private->real_end_io;
@@ -127,14 +127,14 @@ void duet_bh_endio(struct buffer_head *bh, int uptodate)
 	/* Call the real callback */
 	bh->b_end_io(bh, uptodate);
 
-	/* Transfer control to hook handler */
-	duet_handle_hook(hook_code, bdev, lbn, len);
+	/* Transfer control to the duet event handler */
+	duet_handle_event(event_code, bdev, lbn, len);
 }
 EXPORT_SYMBOL_GPL(duet_bh_endio); /* export to check at _submit_bh */
 
 /* Function that is paired to submit_bio calls. We need to hijack the bio
  * with a duet callback, duet_bio_endio. */
-static void duet_ba_hook(__u8 hook_code, struct bio *bio)
+static void duet_ba_hook(__u8 event_code, struct bio *bio)
 {
 	struct duet_bio_private *private = NULL;
 
@@ -147,7 +147,7 @@ static void duet_ba_hook(__u8 hook_code, struct bio *bio)
 	/* Populate overload structure */
 	private->real_end_io = bio->bi_end_io;
 	private->real_private = bio->bi_private;
-	private->hook_code = hook_code;
+	private->event_code = event_code;
 	private->size = bio->bi_size;
 
 	/* Fix up bio structure */
@@ -158,8 +158,8 @@ static void duet_ba_hook(__u8 hook_code, struct bio *bio)
 
 /* Function that is paired to submit_bio_wait calls. We assume that we get
  * called after submit_bio_wait returns, so we can go ahead and call
- * duet_handle_hook with the right parameters. */
-static void duet_bw_hook(__u8 hook_code, struct bio *bio)
+ * duet_handle_event with the right parameters. */
+static void duet_bw_hook(__u8 event_code, struct bio *bio)
 {
 	__u64 lbn;
 	__u32 len;
@@ -170,13 +170,13 @@ static void duet_bw_hook(__u8 hook_code, struct bio *bio)
 	len = bio->bi_size;
 	bdev = bio->bi_bdev;
 
-	/* Transfer control to hook handler */
-	duet_handle_hook(hook_code, bdev, lbn, len);
+	/* Transfer control to the duet event handler */
+	duet_handle_event(event_code, bdev, lbn, len);
 }
 
 /* Function that is paired to submit_bh calls. We need to hijack the bh
  * with a duet callback, duet_bh_endio. */
-static void duet_bh_hook(__u8 hook_code, struct buffer_head *bh)
+static void duet_bh_hook(__u8 event_code, struct buffer_head *bh)
 {
 	struct duet_bh_private *private = NULL;
 
@@ -189,14 +189,14 @@ static void duet_bh_hook(__u8 hook_code, struct buffer_head *bh)
 	/* Populate overload structure */
 	private->real_end_io = bh->b_end_io;
 	private->real_private = bh->b_private;
-	private->hook_code = hook_code;
+	private->event_code = event_code;
 
 	/* Fix up buffer head structure */
 	bh->b_end_io = duet_bh_endio;
 	bh->b_private = (void *)private;
 }
 
-void duet_hook(__u8 hook_code, __u8 hook_type, void *hook_data)
+void duet_hook(__u8 event_code, __u8 hook_type, void *hook_data)
 {
 	if (!duet_is_online())
 		return;
@@ -205,9 +205,9 @@ void duet_hook(__u8 hook_code, __u8 hook_type, void *hook_data)
 	case DUET_SETUP_HOOK_BA:
 #ifdef CONFIG_DUET_DEBUG
 		printk(KERN_INFO "duet: Setting up BA hook (code %u)\n",
-			hook_code);
+			event_code);
 #endif /* CONFIG_DUET_DEBUG */
-		duet_ba_hook(hook_code, (struct bio *)hook_data);
+		duet_ba_hook(event_code, (struct bio *)hook_data);
 		break;
 	case DUET_SETUP_HOOK_BW_START:
 		mark_bio_seen((struct bio *)hook_data);
@@ -215,21 +215,21 @@ void duet_hook(__u8 hook_code, __u8 hook_type, void *hook_data)
 	case DUET_SETUP_HOOK_BW_END:
 #ifdef CONFIG_DUET_DEBUG
 		printk(KERN_INFO "duet: Setting up BW hook (code %u)\n",
-			hook_code);
+			event_code);
 #endif /* CONFIG_DUET_DEBUG */
-		duet_bw_hook(hook_code, (struct bio *)hook_data);
+		duet_bw_hook(event_code, (struct bio *)hook_data);
 		break;
 	case DUET_SETUP_HOOK_BH:
 #ifdef CONFIG_DUET_DEBUG
 		printk(KERN_INFO "duet: Setting up BH hook (code %u)\n",
-			hook_code);
+			event_code);
 #endif /* CONFIG_DUET_DEBUG */
-		duet_bh_hook(hook_code, (struct buffer_head *)hook_data);
+		duet_bh_hook(event_code, (struct buffer_head *)hook_data);
 		break;
 	default:
 #ifdef CONFIG_DUET_DEBUG
 		printk(KERN_INFO "duet: Unknown hook type %u (code %u)\n",
-			hook_type, hook_code);
+			hook_type, event_code);
 #endif /* CONFIG_DUET_DEBUG */
 		break;
 	}

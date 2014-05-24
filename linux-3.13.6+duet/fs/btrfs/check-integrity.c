@@ -1734,7 +1734,7 @@ static int btrfsic_read_block(struct btrfsic_state *state,
 #ifdef CONFIG_DUET_DEBUG
 		printk(KERN_DEBUG "duet: hooking on btrfsic_read_block\n");
 #endif /* CONFIG_DUET_DEBUG */
-		duet_hook(DUET_HOOK_BTRFS_READ, DUET_SETUP_HOOK_BW_END,
+		duet_hook(DUET_EVENT_BTRFS_READ, DUET_SETUP_HOOK_BW_END,
 			(void *)bio);
 #endif /* CONFIG_DUET_BTRFS */
 

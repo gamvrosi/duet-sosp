@@ -377,7 +377,7 @@ loop_lock:
 		printk(KERN_DEBUG "duet: hooking on run_scheduled_bios\n");
 #endif /* CONFIG_DUET_DEBUG */
 		duet_hook(cur->bi_rw & WRITE ?
-			DUET_HOOK_BTRFS_WRITE : DUET_HOOK_BTRFS_READ,
+			DUET_EVENT_BTRFS_WRITE : DUET_EVENT_BTRFS_READ,
 			DUET_SETUP_HOOK_BA, (void *)cur);
 #endif /* CONFIG_DUET_BTRFS */
 		btrfsic_submit_bio(cur->bi_rw, cur);
@@ -5367,7 +5367,7 @@ static noinline void btrfs_schedule_bio(struct btrfs_root *root,
 		printk(KERN_DEBUG "duet: hooking on btrfs_schedule_bio\n");
 #endif /* CONFIG_DUET_DEBUG */
 		duet_hook(rw & WRITE ?
-			DUET_HOOK_BTRFS_WRITE : DUET_HOOK_BTRFS_READ,
+			DUET_EVENT_BTRFS_WRITE : DUET_EVENT_BTRFS_READ,
 			DUET_SETUP_HOOK_BA, (void *)bio);
 #endif /* CONFIG_DUET_BTRFS */
 		btrfsic_submit_bio(rw, bio);
@@ -5468,7 +5468,7 @@ static void submit_stripe_bio(struct btrfs_root *root, struct btrfs_bio *bbio,
 		printk(KERN_DEBUG "duet: hooking on submit_stripe_bio\n");
 #endif /* CONFIG_DUET_DEBUG */
 		duet_hook(rw & WRITE ?
-			DUET_HOOK_BTRFS_WRITE : DUET_HOOK_BTRFS_READ,
+			DUET_EVENT_BTRFS_WRITE : DUET_EVENT_BTRFS_READ,
 			DUET_SETUP_HOOK_BA, (void *)bio);
 #endif /* CONFIG_DUET_BTRFS */
 		btrfsic_submit_bio(rw, bio);

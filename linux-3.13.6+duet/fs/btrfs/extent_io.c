@@ -2023,7 +2023,7 @@ int repair_io_failure(struct btrfs_fs_info *fs_info, u64 start,
 #ifdef CONFIG_DUET_DEBUG
 	printk(KERN_DEBUG "duet: hooking on repair_io_failure\n");
 #endif /* CONFIG_DUET_DEBUG */
-	duet_hook(DUET_HOOK_BTRFS_WRITE, DUET_SETUP_HOOK_BW_END, (void *)bio);
+	duet_hook(DUET_EVENT_BTRFS_WRITE, DUET_SETUP_HOOK_BW_END, (void *)bio);
 #endif /* CONFIG_DUET_BTRFS */
 
 	printk_ratelimited_in_rcu(KERN_INFO "btrfs read error corrected: ino %lu off %llu "
@@ -2619,7 +2619,7 @@ static int __must_check submit_one_bio(int rw, struct bio *bio,
                 printk(KERN_DEBUG "duet: hooking on submit_one_bio\n");
 #endif /* CONFIG_DUET_DEBUG */
 		duet_hook(rw & WRITE ?
-			DUET_HOOK_BTRFS_WRITE : DUET_HOOK_BTRFS_READ,
+			DUET_EVENT_BTRFS_WRITE : DUET_EVENT_BTRFS_READ,
 			DUET_SETUP_HOOK_BA, (void *)bio);
 #endif /* CONFIG_DUET_BTRFS */
 		btrfsic_submit_bio(rw, bio);
