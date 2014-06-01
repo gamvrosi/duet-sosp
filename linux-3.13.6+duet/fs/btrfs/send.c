@@ -122,6 +122,11 @@ struct send_ctx {
 	int name_cache_size;
 
 	char *read_buf;
+
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+	/* duet-related stuff */
+	//__u8 taskid;
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
 };
 
 struct name_cache_entry {
@@ -592,6 +597,10 @@ static int send_cmd(struct send_ctx *sctx)
 	ret = write_buf(sctx->send_filp, sctx->send_buf, sctx->send_size,
 					&sctx->send_off);
 
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+	atomic64_add(sctx->send_size,
+		&sctx->send_root->fs_info->send_total_bytes);
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
 	sctx->total_send_size += sctx->send_size;
 	sctx->cmd_send_size[le16_to_cpu(hdr->cmd)] += sctx->send_size;
 	sctx->send_size = 0;
@@ -4478,6 +4487,11 @@ static int changed_cb(struct btrfs_root *left_root,
 {
 	int ret = 0;
 	struct send_ctx *sctx = ctx;
+	struct btrfs_fs_info *fs_info = sctx->send_root->fs_info;
+
+	/* Check if we've been asked to cancel */
+	if (atomic_read(&fs_info->send_cancel_req))
+		return -1;
 
 	if (result == BTRFS_COMPARE_TREE_SAME) {
 		if (key->type != BTRFS_INODE_REF_KEY &&
@@ -4680,6 +4694,15 @@ long btrfs_ioctl_send(struct file *mnt_file, void __user *arg_)
 	send_root = BTRFS_I(file_inode(mnt_file))->root;
 	fs_info = send_root->fs_info;
 
+	/* Check if a send is already running, and terminate if so */
+	mutex_lock(&fs_info->send_lock);
+	if (atomic_read(&fs_info->send_running)) {
+		mutex_unlock(&fs_info->send_lock);
+		return -EINPROGRESS;
+	}
+	atomic_inc(&fs_info->send_running);
+	mutex_unlock(&fs_info->send_lock);
+
 	/*
 	 * This is done when we lookup the root, it should already be complete
 	 * by the time we get here.
@@ -4832,6 +4855,21 @@ long btrfs_ioctl_send(struct file *mnt_file, void __user *arg_)
 			sizeof(*sctx->clone_roots), __clone_root_cmp_sort,
 			NULL);
 
+	/* Store context in fs_info */
+	mutex_lock(&fs_info->send_lock);
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+	atomic64_set(&fs_info->send_total_bytes, 0);
+	atomic64_set(&fs_info->send_best_effort, 0);
+	atomic64_set(&fs_info->send_start_jiffies, jiffies);
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
+	fs_info->cur_send = sctx;
+	/* Were we asked to cancel already? */
+	if (atomic_read(&fs_info->send_cancel_req)) {
+		mutex_unlock(&fs_info->send_lock);
+		goto out;
+	}
+	mutex_unlock(&fs_info->send_lock);
+
 	ret = send_subvol(sctx);
 	if (ret < 0)
 		goto out;
@@ -4849,6 +4887,17 @@ out:
 	kfree(arg);
 	vfree(clone_sources_tmp);
 
+	/* Clear context from fs_info */
+	mutex_lock(&fs_info->send_lock);
+	fs_info->cur_send = NULL;
+	atomic_dec(&fs_info->send_running);
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+	atomic64_set(&fs_info->send_start_jiffies,
+		jiffies - atomic64_read(&fs_info->send_start_jiffies));
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
+	mutex_unlock(&fs_info->send_lock);
+	wake_up(&fs_info->send_cancel_wait);
+
 	if (sctx) {
 		if (sctx->send_filp)
 			fput(sctx->send_filp);
@@ -4864,3 +4913,83 @@ out:
 
 	return ret;
 }
+
+long btrfs_ioctl_send_cancel(struct btrfs_root *root, void __user *arg)
+{
+	struct btrfs_fs_info *fs_info;
+
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
+	fs_info = root->fs_info;
+
+	mutex_lock(&fs_info->send_lock);
+	/* First check if we're running */
+	if (!atomic_read(&fs_info->send_running)) {
+		mutex_unlock(&fs_info->send_lock);
+		return -ENOTCONN;
+	}
+
+	atomic_inc(&fs_info->send_cancel_req);
+	while (atomic_read(&fs_info->send_running)) {
+		mutex_unlock(&fs_info->send_lock);
+		wait_event(fs_info->send_cancel_wait,
+			atomic_read(&fs_info->send_running) == 0);
+		mutex_lock(&fs_info->send_lock);
+	}
+	atomic_dec(&fs_info->send_cancel_req);
+	mutex_unlock(&fs_info->send_lock);
+
+	return 0;
+}
+
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+long btrfs_ioctl_send_progress(struct btrfs_root *root, void __user *arg)
+{
+	struct btrfs_ioctl_send_args *sa;
+	struct btrfs_fs_info *fs_info;
+	int ret = 0;
+
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
+	printk(KERN_DEBUG "btrfs_ioctl_send_progress: about to memdup arg\n");
+	sa = memdup_user(arg, sizeof(*sa));
+	if (IS_ERR(sa))
+		return PTR_ERR(sa);
+	printk(KERN_DEBUG "btrfs_ioctl_send_progress: done memdup'ing\n");
+
+	fs_info = root->fs_info;
+
+	mutex_lock(&fs_info->send_lock);
+
+	/* If we're not running, we return the results from last time */
+	if (!atomic64_read(&fs_info->send_start_jiffies)) {
+		sa->progress.running = 0;
+		sa->progress.elapsed_time = 0;
+	} else if (atomic_read(&fs_info->send_running)) {
+		sa->progress.running = 1;
+		sa->progress.elapsed_time = (jiffies -
+			atomic64_read(&fs_info->send_start_jiffies)) / HZ;
+	} else {
+		sa->progress.running = 0;
+		sa->progress.elapsed_time =
+			atomic64_read(&fs_info->send_start_jiffies) / HZ;
+	}
+
+	sa->progress.sent_total_bytes =
+		atomic64_read(&fs_info->send_total_bytes);
+	sa->progress.sent_best_effort =
+		atomic64_read(&fs_info->send_best_effort);
+
+	mutex_unlock(&fs_info->send_lock);
+
+	printk(KERN_DEBUG "btrfs_ioctl_send_progress: about to copy_to_user arg\n");
+	if (copy_to_user(arg, sa, sizeof(*sa)))
+		ret = -EFAULT;
+	printk(KERN_DEBUG "btrfs_ioctl_send_progress: done copy_to_user'ing\n");
+
+	kfree(sa);
+	return ret;
+}
+#endif /* CONFIG_BTRFS_DUET_BACKUP */

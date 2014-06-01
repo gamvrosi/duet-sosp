@@ -121,6 +121,15 @@ config BTRFS_FS_SCRUB_DEBUG
 
 	  If unsure/not a developer, say N here.
 
+config BTRFS_DUET_BACKUP
+	bool "Duet framework support for the btrfs backup (send/receive)"
+	depends on BTRFS_FS
+	select DUET
+	select DUET_BTRFS
+	help
+	  Adds support for the btrfs backup (send/receive) to collaborate with
+	  other tasks through the duet framework
+
 endmenu
 
 config BTRFS_FS_RUN_SANITY_TESTS

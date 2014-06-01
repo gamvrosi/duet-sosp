@@ -5,11 +5,15 @@ export CONCURRENCY_LEVEL=33
 echo CLEAN_SOURCE=$CLEAN_SOURCE
 echo CONCURRENCY_LEVEL=$CONCURRENCY_LEVEL
 
-# RE-Compile it!
+# (re)compile the kernel
 cd linux-3.13.6+duet
 time fakeroot make-kpkg --initrd --append-to-version=+duet kernel_image kernel_headers
 
-# ...and RE-compile the btrfs tools!
+# ...and (re)compile the btrfs tools
 cd ../btrfs-progs-3.12+duet
+make
+
+# ...and (re)compile the duet tools
+cd ../duet-progs
 make
 

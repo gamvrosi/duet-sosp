@@ -485,6 +485,15 @@ struct btrfs_ioctl_received_subvol_args {
 	 BTRFS_SEND_FLAG_OMIT_STREAM_HEADER | \
 	 BTRFS_SEND_FLAG_OMIT_END_CMD)
 
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+struct btrfs_send_progress {
+	__u64 sent_total_bytes;		/* out */
+	__u64 sent_best_effort;		/* out */
+	__u32 elapsed_time;		/* out */
+	__u8 running;			/* out */
+};
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
+
 struct btrfs_ioctl_send_args {
 	__s64 send_fd;			/* in */
 	__u64 clone_sources_count;	/* in */
@@ -492,6 +501,10 @@ struct btrfs_ioctl_send_args {
 	__u64 parent_root;		/* in */
 	__u64 flags;			/* in */
 	__u64 reserved[4];		/* in */
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+	struct btrfs_send_progress progress;	/* out */
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
+
 };
 
 /* Error codes as returned by the kernel */
@@ -628,5 +641,10 @@ static inline char *btrfs_err_str(enum btrfs_err_code err_code)
 				    struct btrfs_ioctl_dev_replace_args)
 #define BTRFS_IOC_FILE_EXTENT_SAME _IOWR(BTRFS_IOCTL_MAGIC, 54, \
 					 struct btrfs_ioctl_same_args)
+#define BTRFS_IOC_SEND_CANCEL _IO(BTRFS_IOCTL_MAGIC, 55)
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+#define BTRFS_IOC_SEND_PROGRESS _IOWR(BTRFS_IOCTL_MAGIC, 56, \
+					struct btrfs_ioctl_send_args)
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
 
 #endif /* _UAPI_LINUX_BTRFS_H */

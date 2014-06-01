@@ -1655,6 +1655,20 @@ struct btrfs_fs_info {
 
 	struct semaphore uuid_tree_rescan_sem;
 	unsigned int update_uuid_tree_gen:1;
+
+	/* send state */
+	struct send_ctx *cur_send;
+	struct mutex send_lock;
+	atomic_t send_cancel_req;
+	atomic_t send_running;
+	wait_queue_head_t send_cancel_wait;
+
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+	/* progress-related state for send */
+	atomic64_t send_total_bytes;
+	atomic64_t send_best_effort;
+	atomic64_t send_start_jiffies;
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
 };
 
 /*

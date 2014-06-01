@@ -32,6 +32,7 @@
 #include <libgen.h>
 #include <mntent.h>
 #include <assert.h>
+#include <signal.h>
 
 #include <uuid/uuid.h>
 
@@ -43,6 +44,15 @@
 #include "send.h"
 #include "send-utils.h"
 
+static const char * const send_cmd_group_usage[] = {
+	"btrfs send <command> [options] <subvol>",
+	NULL
+};
+
+#define MAX_SUBV_LEN 1024
+static struct btrfs_send cancel_send;
+static char cancel_subvol[MAX_SUBV_LEN];
+static int cancel_in_progress = 0;
 static int g_verbose = 0;
 
 struct btrfs_send {
@@ -342,6 +352,10 @@ static int do_send(struct btrfs_send *send, u64 root_id, u64 parent_root_id,
 	if (!is_last_subvol)
 		io_send.flags |= BTRFS_SEND_FLAG_OMIT_END_CMD;
 	ret = ioctl(subvol_fd, BTRFS_IOC_SEND, &io_send);
+	if (cancel_in_progress) {
+		fprintf(stderr, "send ioctl terminated\n");
+		goto out;
+	}
 	if (ret) {
 		ret = -errno;
 		fprintf(stderr, "ERROR: send ioctl failed with %d: %s\n", ret,
@@ -472,11 +486,115 @@ out:
 	return ret;
 }
 
-int cmd_send(int argc, char **argv)
+static int do_cancel(struct btrfs_send *send, char *subvol)
+{
+	int ret = 0;
+	u64 root_id;
+	int subvol_fd = -1;
+	struct subvol_info *si;
+
+	ret = get_root_id(send, get_subvol_name(send->root_path, subvol),
+			&root_id);
+	if (ret < 0) {
+		fprintf(stderr, "ERROR: could not resolve "
+				"root_id for %s\n", subvol);
+		return ret;
+	}
+
+	si = subvol_uuid_search(&send->sus, root_id, NULL, 0, NULL,
+				subvol_search_by_root_id);
+	if (!si) {
+		ret = -ENOENT;
+		fprintf(stderr, "ERROR: could not find subvol info for %llu",
+				root_id);
+		return ret;
+	}
+
+	subvol_fd = openat(send->mnt_fd, si->path, O_RDONLY | O_NOATIME);
+	if (subvol_fd < 0) {
+		ret = -errno;
+		fprintf(stderr, "ERROR: open %s failed. %s\n", si->path,
+				strerror(-ret));
+		return ret;
+	}
+
+	ret = ioctl(subvol_fd, BTRFS_IOC_SEND_CANCEL, NULL);
+	if (ret < 0) {
+		fprintf(stderr, "ERROR: send cancel failed on %s: %s\n", subvol,
+			errno == ENOTCONN ? "not running" : strerror(errno));
+		if (errno == ENOTCONN)
+			ret = 2;
+		else
+			ret = 1;
+		return ret;
+	}
+
+	return ret;
+}
+
+static void send_sigint_terminate(int signal)
+{
+	int ret;
+
+	fprintf(stderr, "Received SIGINT. Terminating...\n");
+	cancel_in_progress = 1;
+	ret = do_cancel(&cancel_send, cancel_subvol);
+	if (ret < 0)
+		perror("Send cancel failed");
+}
+
+static int send_handle_sigint(struct btrfs_send *send, char *subvol) {
+	struct sigaction sa = {
+		.sa_handler = send == NULL ? SIG_DFL : send_sigint_terminate,
+	};
+
+	memset(cancel_subvol, 0, MAX_SUBV_LEN);
+
+	if (send)
+		memcpy(&cancel_send, send, sizeof(*send));
+	if (subvol)
+		memcpy(cancel_subvol, subvol, strlen(subvol) < MAX_SUBV_LEN ?
+			strlen(cancel_subvol) : MAX_SUBV_LEN - 1);
+
+	return sigaction(SIGINT, &sa, NULL);
+}
+
+const char * const cmd_send_start_usage[] = {
+	"btrfs send start [-Bve] [-p <parent>] [-c <clone-src>] [-f <outfile>]",
+	"<subvol>",
+	"Send the subvolume to stdout.",
+	"Sends the subvolume specified by <subvol> to stdout.",
+	"By default, this will send the whole subvolume. To do an incremental",
+	"send, use '-p <parent>'. If you want to allow btrfs to clone from",
+	"any additional local snapshots, use '-c <clone-src>' (multiple times",
+	"where applicable). You must not specify clone sources unless you",
+	"guarantee that these snapshots are exactly in the same state on both",
+	"sides, the sender and the receiver. It is allowed to omit the",
+	"'-p <parent>' option when '-c <clone-src>' options are given, in",
+	"which case 'btrfs send' will determine a suitable parent among the",
+	"clone sources itself.",
+	"\n",
+	"-v               Enable verbose debug output. Each occurrence of",
+	"                 this option increases the verbose level more.",
+	"-e               If sending multiple subvols at once, use the new",
+	"                 format and omit the end-cmd between the subvols.",
+	"-p <parent>      Send an incremental stream from <parent> to",
+	"                 <subvol>.",
+	"-c <clone-src>   Use this snapshot as a clone source for an ",
+	"                 incremental send (multiple allowed)",
+	"-f <outfile>     Output is normally written to stdout. To write to",
+	"                 a file, use this option. An alternative would be to",
+	"                 use pipes.",
+	"-B               run send in the background",
+	NULL
+};
+
+int cmd_send_start(int argc, char **argv)
 {
 	char *subvol = NULL;
-	int c;
-	int ret;
+	int c, pid;
+	int ret = 0;
+	int do_background = 0;
 	char *outname = NULL;
 	struct btrfs_send send;
 	u32 i;
@@ -486,12 +604,16 @@ int cmd_send(int argc, char **argv)
 	u64 parent_root_id = 0;
 	int full_send = 1;
 	int new_end_cmd_semantic = 0;
+	char *optstr = "Bvec:f:i:p:";
 
 	memset(&send, 0, sizeof(send));
 	send.dump_fd = fileno(stdout);
 
-	while ((c = getopt(argc, argv, "vec:f:i:p:")) != -1) {
+	while ((c = getopt(argc, argv, optstr)) != -1) {
 		switch (c) {
+		case 'B':
+			do_background = 1;
+			break;
 		case 'v':
 			g_verbose++;
 			break;
@@ -591,7 +713,8 @@ int cmd_send(int argc, char **argv)
 	subvol = realpath(argv[optind], NULL);
 	if (!subvol) {
 		ret = -errno;
-		fprintf(stderr, "ERROR: unable to resolve %s\n", argv[optind]);
+		fprintf(stderr, "ERROR: unable to resolve %s - %s\n",
+			argv[optind], strerror(errno));
 		goto out;
 	}
 
@@ -646,6 +769,24 @@ int cmd_send(int argc, char **argv)
 			goto out;
 		}
 	}
+
+	if (do_background) {
+		pid = fork();
+		if (pid == -1) {
+			fprintf(stderr, "ERROR: cannot send, fork failed: "
+					"%s\n", strerror(errno));
+			ret = 1;
+			goto out;
+		}
+
+		if (pid) {
+			printf("send started at %s\n", subvol);
+			ret = 0;
+			goto out;
+		}
+	}
+
+	send_handle_sigint(&send, subvol);
 
 	for (i = optind; i < argc; i++) {
 		int is_first_subvol;
@@ -714,41 +855,164 @@ int cmd_send(int argc, char **argv)
 
 	ret = 0;
 
+	send_handle_sigint(NULL, NULL);
+
 out:
 	free(subvol);
 	free(snapshot_parent);
 	free(send.clone_sources);
 	if (send.mnt_fd >= 0)
 		close(send.mnt_fd);
+	if (send.dump_fd >= 0)
+		close(send.dump_fd);
 	free(send.root_path);
 	subvol_uuid_search_finit(&send.sus);
 	return !!ret;
 }
 
-const char * const cmd_send_usage[] = {
-	"btrfs send [-ve] [-p <parent>] [-c <clone-src>] [-f <outfile>] <subvol>",
-	"Send the subvolume to stdout.",
-	"Sends the subvolume specified by <subvol> to stdout.",
-	"By default, this will send the whole subvolume. To do an incremental",
-	"send, use '-p <parent>'. If you want to allow btrfs to clone from",
-	"any additional local snapshots, use '-c <clone-src>' (multiple times",
-	"where applicable). You must not specify clone sources unless you",
-	"guarantee that these snapshots are exactly in the same state on both",
-	"sides, the sender and the receiver. It is allowed to omit the",
-	"'-p <parent>' option when '-c <clone-src>' options are given, in",
-	"which case 'btrfs send' will determine a suitable parent among the",
-	"clone sources itself.",
-	"\n",
-	"-v               Enable verbose debug output. Each occurrence of",
-	"                 this option increases the verbose level more.",
-	"-e               If sending multiple subvols at once, use the new",
-	"                 format and omit the end-cmd between the subvols.",
-	"-p <parent>      Send an incremental stream from <parent> to",
-	"                 <subvol>.",
-	"-c <clone-src>   Use this snapshot as a clone source for an ",
-	"                 incremental send (multiple allowed)",
-	"-f <outfile>     Output is normally written to stdout. To write to",
-	"                 a file, use this option. An alternative would be to",
-	"                 use pipes.",
+static const char * const cmd_send_cancel_usage[] = {
+	"btrfs send cancel <subvol>",
+	"Cancel a running send",
 	NULL
 };
+
+static int cmd_send_cancel(int argc, char **argv)
+{
+	char *subvol;
+	int ret;
+	struct btrfs_send send;
+
+	if (check_argc_exact(argc, 2))
+		usage(cmd_send_cancel_usage);
+
+	/* use first send subvol to determine mount_root */
+	subvol = realpath(argv[1], NULL);
+	if (!subvol) {
+		ret = -errno;
+		fprintf(stderr, "ERROR: unable to resolve %s\n", argv[optind]);
+		goto out;
+	}
+
+	ret = init_root_path(&send, subvol);
+	if (ret < 0)
+		goto out;
+
+	ret = do_cancel(&send, subvol);
+	if (ret < 0)
+		goto out;
+
+	printf("scrub cancelled\n");
+
+out:
+	free(subvol);
+	if (send.mnt_fd >= 0)
+		close(send.mnt_fd);
+	free(send.root_path);
+	subvol_uuid_search_finit(&send.sus);
+	return ret;
+}
+
+#ifdef DUET_BACKUP
+static const char * const cmd_send_status_usage[] = {
+	"btrfs send status <subvol>",
+	"Show status of running or finished send",
+	NULL
+};
+
+static int cmd_send_status(int argc, char **argv)
+{
+	char *subvol;
+	int ret;
+	int subvol_fd = -1;
+	struct btrfs_send send;
+	struct subvol_info *si;
+	struct btrfs_ioctl_send_args sa;
+	u64 root_id;
+
+	if (check_argc_exact(argc, 2))
+		usage(cmd_send_status_usage);
+
+	/* use first send subvol to determine mount_root */
+	subvol = realpath(argv[1], NULL);
+	if (!subvol) {
+		ret = -errno;
+		fprintf(stderr, "ERROR: unable to resolve %s\n", argv[optind]);
+		goto out;
+	}
+
+	ret = init_root_path(&send, subvol);
+	if (ret < 0)
+		goto out;
+
+	ret = get_root_id(&send, get_subvol_name(send.root_path, subvol),
+			&root_id);
+	if (ret < 0) {
+		fprintf(stderr, "ERROR: could not resolve "
+				"root_id for %s\n", subvol);
+		goto out;
+	}
+
+	si = subvol_uuid_search(&send.sus, root_id, NULL, 0, NULL,
+				subvol_search_by_root_id);
+	if (!si) {
+		ret = -ENOENT;
+		fprintf(stderr, "ERROR: could not find subvol info for %llu",
+				root_id);
+		goto out;
+	}
+
+	subvol_fd = openat(send.mnt_fd, si->path, O_RDONLY | O_NOATIME);
+	if (subvol_fd < 0) {
+		ret = -errno;
+		fprintf(stderr, "ERROR: open %s failed. %s\n", si->path,
+				strerror(-ret));
+		goto out;
+	}
+
+	ret = ioctl(subvol_fd, BTRFS_IOC_SEND_PROGRESS, &sa);
+	if (ret < 0) {
+		fprintf(stderr, "ERROR: send status failed on %s: %s\n", subvol,
+			strerror(errno));
+		ret = 1;
+		goto out;
+	}
+
+	if (!sa.progress.running)
+		printf("Sent %llu bytes, finished after %u sec.\n"
+			"Sent %llu bytes out of order.\n",
+			sa.progress.sent_total_bytes,
+			sa.progress.elapsed_time,
+			sa.progress.sent_best_effort);
+	else
+		printf("Sent %llu bytes, running for %u sec.\n"
+			"Sent %llu bytes out of order.\n",
+			sa.progress.sent_total_bytes,
+			sa.progress.elapsed_time,
+			sa.progress.sent_best_effort);
+
+	return 0;
+out:
+	free(subvol);
+	if (send.mnt_fd >= 0)
+		close(send.mnt_fd);
+	free(send.root_path);
+	subvol_uuid_search_finit(&send.sus);
+	return ret;
+}
+#endif /* DUET_BACKUP */
+
+const struct cmd_group send_cmd_group = {
+	send_cmd_group_usage, NULL, {
+		{ "start", cmd_send_start, cmd_send_start_usage, NULL, 0 },
+		{ "cancel", cmd_send_cancel, cmd_send_cancel_usage, NULL, 0 },
+#ifdef DUET_BACKUP
+		{ "status", cmd_send_status, cmd_send_status_usage, NULL, 0 },
+#endif /* DUET_BACKUP */
+		NULL_CMD_STRUCT
+	}
+};
+
+int cmd_send(int argc, char **argv)
+{
+	return handle_command_group(&send_cmd_group, argc, argv);
+}

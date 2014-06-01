@@ -2220,6 +2220,20 @@ int open_ctree(struct super_block *sb,
 	btrfs_init_delayed_root(fs_info->delayed_root);
 
 	mutex_init(&fs_info->scrub_lock);
+
+	/* Send related state */
+	fs_info->cur_send = NULL;
+	mutex_init(&fs_info->send_lock);
+	atomic_set(&fs_info->send_cancel_req, 0);
+	atomic_set(&fs_info->send_running, 0);
+	init_waitqueue_head(&fs_info->send_cancel_wait);
+
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+	atomic64_set(&fs_info->send_total_bytes, 0);
+	atomic64_set(&fs_info->send_best_effort, 0);
+	atomic64_set(&fs_info->send_start_jiffies, 0);
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
+
 	atomic_set(&fs_info->scrubs_running, 0);
 	atomic_set(&fs_info->scrub_pause_req, 0);
 	atomic_set(&fs_info->scrubs_paused, 0);

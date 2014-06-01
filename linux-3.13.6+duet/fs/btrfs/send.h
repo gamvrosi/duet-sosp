@@ -131,4 +131,8 @@ enum {
 
 #ifdef __KERNEL__
 long btrfs_ioctl_send(struct file *mnt_file, void __user *arg);
+long btrfs_ioctl_send_cancel(struct btrfs_root *root, void __user *arg);
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+long btrfs_ioctl_send_progress(struct btrfs_root *root, void __user *arg);
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
 #endif

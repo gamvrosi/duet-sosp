@@ -91,8 +91,8 @@ extern const struct cmd_group quota_cmd_group;
 extern const struct cmd_group qgroup_cmd_group;
 extern const struct cmd_group replace_cmd_group;
 extern const struct cmd_group rescue_cmd_group;
+extern const struct cmd_group send_cmd_group;
 
-extern const char * const cmd_send_usage[];
 extern const char * const cmd_receive_usage[];
 extern const char * const cmd_check_usage[];
 extern const char * const cmd_chunk_recover_usage[];

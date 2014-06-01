@@ -4612,6 +4612,12 @@ long btrfs_ioctl(struct file *file, unsigned int
 		return btrfs_ioctl_set_fslabel(file, argp);
 	case BTRFS_IOC_FILE_EXTENT_SAME:
 		return btrfs_ioctl_file_extent_same(file, argp);
+	case BTRFS_IOC_SEND_CANCEL:
+		return btrfs_ioctl_send_cancel(root, argp);
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+	case BTRFS_IOC_SEND_PROGRESS:
+		return btrfs_ioctl_send_progress(root, argp);
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
 	}
 
 	return -ENOTTY;
