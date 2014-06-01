@@ -522,10 +522,6 @@ static int do_cancel(struct btrfs_send *send, char *subvol)
 	if (ret < 0) {
 		fprintf(stderr, "ERROR: send cancel failed on %s: %s\n", subvol,
 			errno == ENOTCONN ? "not running" : strerror(errno));
-		if (errno == ENOTCONN)
-			ret = 2;
-		else
-			ret = 1;
 		return ret;
 	}
 
@@ -882,6 +878,8 @@ static int cmd_send_cancel(int argc, char **argv)
 	int ret;
 	struct btrfs_send send;
 
+	memset(&send, 0, sizeof(send));
+
 	if (check_argc_exact(argc, 2))
 		usage(cmd_send_cancel_usage);
 
@@ -928,6 +926,8 @@ static int cmd_send_status(int argc, char **argv)
 	struct subvol_info *si;
 	struct btrfs_ioctl_send_args sa;
 	u64 root_id;
+
+	memset(&send, 0, sizeof(send));
 
 	if (check_argc_exact(argc, 2))
 		usage(cmd_send_status_usage);

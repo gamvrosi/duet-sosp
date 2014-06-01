@@ -4871,8 +4871,11 @@ long btrfs_ioctl_send(struct file *mnt_file, void __user *arg_)
 	mutex_unlock(&fs_info->send_lock);
 
 	ret = send_subvol(sctx);
-	if (ret < 0)
+	if (ret < 0) {
+		if (atomic_read(&fs_info->send_cancel_req))
+			ret = -ESHUTDOWN;
 		goto out;
+	}
 
 	if (!(sctx->flags & BTRFS_SEND_FLAG_OMIT_END_CMD)) {
 		ret = begin_cmd(sctx, BTRFS_SEND_C_END);
