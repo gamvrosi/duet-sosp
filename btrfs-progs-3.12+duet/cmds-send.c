@@ -44,6 +44,19 @@
 #include "send.h"
 #include "send-utils.h"
 
+#ifdef DUET_BACKUP
+#include <sys/syscall.h>
+
+/* TBD: replace with #include "linux/ioprio.h" in some years */
+#if !defined (IOPRIO_H)
+#define IOPRIO_WHO_PROCESS 1
+#define IOPRIO_CLASS_SHIFT 13
+#define IOPRIO_PRIO_VALUE(class, data) \
+		(((class) << IOPRIO_CLASS_SHIFT) | (data))
+#define IOPRIO_CLASS_IDLE 3
+#endif
+#endif /* DUET_BACKUP */
+
 static const char * const send_cmd_group_usage[] = {
 	"btrfs send <command> [options] <subvol>",
 	NULL
@@ -65,6 +78,12 @@ struct btrfs_send {
 
 	char *root_path;
 	struct subvol_uuid_search sus;
+
+#ifdef DUET_BACKUP
+	/* Send priority state */
+	int ioprio_class;
+	int ioprio_classdata;
+#endif /* DUET_BACKUP */
 };
 
 int find_mount_root(const char *path, char **mount_root)
@@ -330,6 +349,16 @@ static int do_send(struct btrfs_send *send, u64 root_id, u64 parent_root_id,
 		goto out;
 	}
 
+#ifdef DUET_BACKUP
+	/* before moving on, set the ioprio */
+	ret = syscall(SYS_ioprio_set, IOPRIO_WHO_PROCESS, 0,
+		IOPRIO_PRIO_VALUE(send->ioprio_class, send->ioprio_classdata));
+	if (ret)
+		fprintf(stderr,
+			"WARNING: setting ioprio failed: %s (ignored).\n",
+			strerror(errno));
+#endif /* DUET_BACKUP */
+
 	memset(&io_send, 0, sizeof(io_send));
 	io_send.send_fd = pipefd[1];
 	send->send_fd = pipefd[0];
@@ -557,7 +586,11 @@ static int send_handle_sigint(struct btrfs_send *send, char *subvol) {
 
 const char * const cmd_send_start_usage[] = {
 	"btrfs send start [-Bve] [-p <parent>] [-c <clone-src>] [-f <outfile>]",
+#ifdef DUET_BACKUP
+	"                 [-C <class> -N <classdata>] <subvol>",
+#else
 	"<subvol>",
+#endif /* DUET_BACKUP */
 	"Send the subvolume to stdout.",
 	"Sends the subvolume specified by <subvol> to stdout.",
 	"By default, this will send the whole subvolume. To do an incremental",
@@ -570,6 +603,7 @@ const char * const cmd_send_start_usage[] = {
 	"which case 'btrfs send' will determine a suitable parent among the",
 	"clone sources itself.",
 	"\n",
+	"-B               run send in the background",
 	"-v               Enable verbose debug output. Each occurrence of",
 	"                 this option increases the verbose level more.",
 	"-e               If sending multiple subvols at once, use the new",
@@ -581,7 +615,10 @@ const char * const cmd_send_start_usage[] = {
 	"-f <outfile>     Output is normally written to stdout. To write to",
 	"                 a file, use this option. An alternative would be to",
 	"                 use pipes.",
-	"-B               run send in the background",
+#ifdef DUET_BACKUP
+	"-C <class>       set ioprio class (see ionice(1) manpage)",
+	"-N <classdata>   set ioprio classdata (see ionice(1) manpage)",
+#endif /* DUET_BACKUP */
 	NULL
 };
 
@@ -600,7 +637,13 @@ int cmd_send_start(int argc, char **argv)
 	u64 parent_root_id = 0;
 	int full_send = 1;
 	int new_end_cmd_semantic = 0;
+#ifdef DUET_BACKUP
+	int ioprio_class = IOPRIO_CLASS_IDLE;
+	int ioprio_classdata = 0;
+	char *optstr = "Bvec:f:i:p:C:N:";
+#else
 	char *optstr = "Bvec:f:i:p:";
+#endif /* DUET_BACKUP */
 
 	memset(&send, 0, sizeof(send));
 	send.dump_fd = fileno(stdout);
@@ -671,6 +714,14 @@ int cmd_send_start(int argc, char **argv)
 				"ERROR: -i was removed, use -c instead\n");
 			ret = 1;
 			goto out;
+#ifdef DUET_BACKUP
+		case 'C':
+			ioprio_class = (int) strtol(optarg, NULL, 10);
+			break;
+		case 'N':
+			ioprio_classdata = (int) strtol(optarg, NULL, 10);
+			break;
+#endif /* DUET_BACKUP */
 		case '?':
 		default:
 			fprintf(stderr, "ERROR: send args invalid.\n");
@@ -702,6 +753,12 @@ int cmd_send_start(int argc, char **argv)
 		ret = 1;
 		goto out;
 	}
+
+#ifdef DUET_BACKUP
+	/* Set the IO priorities */
+	send.ioprio_class = ioprio_class;
+	send.ioprio_classdata = ioprio_classdata;
+#endif /* DUET_BACKUP */
 
 	/* use first send subvol to determine mount_root */
 	subvol = argv[optind];

@@ -4956,11 +4956,9 @@ long btrfs_ioctl_send_progress(struct btrfs_root *root, void __user *arg)
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	printk(KERN_DEBUG "btrfs_ioctl_send_progress: about to memdup arg\n");
 	sa = memdup_user(arg, sizeof(*sa));
 	if (IS_ERR(sa))
 		return PTR_ERR(sa);
-	printk(KERN_DEBUG "btrfs_ioctl_send_progress: done memdup'ing\n");
 
 	fs_info = root->fs_info;
 
@@ -4987,10 +4985,8 @@ long btrfs_ioctl_send_progress(struct btrfs_root *root, void __user *arg)
 
 	mutex_unlock(&fs_info->send_lock);
 
-	printk(KERN_DEBUG "btrfs_ioctl_send_progress: about to copy_to_user arg\n");
 	if (copy_to_user(arg, sa, sizeof(*sa)))
 		ret = -EFAULT;
-	printk(KERN_DEBUG "btrfs_ioctl_send_progress: done copy_to_user'ing\n");
 
 	kfree(sa);
 	return ret;
