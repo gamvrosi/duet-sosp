@@ -121,11 +121,29 @@ config BTRFS_FS_SCRUB_DEBUG
 
 	  If unsure/not a developer, say N here.
 
+config BTRFS_FS_REVMAP
+	bool "Btrfs reverse mapping code"
+	depends on BTRFS_FS
+	help
+	  Enables reverse mapping of physical address ranges, to logical
+	  address ranges. Supports discontinuous physical spaces, such as
+	  RAID arrays.
+
+config BTRFS_FS_REVMAP_DEBUG
+	bool "Btrfs reverse mapping code debug messages"
+	depends on BTRFS_FS
+	depends on BTRFS_FS_REVMAP
+	help
+	  Enables debugging messages for the btrfs reverse mapping code.
+
+	  If unsure/not a developer, say N here.
+
 config BTRFS_DUET_BACKUP
 	bool "Duet framework support for the btrfs backup (send/receive)"
 	depends on BTRFS_FS
 	select DUET
 	select DUET_BTRFS
+	select BTRFS_FS_REVMAP
 	help
 	  Adds support for the btrfs backup (send/receive) to collaborate with
 	  other tasks through the duet framework
