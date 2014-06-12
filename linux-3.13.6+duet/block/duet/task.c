@@ -383,8 +383,7 @@ static void echo_handler(__u8 taskid, __u8 event_code,
 /* Properly allocate and initialize a task struct */
 static int duet_task_init(struct duet_task **task, const char *name,
 	__u32 blksize, __u32 bmapsize, __u8 event_mask,
-	struct block_device *bdev, duet_event_handler_t event_handler,
-	void *privdata)
+	duet_event_handler_t event_handler, void *privdata)
 {
 	*task = kzalloc(sizeof(**task), GFP_NOFS);
 	if (!(*task))
@@ -410,13 +409,6 @@ static int duet_task_init(struct duet_task **task, const char *name,
 	(*task)->bmaptree = RB_ROOT;
 	(*task)->privdata = privdata;
 	(*task)->event_mask = event_mask;
-	if (bdev) {
-		(*task)->bdev = bdev;
-		while ((*task)->bdev != bdev->bd_contains)
-			(*task)->bdev = bdev->bd_contains;
-	} else {
-		(*task)->bdev = NULL;
-	}
 
 	if (event_handler)
 		(*task)->event_handler = event_handler;
@@ -437,8 +429,8 @@ void duet_task_dispose(struct duet_task *task)
 }
 
 int duet_task_register(__u8 *taskid, const char *name, __u32 blksize,
-	__u32 bmapsize, __u8 event_mask, struct block_device *bdev,
-	duet_event_handler_t event_handler, void *privdata)
+	__u32 bmapsize, __u8 event_mask, duet_event_handler_t event_handler,
+	void *privdata)
 {
 	int ret;
 	struct list_head *last;
@@ -450,7 +442,7 @@ int duet_task_register(__u8 *taskid, const char *name, __u32 blksize,
 	}
 
 	ret = duet_task_init(&task, name, blksize, bmapsize, event_mask,
-		bdev, event_handler, privdata);
+		event_handler, privdata);
 	if (ret) {
 		printk(KERN_ERR "duet: failed to initialize task\n");
 		return ret;

@@ -200,7 +200,7 @@ static int duet_ioctl_tasks(void __user *arg)
 	case DUET_TASKS_REGISTER:
 		if (duet_task_register(&ta->taskid[0], ta->task_names[0],
 				ta->blksize[0], ta->bmapsize[0],
-				ta->event_mask[0], NULL, NULL, NULL)) {
+				ta->event_mask[0], NULL, NULL)) {
 			printk(KERN_ERR "duet: registration failed\n");
 			goto err;
 		}

@@ -51,8 +51,8 @@ enum {
 
 /* Core interface functions */
 int duet_task_register(__u8 *taskid, const char *name, __u32 blksize,
-	__u32 bmapsize, __u8 event_mask, struct block_device *bdev,
-	duet_event_handler_t event_handler, void *privdata);
+	__u32 bmapsize, __u8 event_mask, duet_event_handler_t event_handler,
+	void *privdata);
 int duet_task_deregister(__u8 taskid);
 int duet_is_online(void);
 

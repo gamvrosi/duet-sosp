@@ -51,7 +51,6 @@ struct duet_task {
 	/* bitmap tree */
 	__u32			blksize;		/* bytes per bmap bit */
 	__u32			bmapsize;		/* bytes per bmap */
-	struct block_device	*bdev;			/* task block device */
 	struct mutex		bmaptree_mutex;
 	struct rb_root		bmaptree;
 

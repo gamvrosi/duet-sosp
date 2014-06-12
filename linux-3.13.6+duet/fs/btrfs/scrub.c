@@ -187,6 +187,7 @@ struct scrub_ctx {
 
 #ifdef CONFIG_BTRFS_DUET_SCRUB
 	__u8			taskid;
+	struct block_device	*scrub_bdev;
 #endif /* CONFIG_BTRFS_DUET_SCRUB */
 };
 
@@ -637,11 +638,15 @@ out:
 static void btrfs_scrub_duet_handler(__u8 taskid, __u8 event_code,
 	struct block_device *bdev, __u64 lbn, __u32 len, void *privdata)
 {
-	//struct scrub_ctx *sctx = (struct scrub_ctx *)privdata;
+	struct scrub_ctx *sctx = (struct scrub_ctx *)privdata;
 
 #ifdef CONFIG_BTRFS_FS_SCRUB_DEBUG
 	printk(KERN_DEBUG "duet: In the btrfs_scrub_duet_handler\n");
 #endif /* CONFIG_BTRFS_FS_SCRUB_DEBUG */
+
+	/* Check that the event refers to the device we're scrubbing */
+	if (sctx->scrub_bdev != bdev->bd_contains)
+		return;
 
 	/* Since we got all the way here, we're on the right device.
 	 * Handle the event now */
@@ -818,11 +823,15 @@ struct scrub_ctx *scrub_setup_ctx(struct btrfs_device *dev, u64 deadline,
 	}
 
 #ifdef CONFIG_BTRFS_DUET_SCRUB
+	sctx->scrub_bdev = dev->bdev;
+	while (sctx->scrub_bdev != sctx->scrub_bdev->bd_contains)
+		sctx->scrub_bdev = sctx->scrub_bdev->bd_contains;
+
 	/* Register the task with the duet framework */
 	if (duet_task_register(&sctx->taskid, "btrfs-scrub",
 			fs_info->sb->s_blocksize, 32768 /* 32Kb */,
 			DUET_EVENT_BTRFS_READ | DUET_EVENT_BTRFS_WRITE,
-			dev->bdev, btrfs_scrub_duet_handler, (void *)sctx)) {
+			btrfs_scrub_duet_handler, (void *)sctx)) {
 		printk(KERN_ERR "scrub: failed to register with the duet framework\n");
 		return ERR_PTR(-EFAULT);
 	}

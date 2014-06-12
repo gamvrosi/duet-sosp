@@ -56,14 +56,7 @@ static void duet_handle_event(__u8 event_code, struct block_device *bdev,
 	 * and where the event code matches the event mask */
 	rcu_read_lock();
 	list_for_each_entry_rcu(cur, &duet_env.tasks, task_list) {
-#ifdef CONFIG_DUET_DEBUG
-		printk(KERN_INFO "duet event: checking task with *bdev %p, "
-			"devid %u, contains %p, event mask %u\n", cur->bdev,
-			cur->bdev->bd_dev, cur->bdev->bd_contains ?
-			cur->bdev->bd_contains : 0, cur->event_mask);
-#endif /* CONFIG_DUET_DEBUG */
-		if (cur->bdev == bdev->bd_contains &&
-		    (cur->event_mask & event_code))
+		if (cur->event_mask & event_code)
 			cur->event_handler(cur->id, event_code, bdev, lbn, len,
 								cur->privdata);
 	}
