@@ -27,6 +27,10 @@
 #include <linux/crc32c.h>
 #include <linux/vmalloc.h>
 #include <linux/string.h>
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+#include <linux/duet.h>
+#include "mapping.h"
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
 
 #include "send.h"
 #include "backref.h"
@@ -124,8 +128,7 @@ struct send_ctx {
 	char *read_buf;
 
 #ifdef CONFIG_BTRFS_DUET_BACKUP
-	/* duet-related stuff */
-	//__u8 taskid;
+	__u8 taskid;
 #endif /* CONFIG_BTRFS_DUET_BACKUP */
 };
 
@@ -3623,6 +3626,17 @@ out:
 	return ret;
 }
 
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+static int mark_sent_range(u64 start, u64 len, void *bdevp)
+{
+	struct block_device *bdev = (struct block_device *)bdevp;
+
+	printk(KERN_INFO "mark_send_range: received %llu (%llu) for %p\n",
+		start, len, bdev);
+	return 0;
+}
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
+
 /*
  * Read some bytes from the current inode/file and send a write command to
  * user space.
@@ -3645,6 +3659,12 @@ verbose_printk("btrfs: send_write offset=%llu, len=%d\n", offset, len);
 			ret = num_read;
 		goto out;
 	}
+
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+	/* Register the bytes we sent with duet */
+	if (btrfs_ino_to_physical(sctx->send_root->fs_info, sctx->cur_ino,
+				offset, len, mark_sent_range))
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
 
 	ret = begin_cmd(sctx, BTRFS_SEND_C_WRITE);
 	if (ret < 0)
@@ -4676,6 +4696,16 @@ out:
 	return ret;
 }
 
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+static void btrfs_send_duet_handler(__u8 taskid, __u8 event_code,
+	struct block_device *bdev, __u64 lbn, __u32 len, void *privdata)
+{
+	printk(KERN_DEBUG "duet: caught %s event for send on [%llu, %llu].\n",
+		event_code & DUET_EVENT_BTRFS_WRITE ? "write" : "read",
+		lbn, lbn + len);
+}
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
+
 long btrfs_ioctl_send(struct file *mnt_file, void __user *arg_)
 {
 	int ret = 0;
@@ -4870,6 +4900,18 @@ long btrfs_ioctl_send(struct file *mnt_file, void __user *arg_)
 	}
 	mutex_unlock(&fs_info->send_lock);
 
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+	/* Register the task with the Duet framework */
+	if (duet_task_register(&sctx->taskid, "btrfs-send",
+			fs_info->sb->s_blocksize, 32768 /* 32Kb */,
+			DUET_EVENT_BTRFS_READ | DUET_EVENT_BTRFS_WRITE,
+			btrfs_send_duet_handler, (void *)sctx)) {
+		printk(KERN_ERR "send: failed to register with the duet framework\n");
+		ret = -EFAULT;
+		goto out;
+	}
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
+
 	ret = send_subvol(sctx);
 	if (ret < 0) {
 		if (atomic_read(&fs_info->send_cancel_req))
@@ -4900,6 +4942,12 @@ out:
 #endif /* CONFIG_BTRFS_DUET_BACKUP */
 	mutex_unlock(&fs_info->send_lock);
 	wake_up(&fs_info->send_cancel_wait);
+
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+	/* Deregister the task from the Duet framework */
+	if (duet_task_deregister(sctx->taskid))
+		printk(KERN_ERR "send: failed to deregister from duet framework\n");
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
 
 	if (sctx) {
 		if (sctx->send_filp)

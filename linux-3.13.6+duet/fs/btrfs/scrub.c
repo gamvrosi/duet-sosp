@@ -394,7 +394,7 @@ static noinline_for_stack void scrub_free_ctx(struct scrub_ctx *sctx)
 	scrub_free_wr_ctx(&sctx->wr_ctx);
 
 #ifdef CONFIG_BTRFS_DUET_SCRUB
-	/* Register the task with the duet framework */
+	/* Deregister the task from the Duet framework */
 	if (duet_task_deregister(sctx->taskid))
 		printk(KERN_ERR "scrub: failed to deregister from duet framework\n");
 #endif /* CONFIG_BTRFS_DUET_SCRUB */
@@ -827,7 +827,7 @@ struct scrub_ctx *scrub_setup_ctx(struct btrfs_device *dev, u64 deadline,
 	while (sctx->scrub_bdev != sctx->scrub_bdev->bd_contains)
 		sctx->scrub_bdev = sctx->scrub_bdev->bd_contains;
 
-	/* Register the task with the duet framework */
+	/* Register the task with the Duet framework */
 	if (duet_task_register(&sctx->taskid, "btrfs-scrub",
 			fs_info->sb->s_blocksize, 32768 /* 32Kb */,
 			DUET_EVENT_BTRFS_READ | DUET_EVENT_BTRFS_WRITE,

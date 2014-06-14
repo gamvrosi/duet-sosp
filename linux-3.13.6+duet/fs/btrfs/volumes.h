@@ -277,29 +277,6 @@ struct btrfs_balance_control {
 	struct btrfs_balance_progress stat;
 };
 
-#ifdef CONFIG_BTRFS_FS_REVMAP
-struct btrfs_dev_extent_ctx {
-	u64 p_start;	/* Physical offset in device */
-	u64 l_start;	/* Logical offset in file system */
-	u64 len;	/* Length of chunk in bytes */
-};
-
-struct btrfs_addr_mapping_ctx {
-	u64 l_start;	/* First logical address in chunk */
-	u64 l_offt;	/* First _requested_ logical address in chunk */
-	u64 l_offt_end;	/* Last _requested_ logical address in chunk */
-	u64 l_end;	/* Last logical address in chunk */
-	u64 p_start;	/* First physical address in chunk */
-	u64 p_offt;	/* First requested physical address in chunk */
-	u64 stripe_len;	/* Length of each chunk stripe */
-	u64 increment;	/* Logical increment when moving b/w stripes */
-	u64 nstripes;	/* Total number of stripes in chunk */
-	u64 num_bytes;	/* Chunk bytes that fall in the requested range */
-};
-
-typedef int (*iterate_items_t)(struct btrfs_key, u64, u64);
-#endif /* CONFIG_BTRFS_FS_REVMAP */
-
 int btrfs_account_dev_extents_size(struct btrfs_device *device, u64 start,
 				   u64 end, u64 *length);
 
@@ -340,11 +317,6 @@ int btrfs_grow_device(struct btrfs_trans_handle *trans,
 		      struct btrfs_device *device, u64 new_size);
 struct btrfs_device *btrfs_find_device(struct btrfs_fs_info *fs_info, u64 devid,
 				       u8 *uuid, u8 *fsid);
-#ifdef CONFIG_BTRFS_FS_REVMAP
-int btrfs_iterate_items(struct btrfs_fs_info *fs_info,
-			struct block_device *bdev, u64 p_start, u64 len,
-			struct btrfs_root *snap_root, iterate_items_t iterate);
-#endif /* CONFIG_BTRFS_FS_REVMAP */
 int btrfs_shrink_device(struct btrfs_device *device, u64 new_size);
 int btrfs_init_new_device(struct btrfs_root *root, char *path);
 int btrfs_init_dev_replace_tgtdev(struct btrfs_root *root, char *device_path,
