@@ -22,29 +22,16 @@
 #include "ctree.h"
 
 struct btrfs_dev_extent_ctx {
-	u64 p_start;	/* Physical offset in device */
-	u64 l_start;	/* Logical offset in file system */
-	u64 len;	/* Length of chunk in bytes */
-};
-
-struct btrfs_addr_mapping_ctx {
-	u64 l_start;	/* First logical address in chunk */
-	u64 l_offt;	/* First _requested_ logical address in chunk */
-	u64 l_offt_end;	/* Last _requested_ logical address in chunk */
-	u64 l_end;	/* Last logical address in chunk */
-	u64 p_start;	/* First physical address in chunk */
-	u64 p_offt;	/* First requested physical address in chunk */
-	u64 stripe_len;	/* Length of each chunk stripe */
-	u64 increment;	/* Logical increment when moving b/w stripes */
-	u64 nstripes;	/* Total number of stripes in chunk */
-	u64 num_bytes;	/* Chunk bytes that fall in the requested range */
+	u64 pstart;	/* Physical starting address in device */
+	u64 vstart;	/* Virtual starting address */
+	u64 len;	/* Length of dev extent in bytes */
 };
 
 /*
  * Used by both logical-to-physical and physical-to-logical mappers to
  * iterate through discovered contiguous ranges:
- * - logical-to-physical: called with start, length, and block_device pointer
- * - physical-to-logical: called with start, length, and btrfs_key pointer
+ * - logical-to-physical: called with start, length, and bdev ptr
+ * - physical-to-logical: called with start, length, and file_extent ptr
  */
 typedef int (*iterate_ranges_t)(u64, u64, void *);
 
