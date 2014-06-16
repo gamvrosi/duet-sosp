@@ -165,7 +165,7 @@ out:
 /* The v-range given is assumed to belong in the same device extent */
 static int __iterate_range_items(struct btrfs_fs_info *fs_info, u64 vofft,
 				u64 vlen, struct btrfs_root *root,
-				iterate_ranges_t iterate)
+				iterate_ranges_t iterate, void *privdata)
 {
 	struct btrfs_root *extroot = fs_info->extent_root;
 	struct btrfs_key key, ekey;
@@ -174,7 +174,7 @@ static int __iterate_range_items(struct btrfs_fs_info *fs_info, u64 vofft,
 	struct btrfs_extent_item *ei;
 	struct btrfs_extent_inline_ref *iref;
 	struct btrfs_extent_data_ref *dref;
-	struct btrfs_file_extent_item *extent;
+	struct btrfs_file_extent_item *extent = NULL;
 	unsigned long ptr, end;
 	u64 cur_vlen, cur_vofft;
 	u64 ext_size, ext_len;
@@ -310,7 +310,7 @@ static int __iterate_range_items(struct btrfs_fs_info *fs_info, u64 vofft,
 		}
 
 		if (iterate)
-			iterate(cur_vofft, ext_len, (void *)extent);
+			iterate(cur_vofft, ext_len, (void *)extent, privdata);
 
 #ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
 		printk(KERN_INFO "Synergy found w/ extent (%llu %u %llu), for "
@@ -336,8 +336,9 @@ out:
  * callback for each
  */
 int btrfs_physical_to_items(struct btrfs_fs_info *fs_info,
-			    struct block_device *bdev, u64 pofft, u64 plen,
-			    struct btrfs_root *root, iterate_ranges_t iterate)
+			struct block_device *bdev, u64 pofft, u64 plen,
+			struct btrfs_root *root, iterate_ranges_t iterate,
+			void *privdata)
 {
 	struct btrfs_device *dev;
 	u64 cur_pofft, cur_plen, vofft, vlen;
@@ -383,7 +384,7 @@ int btrfs_physical_to_items(struct btrfs_fs_info *fs_info,
 			vlen = cur_plen;
 
 		ret = __iterate_range_items(fs_info, vofft, vlen, root,
-								iterate);
+							iterate, privdata);
 		if (ret) {
 			printk(KERN_DEBUG "btrfs_physical_to_items: item iteration failed\n");
 			goto out;
@@ -402,8 +403,8 @@ out:
  * an extent may not span chunks, but a chunk may span physical devices.
  */
 static int __iter_chunk_ranges(struct btrfs_fs_info *fs_info, u64 chunk_offt,
-			struct btrfs_chunk *chunk, struct extent_buffer *l,
-			u64 vofft, u64 vlen, iterate_ranges_t iterate)
+		struct btrfs_chunk *chunk, struct extent_buffer *l, u64 vofft,
+		u64 vlen, iterate_ranges_t iterate, void *privdata)
 {
 	struct btrfs_stripe *stripe;
 	struct btrfs_device *device;
@@ -429,7 +430,14 @@ static int __iter_chunk_ranges(struct btrfs_fs_info *fs_info, u64 chunk_offt,
 			pofft = btrfs_stripe_offset_nr(l, chunk, i) +
 				(vofft - chunk_offt);
 
-			ret = iterate(pofft, vlen, (void *)device->bdev);
+#ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
+			printk(KERN_DEBUG "__iter_chunk_ranges: calling "
+				"iterate for pofft %llu plen %llu\n",
+				pofft, vlen);
+#endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
+
+			ret = iterate(pofft, vlen, (void *)device->bdev,
+								privdata);
 			if (ret)
 				goto out;
 		}
@@ -445,7 +453,7 @@ out:
  * a result, the same chunk.
  */
 static int __iter_physical_ranges(struct btrfs_fs_info *fs_info, u64 vofft,
-					u64 vlen, iterate_ranges_t iterate)
+			u64 vlen, iterate_ranges_t iterate, void *privdata)
 {
 	struct btrfs_root *fs_root = fs_info->chunk_root;
 	struct btrfs_key key;
@@ -467,6 +475,12 @@ static int __iter_physical_ranges(struct btrfs_fs_info *fs_info, u64 vofft,
 	key.type = BTRFS_CHUNK_ITEM_KEY;
 	key.offset = vofft;
 
+#ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
+	printk(KERN_DEBUG "__iter_physical_ranges: looking for (%llu %u %llu)"
+		" vofft %llu vlen %llu\n", key.objectid, key.type, key.offset,
+		vofft, vlen);
+#endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
+
 	ret = btrfs_search_slot_for_read(fs_root, &key, path, 0, 0);
 	if (ret != 0)
 		goto not_found;
@@ -485,8 +499,12 @@ static int __iter_physical_ranges(struct btrfs_fs_info *fs_info, u64 vofft,
 	if (chunk_offt + chunk_len <= vofft || chunk_offt > vofft)
 		goto not_found;
 
+#ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
+	printk(KERN_DEBUG "__iter_physical_ranges: found the chunk!\n");
+#endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
+
 	ret = __iter_chunk_ranges(fs_info, chunk_offt, chunk, l, vofft, vlen,
-								iterate);
+							iterate, privdata);
 
 	btrfs_free_path(path);
 	return ret;
@@ -503,7 +521,7 @@ not_found:
  * function.
  */
 int btrfs_ino_to_physical(struct btrfs_fs_info *fs_info, u64 ino, u64 iofft,
-			u64 ilen, iterate_ranges_t iterate)
+			u64 ilen, iterate_ranges_t iterate, void *privdata)
 {
 	struct btrfs_root *fs_root = fs_info->fs_root;
 	struct btrfs_key key;
@@ -528,6 +546,12 @@ int btrfs_ino_to_physical(struct btrfs_fs_info *fs_info, u64 ino, u64 iofft,
 	key.type = BTRFS_EXTENT_DATA_KEY;
 	key.offset = iofft;
 
+#ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
+	printk(KERN_DEBUG "btrfs_ino_to_physical: looking for (%llu %u %llu). "
+		"iofft %llu, ilen %llu\n", key.objectid, key.type, key.offset,
+		iofft, ilen);
+#endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
+
 	ret = btrfs_search_slot_for_read(fs_root, &key, path, 0, 0);
 	if (ret != 0) {
 		ret = -ENOENT;
@@ -543,7 +567,7 @@ int btrfs_ino_to_physical(struct btrfs_fs_info *fs_info, u64 ino, u64 iofft,
 		slot = path->slots[0];
 		if (slot >= btrfs_header_nritems(l)) {
 #ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
-			printk(KERN_DEBUG "btrfs_file_to_physical: EOLeaf\n");
+			printk(KERN_DEBUG "btrfs_ino_to_physical: EOLeaf\n");
 #endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
 			ret = btrfs_next_leaf(fs_root, path);
 			if (ret == 0) {
@@ -556,7 +580,7 @@ int btrfs_ino_to_physical(struct btrfs_fs_info *fs_info, u64 ino, u64 iofft,
 		btrfs_item_key_to_cpu(l, &key, slot);
 
 #ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
-		printk(KERN_DEBUG "btrfs_file_to_physical processing (%llu, "
+		printk(KERN_DEBUG "btrfs_ino_to_physical: processing (%llu, "
 			"%u, %llu)\n", key.objectid, key.type, key.offset);
 #endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
 
@@ -579,6 +603,10 @@ int btrfs_ino_to_physical(struct btrfs_fs_info *fs_info, u64 ino, u64 iofft,
 		    btrfs_file_extent_disk_bytenr(l,fi)) <= cur_iofft)
 			goto next;
 
+#ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
+		printk(KERN_DEBUG "btrfs_ino_to_physical: found the right extent\n");
+#endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
+
 		/* Find the v-length starting from the v-offset */
 		vofft = btrfs_file_extent_disk_bytenr(l, fi) +
 			btrfs_file_extent_offset(l, fi) +
@@ -594,7 +622,8 @@ int btrfs_ino_to_physical(struct btrfs_fs_info *fs_info, u64 ino, u64 iofft,
 		}
 
 		/* Process this v-range */
-		if (__iter_physical_ranges(fs_info, vofft, vlen, iterate)) {
+		if (__iter_physical_ranges(fs_info, vofft, vlen, iterate,
+								privdata)) {
 			ret = -ENOENT;
 			goto out;
 		}

@@ -30,14 +30,15 @@ struct btrfs_dev_extent_ctx {
 /*
  * Used by both logical-to-physical and physical-to-logical mappers to
  * iterate through discovered contiguous ranges:
- * - logical-to-physical: called with start, length, and bdev ptr
- * - physical-to-logical: called with start, length, and file_extent ptr
+ * - logical-to-physical args: start, length, bdev ptr, and privdata
+ * - physical-to-logical args: start, length, file_extent ptr, and privdata
  */
-typedef int (*iterate_ranges_t)(u64, u64, void *);
+typedef int (*iterate_ranges_t)(u64, u64, void *, void *);
 
 int btrfs_physical_to_items(struct btrfs_fs_info *fs_info,
 			struct block_device *bdev, u64 p_start, u64 len,
-			struct btrfs_root *root, iterate_ranges_t iterate);
+			struct btrfs_root *root, iterate_ranges_t iterate,
+			void *privdata);
 int btrfs_ino_to_physical(struct btrfs_fs_info *fs_info, u64 ino, u64 iofft,
-			u64 ilen, iterate_ranges_t iterate);
+			u64 ilen, iterate_ranges_t iterate, void *privdata);
 #endif /* __BTRFS_MAPPING_ */

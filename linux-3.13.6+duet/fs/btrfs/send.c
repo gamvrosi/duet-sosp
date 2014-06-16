@@ -3626,22 +3626,11 @@ out:
 	return ret;
 }
 
-#ifdef CONFIG_BTRFS_DUET_BACKUP
-static int mark_sent_range(u64 start, u64 len, void *bdevp)
-{
-	struct block_device *bdev = (struct block_device *)bdevp;
-
-	printk(KERN_INFO "mark_send_range: received %llu (%llu) for %p\n",
-		start, len, bdev);
-	return 0;
-}
-#endif /* CONFIG_BTRFS_DUET_BACKUP */
-
 /*
  * Read some bytes from the current inode/file and send a write command to
  * user space.
  */
-static int send_write(struct send_ctx *sctx, u64 offset, u32 len)
+static int __send_write(struct send_ctx *sctx, u64 offset, u32 len)
 {
 	int ret = 0;
 	struct fs_path *p;
@@ -3659,12 +3648,6 @@ verbose_printk("btrfs: send_write offset=%llu, len=%d\n", offset, len);
 			ret = num_read;
 		goto out;
 	}
-
-#ifdef CONFIG_BTRFS_DUET_BACKUP
-	/* Register the bytes we sent with duet */
-	if (btrfs_ino_to_physical(sctx->send_root->fs_info, sctx->cur_ino,
-				offset, len, mark_sent_range))
-#endif /* CONFIG_BTRFS_DUET_BACKUP */
 
 	ret = begin_cmd(sctx, BTRFS_SEND_C_WRITE);
 	if (ret < 0)
@@ -3686,6 +3669,140 @@ out:
 	if (ret < 0)
 		return ret;
 	return num_read;
+}
+
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+struct write_range_ctx {
+	u64 unset_iofft;
+	u64 unset_pofft;
+	u64 unset_len;	/* interval should be contiguous in p- and i- level */
+	struct block_device *unset_bdev;
+	u64 processed_bytes;
+	struct send_ctx *sctx;
+	int done;
+};
+
+static int find_unset_range(u64 start, u64 len, void *bdevp, void *privdata) {
+	struct block_device *bdev = (struct block_device *)bdevp;
+	struct write_range_ctx *wrctx = (struct write_range_ctx *)privdata;
+	int ret = 0;
+	u64 cur_lbn = start;
+	u64 cur_len = len;
+	int taskid = wrctx->sctx->taskid;
+	u64 blksize = wrctx->sctx->send_root->fs_info->sb->s_blocksize;
+						/* Go deep or go home */
+
+	/* If we were called before and found a contiguous range,
+	 * stop here to avoid breaking contiguity in both i- and p-level */
+	if (wrctx->unset_len != 0)
+		goto done;
+
+	/* Skip the first few blocks that have not been processed */
+	while (cur_lbn < (cur_lbn + cur_len)) {
+		ret = duet_chk_done(taskid, bdev, cur_lbn, min(blksize,
+								cur_len));
+		if (ret == 1) {
+			wrctx->processed_bytes += min(blksize, cur_len);
+			cur_lbn += min(blksize, cur_len);
+			cur_len -= min(blksize, cur_len);
+		} else {
+			break;
+		}
+	}
+
+	if (ret == -1)
+		goto chk_fail;
+
+	while (cur_lbn < (cur_lbn + cur_len)) {
+		ret = duet_chk_done(taskid, bdev, cur_lbn, min(blksize,
+								cur_len));
+		if (ret == 0) {
+			if (wrctx->unset_len == 0) {
+				wrctx->unset_pofft = cur_lbn;
+				wrctx->unset_bdev = bdev;
+				wrctx->unset_iofft += wrctx->processed_bytes;
+			}
+			wrctx->unset_len += min(blksize, cur_len);
+			cur_lbn += min(blksize, cur_len);
+			cur_len -= min(blksize, cur_len);
+		} else {
+			break;
+		}
+	}
+
+	if (ret == -1)
+		goto chk_fail;
+
+	if (cur_len == 0)
+		wrctx->done = 1;
+
+done:
+	return ret;
+
+chk_fail:
+	printk(KERN_ERR "find_unset_range: duet_chk_done failed\n");
+	return ret;
+}
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
+
+static int send_write(struct send_ctx *sctx, u64 offset, u32 len) {
+	int ret, num;
+	u64 cur_offt = offset;
+	u64 cur_len = len;
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+	struct write_range_ctx wrctx;
+
+	memset(&wrctx, 0, sizeof(wrctx));
+	wrctx.sctx = sctx;
+
+again:
+	wrctx.unset_iofft = cur_offt;
+	wrctx.unset_pofft = 0;
+	wrctx.unset_len = 0;
+	wrctx.unset_bdev = NULL;
+
+	/* Find the longest contiguous range that has not been sent yet,
+	 * starting from cur_offt, and up to cur_len */
+	ret = btrfs_ino_to_physical(sctx->send_root->fs_info, sctx->cur_ino,
+				cur_offt, cur_len, find_unset_range, &wrctx);
+	if (ret) {
+		printk(KERN_ERR "duet: failed to find an unset contiguous "
+			"range to write at [%llu, %llu] for task #%d\n",
+			cur_offt, cur_offt+cur_len, sctx->taskid);
+		goto out;
+	}
+
+	if (wrctx.unset_len) {
+		/* Process this unset range */
+		num = __send_write(sctx, wrctx.unset_iofft, wrctx.unset_len);
+		if (num <= 0) {
+			printk(KERN_ERR "__sent_write failed i%llu, p%llu "
+				"(%llub)\n", wrctx.unset_iofft,
+				wrctx.unset_pofft, wrctx.unset_len);
+			ret = (num < 0) ? num : -1;
+			goto out;
+		}
+
+		/* Mark the processed bytes */
+		ret = duet_mark_done(sctx->taskid, wrctx.unset_bdev,
+						wrctx.unset_pofft, num);
+		if (ret) {
+			printk(KERN_ERR "duet: failed to mark contiguous range"
+				" i%llu, p%llu, (%llub)\n", wrctx.unset_iofft,
+				wrctx.unset_pofft, wrctx.unset_len);
+			goto out;
+		}
+
+		cur_offt += num;
+		if (cur_offt < offset + len)
+			goto again;
+	}
+#else
+	ret = __send_write(sctx, offset, len);
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
+
+out:
+	return ret;
 }
 
 /*
