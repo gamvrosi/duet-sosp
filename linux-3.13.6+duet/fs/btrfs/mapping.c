@@ -131,10 +131,18 @@ out:
 	return ret < 0 ? ret : 0;
 }
 
-static int __find_extent_obj(struct btrfs_root *root, struct btrfs_key *key,
-			struct btrfs_file_extent_item *extent)
+/*
+ * Find the data item referenced in the metadata tree, compute and return the
+ * i-range for this file
+ */
+static int __find_extent_irange(struct btrfs_root *root, u64 ino, u64 ext_offt,
+				u64 vstart, u64 vofft, u64 *iofft)
 {
+	struct btrfs_key key;
 	struct btrfs_path *path;
+	struct btrfs_file_extent_item *fi;
+	struct extent_buffer *l;
+	u64 istart;
 	int ret = 0;
 
 	path = btrfs_alloc_path();
@@ -148,37 +156,128 @@ static int __find_extent_obj(struct btrfs_root *root, struct btrfs_key *key,
 	path->search_commit_root = 1;
 	path->skip_locking = 1;
 
-	ret = btrfs_search_slot(NULL, root, key, path, 0, 0);
+	key.objectid = ino;
+	key.type = BTRFS_EXTENT_DATA_KEY;
+	key.offset = ext_offt;
+
+#ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
+	printk(KERN_DEBUG "__iterate_range_items looking for extent (%llu %u "
+		"%llu)\n", key.objectid, key.type, key.offset);
+#endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
+
+	ret = btrfs_search_slot(NULL, root, &key, path, 0, 0);
 	if (ret != 0) {
 		ret = -ENOENT;
 		goto out;
 	}
 
-	extent = btrfs_item_ptr(path->nodes[0], path->slots[0],
-				struct btrfs_file_extent_item);
+	l = path->nodes[0];
+	fi = btrfs_item_ptr(l, path->slots[0], struct btrfs_file_extent_item);
 
+	/*
+	 * We have a v-range that is contained within an extent. Now we need
+	 * to transform it to the i-range of the file. We will do this by
+	 * looking where the file extent data item starts within the extent,
+	 * and then offset our range in the original extent using that.
+	 *
+	 * This is simple because we know that istart >= ext_offt (the inode
+	 * references this extent somewhere in [0, size] bytes), and vofft >=
+	 * istart (because otherwise we wouldn't have found this extent/offt
+	 * key to begin with).
+	 *
+	 * We further assume we will never get here twice for an extent. This
+	 * would only be possible if two ranges in the same extent were ref'd
+	 * separately by the same inode. However, if that were to happen, the
+	 * virtual and physical ranges would not be contiguous, so we'll have
+	 * separated them further up the road.
+	 */
+	istart = btrfs_file_extent_offset(l, fi);
+	*iofft = ext_offt + (vofft - vstart) - istart;
 out:
 	btrfs_free_path(path);
 	return ret;
 }
 
+/* Go over all refs for this extent item, check if they belong to
+ * the given root, and return each irange separately */
+static int __extrefs_to_iranges(struct btrfs_extent_item *ei,
+				struct extent_buffer *l, int slot,
+				struct btrfs_root *root, u64 vstart,
+				u64 vofft, u64 vlen, iterate_ranges_t iterate,
+				void *privdata)
+{
+	struct btrfs_extent_inline_ref *iref;
+	struct btrfs_extent_data_ref *dref;
+	unsigned long ptr, end;
+	u64 ino, iofft;
+	int ret=0, found=0;
+
+	/* Go over all refs for this extent and check if they belong
+	 * to the given root */
+	iref = (struct btrfs_extent_inline_ref *)(ei + 1);
+	ptr = (unsigned long)iref;
+	end = (unsigned long)ei + btrfs_item_size_nr(l, slot);
+	while (ptr < end) {
+		int type;
+		u64 offset;
+
+		iref = (struct btrfs_extent_inline_ref *)ptr;
+		type = btrfs_extent_inline_ref_type(l, iref);
+		offset = btrfs_extent_inline_ref_offset(l, iref);
+
+		if (type == BTRFS_EXTENT_DATA_REF_KEY) {
+			dref = (struct btrfs_extent_data_ref *)(&iref->offset);
+
+			found = 1;
+			/* Get the i-range for this extref */
+			ino = btrfs_extent_data_ref_objectid(l, dref),
+			ret = __find_extent_irange(root, ino,
+					btrfs_extent_data_ref_offset(l, dref),
+					vstart, vofft, &iofft);
+			if (ret == -ENOENT)
+				goto next;
+			else if (ret)
+				goto out;
+
+			found = 1;
+			
+#ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
+			printk(KERN_INFO "Synergy found: vstart %llu, "
+				"vofft %llu, vlen %llu, ino %llu, iofft %llu, "
+				"ilen %llu\n", vstart, vofft, vlen, ino,
+				iofft, vlen);
+#endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
+
+			if (iterate)
+				iterate(iofft, vlen, (void *)&ino, privdata);
+		}
+
+next:
+		ptr += btrfs_extent_inline_ref_size(type);
+	}
+
+	if (!found) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+out:
+	return ret;
+}
+
 /* The v-range given is assumed to belong in the same device extent */
-static int __iterate_range_items(struct btrfs_fs_info *fs_info, u64 vofft,
+static int __vrange_to_iranges(struct btrfs_fs_info *fs_info, u64 vofft,
 				u64 vlen, struct btrfs_root *root,
 				iterate_ranges_t iterate, void *privdata)
 {
 	struct btrfs_root *extroot = fs_info->extent_root;
-	struct btrfs_key key, ekey;
+	struct btrfs_key key;
 	struct btrfs_path *path;
 	struct extent_buffer *l;
 	struct btrfs_extent_item *ei;
-	struct btrfs_extent_inline_ref *iref;
-	struct btrfs_extent_data_ref *dref;
-	struct btrfs_file_extent_item *extent = NULL;
-	unsigned long ptr, end;
 	u64 cur_vlen, cur_vofft;
 	u64 ext_size, ext_len;
-	int found, slot, ret=0;
+	int slot, ret=0;
 
 	path = btrfs_alloc_path();
 	if (!path)
@@ -200,7 +299,7 @@ static int __iterate_range_items(struct btrfs_fs_info *fs_info, u64 vofft,
 		btrfs_release_path(path);
 
 #ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
-		printk(KERN_DEBUG "__iterate_range_items: vofft = %llu\n",
+		printk(KERN_DEBUG "__vrange_to_iranges: vofft = %llu\n",
 			cur_vofft);
 #endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
 
@@ -220,7 +319,7 @@ static int __iterate_range_items(struct btrfs_fs_info *fs_info, u64 vofft,
 		btrfs_item_key_to_cpu(l, &key, slot);
 
 #ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
-		printk(KERN_DEBUG "__iterate_range_items processing (%llu %u "
+		printk(KERN_DEBUG "__vrange_to_iranges processing (%llu %u "
 			"%llu)\n", key.objectid, key.type, key.offset);
 #endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
 
@@ -256,67 +355,16 @@ static int __iterate_range_items(struct btrfs_fs_info *fs_info, u64 vofft,
 			goto next;
 
 #ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
-		printk(KERN_DEBUG "__iterate_range_items: data extent found\n");
+		printk(KERN_DEBUG "__vrange_to_iranges: data extent found\n");
 #endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
 
-		/* Go over all refs for this extent and check if they belong
-		 * to the given root */
-		iref = (struct btrfs_extent_inline_ref *)(ei + 1);
-		ptr = (unsigned long)iref;
-		end = (unsigned long)ei + btrfs_item_size_nr(l, slot);
-		found = 0;
-		while (ptr < end) {
-			int type;
-			u64 offset;
-
-			iref = (struct btrfs_extent_inline_ref *)ptr;
-			type = btrfs_extent_inline_ref_type(l, iref);
-			offset = btrfs_extent_inline_ref_offset(l, iref);
-
-			if (type == BTRFS_EXTENT_DATA_REF_KEY) {
-				dref = (struct btrfs_extent_data_ref *)
-							(&iref->offset);
-
-				found = 1;
-				ekey.objectid =
-					btrfs_extent_data_ref_objectid(l,
-									dref);
-				ekey.type = BTRFS_EXTENT_DATA_KEY;
-				ekey.offset = btrfs_extent_data_ref_offset(l,
-									dref);
-
-#ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
-				printk(KERN_DEBUG "__iterate_range_items "
-					"looking for extent (%llu %u %llu)\n",
-					ekey.objectid, ekey.type, ekey.offset);
-#endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
-
-				/* Try to find the data extent in given tree */
-				ret = __find_extent_obj(root, &ekey, extent);
-				if (ret)
-					goto out;
-				else {
-					found = 1;
-					break;
-				}
-			}
-
-			ptr += btrfs_extent_inline_ref_size(type);
-		}
-
-		if (!found) {
-			ret = -EINVAL;
+		ret = __extrefs_to_iranges(ei, l, slot, root, key.objectid,
+					cur_vofft, ext_len, iterate, privdata);
+		if (ret) {
+			printk(KERN_ERR "__vrange_to_iranges: failed to "
+				"process extrefs\n");
 			goto out;
 		}
-
-		if (iterate)
-			iterate(cur_vofft, ext_len, (void *)extent, privdata);
-
-#ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
-		printk(KERN_INFO "Synergy found w/ extent (%llu %u %llu), for "
-			"v-range [%llu, %llu]\n", ekey.objectid, ekey.type,
-			ekey.offset, cur_vofft, cur_vofft + ext_len);
-#endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
 
 next:
 		btrfs_release_path(path);
@@ -335,10 +383,9 @@ out:
  * metadata items that correspond to the range, and call the provided
  * callback for each
  */
-int btrfs_physical_to_items(struct btrfs_fs_info *fs_info,
-			struct block_device *bdev, u64 pofft, u64 plen,
-			struct btrfs_root *root, iterate_ranges_t iterate,
-			void *privdata)
+int btrfs_phy_to_ino(struct btrfs_fs_info *fs_info, struct block_device *bdev,
+			u64 pofft, u64 plen, struct btrfs_root *root,
+			iterate_ranges_t iterate, void *privdata)
 {
 	struct btrfs_device *dev;
 	u64 cur_pofft, cur_plen, vofft, vlen;
@@ -349,13 +396,13 @@ int btrfs_physical_to_items(struct btrfs_fs_info *fs_info,
 
 	dev = __find_device(fs_info, bdev, 0);
 	if (!dev) {
-		printk(KERN_ERR "btrfs_physical_to_items: device not found\n");
+		printk(KERN_ERR "btrfs_phy_to_ino: device not found\n");
 		ret = -ENODEV;
 		goto out;
 	}
 
 #ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
-	printk(KERN_DEBUG "btrfs_physical_to_items: device id %llu, size %llu.\n",
+	printk(KERN_DEBUG "btrfs_phy_to_ino: device id %llu, size %llu.\n",
 		dev->devid, dev->total_bytes);
 #endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
 
@@ -365,17 +412,17 @@ int btrfs_physical_to_items(struct btrfs_fs_info *fs_info,
 	while (cur_plen) {
 		ret = __find_dev_extent_by_paddr(dev, cur_pofft, &de_ctx);
 		if (ret) {
-			printk(KERN_ERR "btrfs_physical_to_items: dev extent not found\n");
+			printk(KERN_ERR "btrfs_phy_to_ino: dev extent not found\n");
 			goto out;
 		}
 
 #ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
-		printk(KERN_DEBUG "btrfs_physical_to_items: dev extent pstart %llu, "
+		printk(KERN_DEBUG "btrfs_phy_to_ino: dev extent pstart %llu, "
 			"vstart %llu, len %llu\n",
 			de_ctx.pstart, de_ctx.vstart, de_ctx.len);
 #endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
 
-		/* Adjust pofft and plen to this device extent */
+		/* Adjust p-offset and p-length to this device extent */
 		/* TODO: Support RAID schemes */
 		vofft = de_ctx.vstart + (cur_pofft - de_ctx.pstart);
 		if (cur_plen > de_ctx.pstart + de_ctx.len - cur_pofft)
@@ -383,10 +430,10 @@ int btrfs_physical_to_items(struct btrfs_fs_info *fs_info,
 		else
 			vlen = cur_plen;
 
-		ret = __iterate_range_items(fs_info, vofft, vlen, root,
+		ret = __vrange_to_iranges(fs_info, vofft, vlen, root,
 							iterate, privdata);
 		if (ret) {
-			printk(KERN_DEBUG "btrfs_physical_to_items: item iteration failed\n");
+			printk(KERN_DEBUG "btrfs_phy_to_ino: item iteration failed\n");
 			goto out;
 		}
 
@@ -399,69 +446,23 @@ out:
 }
 
 /*
- * Translates a chunk's virtual range in one or more physical ranges. Note that
- * an extent may not span chunks, but a chunk may span physical devices.
- */
-static int __iter_chunk_ranges(struct btrfs_fs_info *fs_info, u64 chunk_offt,
-		struct btrfs_chunk *chunk, struct extent_buffer *l, u64 vofft,
-		u64 vlen, iterate_ranges_t iterate, void *privdata)
-{
-	struct btrfs_stripe *stripe;
-	struct btrfs_device *device;
-	int i, ret=0;
-	u64 pofft;
-	int num_stripes = btrfs_chunk_num_stripes(l, chunk);
-
-	if (btrfs_chunk_type(l, chunk) & BTRFS_FS_MAPPING_UNSUPP_RAID) {
-		/* TODO: Support RAID schemes */
-		return -EINVAL;
-	} else { /* DUP, or SINGLE */
-		/* Process every stripe */
-		for (i = 0; i < num_stripes; i++) {
-			stripe = btrfs_stripe_nr(chunk, i);
-
-			/* Find the device for this chunk */
-			device = __find_device(fs_info, NULL,
-					btrfs_stripe_devid_nr(l, chunk, i));
-
-			/* To get the physical offset, just count from the
-			 * beginning of the stripe. No need to change the
-			 * length, we're still staying in the chunk */
-			pofft = btrfs_stripe_offset_nr(l, chunk, i) +
-				(vofft - chunk_offt);
-
-#ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
-			printk(KERN_DEBUG "__iter_chunk_ranges: calling "
-				"iterate for pofft %llu plen %llu\n",
-				pofft, vlen);
-#endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
-
-			ret = iterate(pofft, vlen, (void *)device->bdev,
-								privdata);
-			if (ret)
-				goto out;
-		}
-	}
-
-out:
-	return ret;
-}
-
-/*
  * Finds all the physical ranges in the virtual range [@vofft, @vofft+@vlen].
  * The virtual range is assumed to be contained within one extent (and as
- * a result, the same chunk.
+ * a result, the same chunk).
  */
-static int __iter_physical_ranges(struct btrfs_fs_info *fs_info, u64 vofft,
-			u64 vlen, iterate_ranges_t iterate, void *privdata)
+static int __vrange_to_pranges(struct btrfs_fs_info *fs_info,
+				struct btrfs_root *root, u64 vofft, u64 vlen,
+				iterate_ranges_t iterate, void *privdata)
 {
-	struct btrfs_root *fs_root = fs_info->chunk_root;
+	struct btrfs_root *chunk_root = fs_info->chunk_root;
 	struct btrfs_key key;
 	struct btrfs_path *path;
-	struct btrfs_chunk *chunk;
 	struct extent_buffer *l;
-	u64 chunk_len, chunk_offt;
-	int ret = 0;
+	struct btrfs_chunk *chunk;
+	struct btrfs_stripe *stripe;
+	struct btrfs_device *device;
+	u64 chunk_len, chunk_offt, pofft;
+	int i, num_stripes, ret = 0;
 
 	path = btrfs_alloc_path();
 	if (!path)
@@ -476,12 +477,11 @@ static int __iter_physical_ranges(struct btrfs_fs_info *fs_info, u64 vofft,
 	key.offset = vofft;
 
 #ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
-	printk(KERN_DEBUG "__iter_physical_ranges: looking for (%llu %u %llu)"
-		" vofft %llu vlen %llu\n", key.objectid, key.type, key.offset,
-		vofft, vlen);
+	printk(KERN_DEBUG "__vrange_to_pranges looking for (%llu %u %llu)"
+		" vofft %llu", key.objectid, key.type, key.offset, vofft);
 #endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
 
-	ret = btrfs_search_slot_for_read(fs_root, &key, path, 0, 0);
+	ret = btrfs_search_slot_for_read(chunk_root, &key, path, 0, 0);
 	if (ret != 0)
 		goto not_found;
 
@@ -489,7 +489,7 @@ static int __iter_physical_ranges(struct btrfs_fs_info *fs_info, u64 vofft,
 	btrfs_item_key_to_cpu(l, &key, path->slots[0]);
 
 	if (key.objectid != BTRFS_FIRST_CHUNK_TREE_OBJECTID ||
-	    key.type != BTRFS_CHUNK_ITEM_KEY)
+					key.type != BTRFS_CHUNK_ITEM_KEY)
 		goto not_found;
 
 	chunk = btrfs_item_ptr(l, path->slots[0], struct btrfs_chunk);
@@ -500,12 +500,48 @@ static int __iter_physical_ranges(struct btrfs_fs_info *fs_info, u64 vofft,
 		goto not_found;
 
 #ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
-	printk(KERN_DEBUG "__iter_physical_ranges: found the chunk!\n");
+	printk(KERN_DEBUG "__vrange_to_pranges found the chunk!\n");
 #endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
 
-	ret = __iter_chunk_ranges(fs_info, chunk_offt, chunk, l, vofft, vlen,
-							iterate, privdata);
+	/*
+	 * Translate the chunk's virtual range to one or more physical ranges.
+	 * Note that an extent may not span chunks (although a chunk may span
+	 * physical devices under RAID schemes).
+	 */
+	num_stripes = btrfs_chunk_num_stripes(l, chunk);
 
+	if (btrfs_chunk_type(l, chunk) & BTRFS_FS_MAPPING_UNSUPP_RAID) {
+		/* TODO: Support RAID schemes */
+		return -EINVAL;
+	} else { /* DUP, or SINGLE */
+		/* Process every stripe */
+		for (i = 0; i < num_stripes; i++) {
+			stripe = btrfs_stripe_nr(chunk, i);
+
+			/* Find the device for this chunk */
+			device = __find_device(fs_info, NULL,
+					btrfs_stripe_devid_nr(l, chunk, i));
+
+			/*
+			 * To get the p-offset, count from the beginning of the
+			 * stripe. Length's unaffected, as we stay in the chunk
+			 */
+			pofft = btrfs_stripe_offset_nr(l, chunk, i) +
+				(vofft - chunk_offt);
+
+#ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
+			printk(KERN_DEBUG "__vrange_to_pranges: callback for "
+				"pofft %llu plen %llu\n", pofft, vlen);
+#endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
+
+			ret = iterate(pofft, vlen, (void *)device->bdev,
+								privdata);
+			if (ret)
+				goto out;
+		}
+	}
+
+out:
 	btrfs_free_path(path);
 	return ret;
 
@@ -515,15 +551,17 @@ not_found:
 }
 
 /*
- * A bit scarier than btrfs_get_extent, this finds the mapping of a virtual
- * range to a physical one. Since the resulting physical ranges might be
- * discontiguous, we discover each separately, and call the given callback
- * function.
+ * A bit scarier than btrfs_get_extent, this finds the mapping of a range at
+ * the inode level, to one at the physical level. To get from one to the other,
+ * we first need to go through the virtual level of extents. Obviously, there
+ * are no guarantees of contiguity between the levels, so we will invoke the
+ * given callback on each physical contiguous range separately. Finally, the
+ * node must belong to the given root.
  */
-int btrfs_ino_to_physical(struct btrfs_fs_info *fs_info, u64 ino, u64 iofft,
-			u64 ilen, iterate_ranges_t iterate, void *privdata)
+int btrfs_ino_to_phy(struct btrfs_fs_info *fs_info, struct btrfs_root *root,
+			u64 ino, u64 iofft, u64 ilen, iterate_ranges_t iterate,
+			void *privdata)
 {
-	struct btrfs_root *fs_root = fs_info->fs_root;
 	struct btrfs_key key;
 	struct btrfs_path *path;
 	struct extent_buffer *l;
@@ -547,18 +585,18 @@ int btrfs_ino_to_physical(struct btrfs_fs_info *fs_info, u64 ino, u64 iofft,
 	key.offset = iofft;
 
 #ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
-	printk(KERN_DEBUG "btrfs_ino_to_physical: looking for (%llu %u %llu). "
-		"iofft %llu, ilen %llu\n", key.objectid, key.type, key.offset,
+	printk(KERN_DEBUG "btrfs_ino_to_phy: looking for (%llu %u %llu), iofft"
+		" %llu, ilen %llu\n", key.objectid, key.type, key.offset,
 		iofft, ilen);
 #endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
 
-	ret = btrfs_search_slot_for_read(fs_root, &key, path, 0, 0);
+	ret = btrfs_search_slot_for_read(root, &key, path, 0, 0);
 	if (ret != 0) {
 		ret = -ENOENT;
 		goto out;
 	}
 
-	/* Iterate over all extents corresponding to the given v-range */
+	/* Iterate over all extents corresponding to the given i-range */
 	cur_iofft = iofft;
 	cur_ilen = ilen;
 
@@ -567,9 +605,9 @@ int btrfs_ino_to_physical(struct btrfs_fs_info *fs_info, u64 ino, u64 iofft,
 		slot = path->slots[0];
 		if (slot >= btrfs_header_nritems(l)) {
 #ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
-			printk(KERN_DEBUG "btrfs_ino_to_physical: EOLeaf\n");
+			printk(KERN_DEBUG "btrfs_ino_to_phy: end of leaf\n");
 #endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
-			ret = btrfs_next_leaf(fs_root, path);
+			ret = btrfs_next_leaf(root, path);
 			if (ret == 0) {
 				continue;
 			} else {
@@ -580,8 +618,8 @@ int btrfs_ino_to_physical(struct btrfs_fs_info *fs_info, u64 ino, u64 iofft,
 		btrfs_item_key_to_cpu(l, &key, slot);
 
 #ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
-		printk(KERN_DEBUG "btrfs_ino_to_physical: processing (%llu, "
-			"%u, %llu)\n", key.objectid, key.type, key.offset);
+		printk(KERN_DEBUG "btrfs_ino_to_phy: processing (%llu, %u, "
+			"%llu)\n", key.objectid, key.type, key.offset);
 #endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
 
 		if (key.objectid != ino || key.type != BTRFS_EXTENT_DATA_KEY) {
@@ -593,7 +631,7 @@ int btrfs_ino_to_physical(struct btrfs_fs_info *fs_info, u64 ino, u64 iofft,
 		fi = btrfs_item_ptr(l, slot, struct btrfs_file_extent_item);
 		if (btrfs_file_extent_type(l, fi) == BTRFS_FILE_EXTENT_INLINE) {
 			/* TODO: Support inline extents */
-			//l_len = btrfs_file_extent_inline_len(l, fi);
+			//len = btrfs_file_extent_inline_len(l, fi);
 			ret = 0;
 			goto out;
 		}
@@ -604,7 +642,7 @@ int btrfs_ino_to_physical(struct btrfs_fs_info *fs_info, u64 ino, u64 iofft,
 			goto next;
 
 #ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
-		printk(KERN_DEBUG "btrfs_ino_to_physical: found the right extent\n");
+		printk(KERN_DEBUG "btrfs_ino_to_phy: found the right extent\n");
 #endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
 
 		/* Find the v-length starting from the v-offset */
@@ -622,7 +660,7 @@ int btrfs_ino_to_physical(struct btrfs_fs_info *fs_info, u64 ino, u64 iofft,
 		}
 
 		/* Process this v-range */
-		if (__iter_physical_ranges(fs_info, vofft, vlen, iterate,
+		if (__vrange_to_pranges(fs_info, root, vofft, vlen, iterate,
 								privdata)) {
 			ret = -ENOENT;
 			goto out;

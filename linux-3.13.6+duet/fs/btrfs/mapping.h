@@ -28,17 +28,17 @@ struct btrfs_dev_extent_ctx {
 };
 
 /*
- * Used by both logical-to-physical and physical-to-logical mappers to
- * iterate through discovered contiguous ranges:
- * - logical-to-physical args: start, length, bdev ptr, and privdata
- * - physical-to-logical args: start, length, file_extent ptr, and privdata
+ * Used by both ino-to-phy and phy-to-ino mappers to iterate through
+ * discovered contiguous ranges:
+ * - file-to-physical args: pstart, plength, bdev ptr, and original privdata
+ * - physical-to-file args: istart, ilength, ino, and original privdata
  */
 typedef int (*iterate_ranges_t)(u64, u64, void *, void *);
 
-int btrfs_physical_to_items(struct btrfs_fs_info *fs_info,
-			struct block_device *bdev, u64 p_start, u64 len,
-			struct btrfs_root *root, iterate_ranges_t iterate,
+int btrfs_phy_to_ino(struct btrfs_fs_info *fs_info, struct block_device *bdev,
+			u64 p_start, u64 len, struct btrfs_root *root,
+			iterate_ranges_t iterate, void *privdata);
+int btrfs_ino_to_phy(struct btrfs_fs_info *fs_info, struct btrfs_root *root,
+			u64 ino, u64 iofft, u64 ilen, iterate_ranges_t iterate,
 			void *privdata);
-int btrfs_ino_to_physical(struct btrfs_fs_info *fs_info, u64 ino, u64 iofft,
-			u64 ilen, iterate_ranges_t iterate, void *privdata);
 #endif /* __BTRFS_MAPPING_ */

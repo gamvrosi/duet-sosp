@@ -3763,8 +3763,9 @@ again:
 
 	/* Find the longest contiguous range that has not been sent yet,
 	 * starting from cur_offt, and up to cur_len */
-	ret = btrfs_ino_to_physical(sctx->send_root->fs_info, sctx->cur_ino,
-				cur_offt, cur_len, find_unset_range, &wrctx);
+	ret = btrfs_ino_to_phy(sctx->send_root->fs_info, sctx->send_root,
+				sctx->cur_ino, cur_offt, cur_len,
+				find_unset_range, &wrctx);
 	if (ret) {
 		printk(KERN_ERR "duet: failed to find an unset contiguous "
 			"range to write at [%llu, %llu] for task #%d\n",
