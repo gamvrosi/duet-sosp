@@ -73,10 +73,10 @@ static void duet_bio_endio(struct bio *bio, int err)
 	__u32 len;
 	struct block_device *bdev;
 
-	/* Grab data from bio */
+	/* Grab data from bio -- keep in mind that bi_sector/size advance! */
 	private = bio->bi_private;
-	lbn = bio->bi_sector << 9;
-	len = private->size;
+	len = private->size - bio->bi_size; /* transf = orig - remaining */
+	lbn = (bio->bi_sector << 9) - len; /* orig_offt = new_offt - transf */
 	bdev = bio->bi_bdev;
 	event_code = private->event_code;
 
@@ -152,15 +152,16 @@ static void duet_ba_hook(__u8 event_code, struct bio *bio)
 /* Function that is paired to submit_bio_wait calls. We assume that we get
  * called after submit_bio_wait returns, so we can go ahead and call
  * duet_handle_event with the right parameters. */
-static void duet_bw_hook(__u8 event_code, struct bio *bio)
+static void duet_bw_hook(__u8 event_code, struct duet_bw_hook_data *hook_data)
 {
+	struct bio *bio = hook_data->bio;
 	__u64 lbn;
 	__u32 len;
 	struct block_device *bdev;
 
 	/* Collect data from bio */
-	lbn = bio->bi_sector << 9;
-	len = bio->bi_size;
+	lbn = hook_data->offset;
+	len = (bio->bi_sector << 9) - lbn;
 	bdev = bio->bi_bdev;
 
 	/* Transfer control to the duet event handler */
@@ -210,7 +211,7 @@ void duet_hook(__u8 event_code, __u8 hook_type, void *hook_data)
 		printk(KERN_INFO "duet: Setting up BW hook (code %u)\n",
 			event_code);
 #endif /* CONFIG_DUET_DEBUG */
-		duet_bw_hook(event_code, (struct bio *)hook_data);
+		duet_bw_hook(event_code, (struct duet_bw_hook_data *)hook_data);
 		break;
 	case DUET_SETUP_HOOK_BH:
 #ifdef CONFIG_DUET_DEBUG

@@ -1665,6 +1665,9 @@ static int btrfsic_read_block(struct btrfsic_state *state,
 	unsigned int i;
 	u64 dev_bytenr;
 	int ret;
+#ifdef CONFIG_DUET_BTRFS
+	struct duet_bw_hook_data hook_data;
+#endif /* CONFIG_DUET_BTRFS */
 
 	BUG_ON(block_ctx->datav);
 	BUG_ON(block_ctx->pagev);
@@ -1734,8 +1737,10 @@ static int btrfsic_read_block(struct btrfsic_state *state,
 #ifdef CONFIG_DUET_DEBUG
 		printk(KERN_DEBUG "duet: hooking on btrfsic_read_block\n");
 #endif /* CONFIG_DUET_DEBUG */
+		hook_data.bio = bio;
+		hook_data.offset = dev_bytenr;
 		duet_hook(DUET_EVENT_BTRFS_READ, DUET_SETUP_HOOK_BW_END,
-			(void *)bio);
+			(void *)&hook_data);
 #endif /* CONFIG_DUET_BTRFS */
 
 		bio_put(bio);

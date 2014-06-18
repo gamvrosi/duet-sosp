@@ -35,6 +35,12 @@ enum {
 	DUET_SETUP_HOOK_BH,		/* async: submit_bh */
 };
 
+/* The special hook data struct needed for the darned submit_bio_wait */
+struct duet_bw_hook_data {
+	struct bio	*bio;
+	__u64		offset;
+};
+
 /* bio flag */
 #define BIO_DUET        22      /* duet has seen this bio */
 

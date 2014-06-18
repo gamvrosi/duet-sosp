@@ -4815,12 +4815,74 @@ out:
 }
 
 #ifdef CONFIG_BTRFS_DUET_BACKUP
+static int cb_send_o3_write(u64 istart, u64 ilen, void *inop, void *privdata)
+{
+	u64 ino = *((u64 *)inop);
+
+	printk(KERN_DEBUG "cb_send_o3_write on ino %llu, iofft %llu, ilen %llu\n",
+		ino, istart, ilen);
+	return 0;
+}
+
 static void btrfs_send_duet_handler(__u8 taskid, __u8 event_code,
 	struct block_device *bdev, __u64 lbn, __u32 len, void *privdata)
 {
-	printk(KERN_DEBUG "duet: caught %s event for send on [%llu, %llu].\n",
-		event_code & DUET_EVENT_BTRFS_WRITE ? "write" : "read",
-		lbn, lbn + len);
+	struct send_ctx *sctx = (struct send_ctx *)privdata;
+	struct write_range_ctx wrctx;
+	u64 cur_lbn, cur_len;
+
+	memset(&wrctx, 0, sizeof(wrctx));
+	wrctx.sctx = sctx;
+
+	switch(event_code) {
+	case DUET_EVENT_BTRFS_READ:
+		printk(KERN_DEBUG "duet: caught read on [%llu, %llu].\n",
+			lbn, lbn + len);
+
+		/* Loop until we've found all contiguous unset ranges */
+		cur_lbn = lbn;
+		cur_len = len;
+		while (cur_len && !wrctx.done) {
+			printk(KERN_DEBUG "duet: looking for unset ranges in "
+				"[%llu, %llu]\n", cur_lbn, cur_len);
+
+			memset(&wrctx, 0, sizeof(wrctx));
+			wrctx.sctx = sctx;
+
+			find_unset_range(cur_lbn, cur_len, (void *)bdev,
+							(void *)&wrctx);
+			printk(KERN_DEBUG
+				"wrctx.unset_iofft = %llu\n"
+				"wrctx.unset_pofft = %llu\n"
+				"wrctx.unset_len = %llu\n"
+				"wrctx.done = %d\n",
+				wrctx.unset_iofft, wrctx.unset_pofft,
+				wrctx.unset_len, wrctx.done);
+
+			if (!wrctx.unset_len)
+				break;
+
+			/* Send an o3 write for each i-range in p-range */
+			if (btrfs_phy_to_ino(sctx->send_root->fs_info, bdev,
+					cur_lbn, cur_len, sctx->send_root,
+					cb_send_o3_write, NULL)) {
+				printk(KERN_ERR "duet: failed to go over "
+					"i-ranges in given p-range\n");
+				return;
+			}
+
+			cur_len -= (cur_lbn + cur_len) -
+					(wrctx.unset_pofft + wrctx.unset_len);
+			cur_lbn = wrctx.unset_pofft + wrctx.unset_len;
+		}
+
+		printk(KERN_DEBUG "duet: done processing read event\n");
+		break;
+	default:
+		printk(KERN_ERR "duet: send handler received unknown event "
+			"code %u", event_code);
+		break;
+	}
 }
 #endif /* CONFIG_BTRFS_DUET_BACKUP */
 

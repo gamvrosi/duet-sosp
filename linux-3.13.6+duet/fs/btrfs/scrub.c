@@ -1701,6 +1701,9 @@ static void scrub_recheck_block(struct btrfs_fs_info *fs_info,
 				u16 csum_size)
 {
 	int page_num;
+#ifdef CONFIG_DUET_BTRFS
+	struct duet_bw_hook_data hook_data;
+#endif /* CONFIG_DUET_BTRFS */
 
 	sblock->no_io_error_seen = 1;
 	sblock->header_error = 0;
@@ -1736,8 +1739,10 @@ static void scrub_recheck_block(struct btrfs_fs_info *fs_info,
 #ifdef CONFIG_DUET_DEBUG
 		printk(KERN_DEBUG "duet: hooking on scrub_recheck_block\n");
 #endif /* CONFIG_DUET_DEBUG */
+		hook_data.bio = bio;
+		hook_data.offset = page->physical;
 		duet_hook(DUET_EVENT_BTRFS_READ, DUET_SETUP_HOOK_BW_END,
-			(void *)bio);
+							(void *)&hook_data);
 #endif /* CONFIG_DUET_BTRFS */
 
 		bio_put(bio);
@@ -1835,6 +1840,9 @@ static int scrub_repair_page_from_good_copy(struct scrub_block *sblock_bad,
 {
 	struct scrub_page *page_bad = sblock_bad->pagev[page_num];
 	struct scrub_page *page_good = sblock_good->pagev[page_num];
+#ifdef CONFIG_DUET_BTRFS
+	struct duet_bw_hook_data hook_data;
+#endif /* CONFIG_DUET_BTRFS */
 
 	BUG_ON(page_bad->page == NULL);
 	BUG_ON(page_good->page == NULL);
@@ -1877,8 +1885,10 @@ static int scrub_repair_page_from_good_copy(struct scrub_block *sblock_bad,
 #ifdef CONFIG_DUET_DEBUG
 		printk(KERN_DEBUG "duet: hooking on scrub_repair_page_from_good_copy\n");
 #endif /* CONFIG_DUET_DEBUG */
+		hook_data.bio = bio;
+		hook_data.offset = page_bad->physical;
 		duet_hook(DUET_EVENT_BTRFS_WRITE, DUET_SETUP_HOOK_BW_END,
-			(void *)bio);
+							(void *)&hook_data);
 #endif /* CONFIG_DUET_BTRFS */
 		bio_put(bio);
 	}
@@ -4472,6 +4482,9 @@ static int write_page_nocow(struct scrub_ctx *sctx,
 	struct bio *bio;
 	struct btrfs_device *dev;
 	int ret;
+#ifdef CONFIG_DUET_BTRFS
+	struct duet_bw_hook_data hook_data;
+#endif /* CONFIG_DUET_BTRFS */
 
 	dev = sctx->wr_ctx.tgtdev;
 	if (!dev)
@@ -4508,8 +4521,10 @@ leave_with_eio:
 #ifdef CONFIG_DUET_DEBUG
 	printk(KERN_DEBUG "duet: hooking on write_page_nocow\n");
 #endif /* CONFIG_DUET_DEBUG */
+	hook_data.bio = bio;
+	hook_data.offset = physical_for_dev_replace;
 	duet_hook(DUET_EVENT_BTRFS_WRITE, DUET_SETUP_HOOK_BW_END,
-		(void *)bio);
+							(void *)&hook_data);
 #endif /* CONFIG_DUET_BTRFS */
 
 	bio_put(bio);

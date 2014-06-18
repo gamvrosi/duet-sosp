@@ -1976,6 +1976,9 @@ int repair_io_failure(struct btrfs_fs_info *fs_info, u64 start,
 	struct btrfs_bio *bbio = NULL;
 	struct btrfs_mapping_tree *map_tree = &fs_info->mapping_tree;
 	int ret;
+#ifdef CONFIG_DUET_BTRFS
+	struct duet_bw_hook_data hook_data;
+#endif /* CONFIG_DUET_BTRFS */
 
 	ASSERT(!(fs_info->sb->s_flags & MS_RDONLY));
 	BUG_ON(!mirror_num);
@@ -2023,7 +2026,10 @@ int repair_io_failure(struct btrfs_fs_info *fs_info, u64 start,
 #ifdef CONFIG_DUET_DEBUG
 	printk(KERN_DEBUG "duet: hooking on repair_io_failure\n");
 #endif /* CONFIG_DUET_DEBUG */
-	duet_hook(DUET_EVENT_BTRFS_WRITE, DUET_SETUP_HOOK_BW_END, (void *)bio);
+	hook_data.bio = bio;
+	hook_data.offset = sector << 9;
+	duet_hook(DUET_EVENT_BTRFS_WRITE, DUET_SETUP_HOOK_BW_END,
+							(void *)&hook_data);
 #endif /* CONFIG_DUET_BTRFS */
 
 	printk_ratelimited_in_rcu(KERN_INFO "btrfs read error corrected: ino %lu off %llu "

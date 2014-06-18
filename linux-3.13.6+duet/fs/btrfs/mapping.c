@@ -15,6 +15,7 @@
  * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
  * Boston, MA 021110-1307, USA.
  */
+#include <linux/genhd.h>
 #include "ctree.h"
 #include "volumes.h"
 #include "mapping.h"
@@ -38,7 +39,15 @@ static struct btrfs_device *__find_device(struct btrfs_fs_info *fs_info,
 	cur_devices = fs_info->fs_devices;
 	while (cur_devices) {
 		list_for_each_entry(device, &cur_devices->devices, dev_list) {
-			if ((bdev && device->bdev == bdev) ||
+#ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
+			printk(KERN_DEBUG "__find_device: device->bdev %p, "
+				"device->bdev->bd_contains %p, bdev %p, "
+				"bdev->bd_contains %p\n", device->bdev,
+				device->bdev ? device->bdev->bd_contains : NULL,
+				bdev, bdev ? bdev->bd_contains : NULL);
+#endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
+			if ((bdev && (device->bdev->bd_contains == bdev ||
+			    device->bdev == bdev)) ||
 			    (!bdev && device->devid == devid))
 				return device;
 		}
@@ -135,8 +144,8 @@ out:
  * Find the data item referenced in the metadata tree, compute and return the
  * i-range for this file
  */
-static int __find_extent_irange(struct btrfs_root *root, u64 ino, u64 ext_offt,
-				u64 vstart, u64 vofft, u64 *iofft)
+static int __find_extent_irange(struct btrfs_root *root, u64 vstart, u64 vofft,
+				u64 ino, u64 *iofft)
 {
 	struct btrfs_key key;
 	struct btrfs_path *path;
@@ -158,10 +167,10 @@ static int __find_extent_irange(struct btrfs_root *root, u64 ino, u64 ext_offt,
 
 	key.objectid = ino;
 	key.type = BTRFS_EXTENT_DATA_KEY;
-	key.offset = ext_offt;
+	key.offset = *iofft;
 
 #ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
-	printk(KERN_DEBUG "__iterate_range_items looking for extent (%llu %u "
+	printk(KERN_DEBUG "__find_extent_irange looking for extent (%llu %u "
 		"%llu)\n", key.objectid, key.type, key.offset);
 #endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
 
@@ -180,7 +189,7 @@ static int __find_extent_irange(struct btrfs_root *root, u64 ino, u64 ext_offt,
 	 * looking where the file extent data item starts within the extent,
 	 * and then offset our range in the original extent using that.
 	 *
-	 * This is simple because we know that istart >= ext_offt (the inode
+	 * This is simple because we know that istart >= *iofft (the inode
 	 * references this extent somewhere in [0, size] bytes), and vofft >=
 	 * istart (because otherwise we wouldn't have found this extent/offt
 	 * key to begin with).
@@ -192,11 +201,18 @@ static int __find_extent_irange(struct btrfs_root *root, u64 ino, u64 ext_offt,
 	 * separated them further up the road.
 	 */
 	istart = btrfs_file_extent_offset(l, fi);
-	*iofft = ext_offt + (vofft - vstart) - istart;
+	*iofft += (vofft - vstart) - istart;
 out:
 	btrfs_free_path(path);
 	return ret;
 }
+
+#define BTRFS_MAPPING_MAX_BACKREFS 256
+
+struct extref_ctx {
+	u64 ino;
+	u64 iofft;
+};
 
 /* Go over all refs for this extent item, check if they belong to
  * the given root, and return each irange separately */
@@ -208,9 +224,15 @@ static int __extrefs_to_iranges(struct btrfs_extent_item *ei,
 {
 	struct btrfs_extent_inline_ref *iref;
 	struct btrfs_extent_data_ref *dref;
+	struct extref_ctx *processed_refs;
 	unsigned long ptr, end;
 	u64 ino, iofft;
-	int ret=0, found=0;
+	int i, cur_processed=0, ret=0;
+
+	processed_refs = kcalloc(BTRFS_MAPPING_MAX_BACKREFS,
+					sizeof(struct extref_ctx), GFP_NOFS);
+	if (!processed_refs)
+		return -ENOMEM;
 
 	/* Go over all refs for this extent and check if they belong
 	 * to the given root */
@@ -228,19 +250,32 @@ static int __extrefs_to_iranges(struct btrfs_extent_item *ei,
 		if (type == BTRFS_EXTENT_DATA_REF_KEY) {
 			dref = (struct btrfs_extent_data_ref *)(&iref->offset);
 
-			found = 1;
+			ino = btrfs_extent_data_ref_objectid(l, dref);
+			iofft = btrfs_extent_data_ref_offset(l, dref);
+			/* Check if we already found this backref */
+			for (i = 0; i < cur_processed; i++) {
+				if (processed_refs[i].ino == ino &&
+				    processed_refs[i].iofft == iofft)
+					goto next;
+			}
+
+			if (cur_processed == BTRFS_MAPPING_MAX_BACKREFS) {
+				ret = -EFAULT;
+				goto out;
+			}
+
+			processed_refs[cur_processed].ino = ino;
+			processed_refs[cur_processed].iofft = iofft;
+			cur_processed++;
+
 			/* Get the i-range for this extref */
-			ino = btrfs_extent_data_ref_objectid(l, dref),
-			ret = __find_extent_irange(root, ino,
-					btrfs_extent_data_ref_offset(l, dref),
-					vstart, vofft, &iofft);
+			ret = __find_extent_irange(root, vstart, vofft, ino,
+					&iofft);
 			if (ret == -ENOENT)
 				goto next;
 			else if (ret)
 				goto out;
 
-			found = 1;
-			
 #ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
 			printk(KERN_INFO "Synergy found: vstart %llu, "
 				"vofft %llu, vlen %llu, ino %llu, iofft %llu, "
@@ -256,12 +291,13 @@ next:
 		ptr += btrfs_extent_inline_ref_size(type);
 	}
 
-	if (!found) {
+	if (!cur_processed) {
 		ret = -EINVAL;
 		goto out;
 	}
 
 out:
+	kfree(processed_refs);
 	return ret;
 }
 
@@ -388,7 +424,7 @@ int btrfs_phy_to_ino(struct btrfs_fs_info *fs_info, struct block_device *bdev,
 			iterate_ranges_t iterate, void *privdata)
 {
 	struct btrfs_device *dev;
-	u64 cur_pofft, cur_plen, vofft, vlen;
+	u64 cur_pofft, cur_plen, vofft, vlen, bdpart_offt;
 	struct btrfs_dev_extent_ctx de_ctx;
 	int ret = 0;
 
@@ -401,15 +437,23 @@ int btrfs_phy_to_ino(struct btrfs_fs_info *fs_info, struct block_device *bdev,
 		goto out;
 	}
 
+	/* Offset p-offset to the beginning of the partition */
+	bdpart_offt = pofft - (dev->bdev->bd_part->start_sect << 9);
+
 #ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
 	printk(KERN_DEBUG "btrfs_phy_to_ino: device id %llu, size %llu.\n",
 		dev->devid, dev->total_bytes);
 #endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
 
 	/* Iterate through every device extent in the given p-range */
-	cur_pofft = pofft;
+	cur_pofft = bdpart_offt;
 	cur_plen = plen;
 	while (cur_plen) {
+#ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
+		printk(KERN_DEBUG "btrfs_phy_to_ino: current iter pofft %llu "
+			"plen %llu\n", cur_pofft, cur_plen);
+#endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
+
 		ret = __find_dev_extent_by_paddr(dev, cur_pofft, &de_ctx);
 		if (ret) {
 			printk(KERN_ERR "btrfs_phy_to_ino: dev extent not found\n");
