@@ -259,6 +259,7 @@ static int bmaptree_print(struct duet_task *task)
 	struct rb_node *node;
 	__u32 bits_on;
 
+	printk(KERN_INFO "duet: Printing RBBT for task #%d\n", task->id);
 	node = rb_first(&task->bmaptree);
 	while (node) {
 		dnode = rb_entry(node, struct duet_rbnode, node);

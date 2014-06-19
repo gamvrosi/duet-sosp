@@ -4938,6 +4938,15 @@ static void btrfs_send_duet_handler(__u8 taskid, __u8 event_code,
 			if (!wrctx.unset_len)
 				break;
 
+			/* Mark first, to avoid coming back here */
+			if (duet_mark_done(sctx->taskid, bdev,
+					wrctx.unset_pofft, wrctx.unset_len)) {
+				printk(KERN_ERR "duet-handler: failed to mark "
+					"contiguous range p%llu %llub\n",
+					wrctx.unset_pofft, wrctx.unset_len);
+				return;
+			}
+
 			/* Send an o3 write for each i-range in p-range */
 			if (btrfs_phy_to_ino(sctx->send_root->fs_info, bdev,
 					cur_lbn, cur_len, sctx->send_root,

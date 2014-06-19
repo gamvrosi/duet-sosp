@@ -41,9 +41,10 @@ static struct btrfs_device *__find_device(struct btrfs_fs_info *fs_info,
 		list_for_each_entry(device, &cur_devices->devices, dev_list) {
 #ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
 			printk(KERN_DEBUG "__find_device: device->bdev %p, "
-				"device->bdev->bd_contains %p, bdev %p, "
-				"bdev->bd_contains %p\n", device->bdev,
-				device->bdev ? device->bdev->bd_contains : NULL,
+				"device->bdev->bd_contains %p\n__find_device: "
+				"bdev %p, bdev->bd_contains %p\n",
+				device->bdev, device->bdev ?
+				device->bdev->bd_contains : NULL,
 				bdev, bdev ? bdev->bd_contains : NULL);
 #endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
 			if ((bdev && (device->bdev->bd_contains == bdev ||
