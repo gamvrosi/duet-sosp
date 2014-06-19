@@ -150,6 +150,15 @@ config BTRFS_DUET_BACKUP
 	  Adds support for the btrfs backup (send/receive) to collaborate with
 	  other tasks through the duet framework
 
+config BTRFS_DUET_BACKUP_DEBUG
+	bool "Debug messages for the synergistic btrfs backup (send/receive)"
+	depends on BTRFS_FS
+	depends on BTRFS_DUET_BACKUP
+	help
+	  Adds debug messages for the synergistic btrfs backup.
+
+	  If unsure/not a developer, say N here.
+
 endmenu
 
 config BTRFS_FS_RUN_SANITY_TESTS

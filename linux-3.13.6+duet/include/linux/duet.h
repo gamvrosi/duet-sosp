@@ -70,6 +70,7 @@ int duet_mark_done(__u8 taskid, struct block_device *bdev, __u64 lbn,
 			__u32 len);
 int duet_mark_todo(__u8 taskid, struct block_device *bdev, __u64 lbn,
 			__u32 len);
+int duet_print_rbt(__u8 taskid);
 
 /* Hook-related functions */
 void duet_hook(__u8 event_type, __u8 hook_type, void *hook_data);

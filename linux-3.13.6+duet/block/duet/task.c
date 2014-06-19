@@ -321,7 +321,7 @@ int duet_print_rbt(__u8 taskid)
 
 	return 0;
 }
-//EXPORT_SYMBOL_GPL(duet_print_rbt);
+EXPORT_SYMBOL_GPL(duet_print_rbt);
 
 /* Checks the blocks in the range from lbn to lbn+len are done */
 int duet_chk_done(__u8 taskid, struct block_device *bdev, __u64 lbn, __u32 len)
