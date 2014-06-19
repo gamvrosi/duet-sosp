@@ -3696,6 +3696,10 @@ verbose_printk("btrfs: send_o3_write ino=%llu, offset=%llu, len=%d\n", ino, offs
 		goto out;
 
 	/* Change then restore sctx->cur_ino to make fill_read_buf happy */
+#ifdef CONFIG_BTRFS_DUET_BACKUP_DEBUG
+	printk("send_o3_write: swapping cur_ino %llu with ino %llu\n",
+		sctx->cur_ino, ino);
+#endif /* CONFIG_BTRFS_DUET_BACKUP_DEBUG */
 	cur_ino = sctx->cur_ino;
 	sctx->cur_ino = ino;
 	num_read = fill_read_buf(sctx, offset, len);
@@ -3710,6 +3714,8 @@ verbose_printk("btrfs: send_o3_write ino=%llu, offset=%llu, len=%d\n", ino, offs
 	TLV_PUT_U64(sctx, BTRFS_SEND_A_FILE_OFFSET, offset);
 	TLV_PUT(sctx, BTRFS_SEND_A_DATA, sctx->read_buf, num_read);
 
+	atomic64_add(sctx->send_size,
+			&sctx->send_root->fs_info->send_best_effort);
 	ret = send_cmd(sctx);
 
 tlv_put_failure:
@@ -4885,11 +4891,11 @@ static int cb_send_o3_write(u64 istart, u64 ilen, void *inop, void *privdata)
 		ino, istart, ilen);
 #endif /* CONFIG_BTRFS_DUET_BACKUP_DEBUG */
 
-	/*ret = send_o3_write(sctx, ino, istart, ilen);
+	ret = send_o3_write(sctx, ino, istart, ilen);
 	if (ret)
 		printk(KERN_ERR "cb_send_o3_write: failed to send O3 write "
 			"(ino %llu, iofft %llu, ilen %llu)\n", ino, istart,
-			ilen);*/
+			ilen);
 
 	return ret;
 }
@@ -5220,6 +5226,8 @@ out:
 	duet_print_rbt(sctx->taskid);
 	printk(KERN_DEBUG "send: total bytes sent: %ld\n",
 			atomic64_read(&fs_info->send_total_bytes));
+	printk(KERN_DEBUG "send: bytes sent best-effort: %ld\n",
+			atomic64_read(&fs_info->send_best_effort));
 #endif /* CONFIG_BTRFS_DUET_BACKUP_DEBUG */
 
 	/* Deregister the task from the Duet framework */
