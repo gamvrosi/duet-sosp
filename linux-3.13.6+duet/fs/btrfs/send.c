@@ -28,6 +28,7 @@
 #include <linux/vmalloc.h>
 #include <linux/string.h>
 #ifdef CONFIG_BTRFS_DUET_BACKUP
+#include <linux/workqueue.h>
 #include <linux/duet.h>
 #include "mapping.h"
 #endif /* CONFIG_BTRFS_DUET_BACKUP */
@@ -129,7 +130,16 @@ struct send_ctx {
 
 #ifdef CONFIG_BTRFS_DUET_BACKUP
 	struct mutex cmd_lock;
+	struct workqueue_struct *syn_wq;
 	__u8 taskid;
+};
+
+struct synergistic_work {
+	struct work_struct work;
+	struct block_device *bdev;
+	u64 lbn;
+	u64 len;
+	struct send_ctx *sctx;
 #endif /* CONFIG_BTRFS_DUET_BACKUP */
 };
 
@@ -3752,8 +3762,10 @@ static int find_unset_range(u64 start, u64 len, void *bdevp, void *privdata) {
 
 	/* Skip the first few blocks that have not been processed */
 	while (cur_lbn < (cur_lbn + cur_len)) {
+#ifdef CONFIG_BTRFS_DUET_BACKUP_DEBUG
 		printk(KERN_DEBUG "find_unset_range: processing (set) cur_lbn "
 			"%llu cur_len %llu\n", cur_lbn, cur_len);
+#endif /* CONFIG_BTRFS_DUET_BACKUP_DEBUG */
 		ret = duet_chk_done(taskid, bdev, cur_lbn, min(blksize,
 								cur_len));
 		if (ret == 1) {
@@ -3769,8 +3781,10 @@ static int find_unset_range(u64 start, u64 len, void *bdevp, void *privdata) {
 		goto chk_fail;
 
 	while (cur_lbn < (cur_lbn + cur_len)) {
+#ifdef CONFIG_BTRFS_DUET_BACKUP_DEBUG
 		printk(KERN_DEBUG "find_unset_range: processing (unset) cur_lbn "
 			"%llu cur_len %llu\n", cur_lbn, cur_len);
+#endif /* CONFIG_BTRFS_DUET_BACKUP_DEBUG */
 		ret = duet_chk_done(taskid, bdev, cur_lbn, min(blksize,
 								cur_len));
 		if (ret == 0) {
@@ -4900,15 +4914,77 @@ static int cb_send_o3_write(u64 istart, u64 ilen, void *inop, void *privdata)
 	return ret;
 }
 
-static void btrfs_send_duet_handler(__u8 taskid, __u8 event_code,
-	struct block_device *bdev, __u64 lbn, __u32 len, void *privdata)
+static void __handle_read_event(struct work_struct *work)
 {
-	struct send_ctx *sctx = (struct send_ctx *)privdata;
+	struct synergistic_work *swork = (struct synergistic_work *)work;
 	struct write_range_ctx wrctx;
 	u64 cur_lbn, cur_len;
 
 	memset(&wrctx, 0, sizeof(wrctx));
-	wrctx.sctx = sctx;
+	wrctx.sctx = swork->sctx;
+
+	/* Loop until we've found all contiguous unset ranges */
+	cur_lbn = swork->lbn;
+	cur_len = swork->len;
+
+	while (cur_len && !wrctx.done) {
+#ifdef CONFIG_BTRFS_DUET_BACKUP_DEBUG
+		printk(KERN_DEBUG "duet-read: looking for unset ranges in "
+			"[%llu, %llu]\n", cur_lbn, cur_len);
+#endif /* CONFIG_BTRFS_DUET_BACKUP_DEBUG */
+
+		memset(&wrctx, 0, sizeof(wrctx));
+		wrctx.sctx = swork->sctx;
+
+		find_unset_range(cur_lbn, cur_len, (void *)swork->bdev,
+							(void *)&wrctx);
+#ifdef CONFIG_BTRFS_DUET_BACKUP_DEBUG
+		printk(KERN_DEBUG "wrctx.unset_iofft = %llu\n"
+			"wrctx.unset_pofft = %llu\nwrctx.unset_len = %llu\n"
+			"wrctx.done = %d\n", wrctx.unset_iofft,
+			wrctx.unset_pofft, wrctx.unset_len, wrctx.done);
+#endif /* CONFIG_BTRFS_DUET_BACKUP_DEBUG */
+
+		if (!wrctx.unset_len)
+			break;
+
+		/* Mark first, to avoid coming back here */
+		if (duet_mark_done(swork->sctx->taskid, swork->bdev,
+				wrctx.unset_pofft, wrctx.unset_len)) {
+			printk(KERN_ERR "duet-read: failed to mark range p%llu"
+				" %llub\n", wrctx.unset_pofft, wrctx.unset_len);
+			goto out;
+		}
+
+		/* Send an o3 write for each i-range in p-range */
+		if (btrfs_phy_to_ino(swork->sctx->send_root->fs_info,
+				swork->bdev, wrctx.unset_pofft, wrctx.unset_len,
+				swork->sctx->send_root, cb_send_o3_write,
+				(void *)swork->sctx)) {
+			printk(KERN_ERR "duet-read: failed to go over i-ranges"
+				" in range p%llu %llub\n", wrctx.unset_pofft,
+				wrctx.unset_len);
+			return;
+		}
+
+		cur_len -= (cur_lbn + cur_len) - (wrctx.unset_pofft +
+							wrctx.unset_len);
+		cur_lbn = wrctx.unset_pofft + wrctx.unset_len;
+	}
+
+#ifdef CONFIG_BTRFS_DUET_BACKUP_DEBUG
+	printk(KERN_DEBUG "__handle_read_event: done\n");
+#endif /* CONFIG_BTRFS_DUET_BACKUP_DEBUG */
+out:
+	kfree((void *)work);
+	return;
+}
+
+static void btrfs_send_duet_handler(__u8 taskid, __u8 event_code,
+	struct block_device *bdev, __u64 lbn, __u32 len, void *privdata)
+{
+	struct send_ctx *sctx = (struct send_ctx *)privdata;
+	struct synergistic_work *swork;
 
 	switch(event_code) {
 	case DUET_EVENT_BTRFS_READ:
@@ -4917,58 +4993,30 @@ static void btrfs_send_duet_handler(__u8 taskid, __u8 event_code,
 			lbn, lbn + len);
 #endif /* CONFIG_BTRFS_DUET_BACKUP_DEBUG */
 
-		/* Loop until we've found all contiguous unset ranges */
-		cur_lbn = lbn;
-		cur_len = len;
-		while (cur_len && !wrctx.done) {
-#ifdef CONFIG_BTRFS_DUET_BACKUP_DEBUG
-			printk(KERN_DEBUG "duet: looking for unset ranges in "
-				"[%llu, %llu]\n", cur_lbn, cur_len);
-#endif /* CONFIG_BTRFS_DUET_BACKUP_DEBUG */
+		swork = (struct synergistic_work *)kzalloc(sizeof(
+					struct synergistic_work), GFP_ATOMIC);
+		if (!swork) {
+			printk(KERN_ERR "duet: failed to allocate synergistic "
+				"work\n");
+			return;
+		}
 
-			memset(&wrctx, 0, sizeof(wrctx));
-			wrctx.sctx = sctx;
+		INIT_WORK((struct work_struct *)swork, __handle_read_event);
 
-			find_unset_range(cur_lbn, cur_len, (void *)bdev,
-							(void *)&wrctx);
-#ifdef CONFIG_BTRFS_DUET_BACKUP_DEBUG
-			printk(KERN_DEBUG
-				"wrctx.unset_iofft = %llu\n"
-				"wrctx.unset_pofft = %llu\n"
-				"wrctx.unset_len = %llu\n"
-				"wrctx.done = %d\n",
-				wrctx.unset_iofft, wrctx.unset_pofft,
-				wrctx.unset_len, wrctx.done);
-#endif /* CONFIG_BTRFS_DUET_BACKUP_DEBUG */
+		/* Populate synergistic work struct */
+		swork->bdev = bdev;
+		swork->lbn = lbn;
+		swork->len = len;
+		swork->sctx = sctx;
 
-			if (!wrctx.unset_len)
-				break;
-
-			/* Mark first, to avoid coming back here */
-			if (duet_mark_done(sctx->taskid, bdev,
-					wrctx.unset_pofft, wrctx.unset_len)) {
-				printk(KERN_ERR "duet-handler: failed to mark "
-					"contiguous range p%llu %llub\n",
-					wrctx.unset_pofft, wrctx.unset_len);
-				return;
-			}
-
-			/* Send an o3 write for each i-range in p-range */
-			if (btrfs_phy_to_ino(sctx->send_root->fs_info, bdev,
-					cur_lbn, cur_len, sctx->send_root,
-					cb_send_o3_write, (void *)sctx)) {
-				printk(KERN_ERR "duet: failed to go over "
-					"i-ranges in given p-range\n");
-				return;
-			}
-
-			cur_len -= (cur_lbn + cur_len) -
-					(wrctx.unset_pofft + wrctx.unset_len);
-			cur_lbn = wrctx.unset_pofft + wrctx.unset_len;
+		if (queue_work(sctx->syn_wq, (struct work_struct *)swork) != 1) {
+			printk(KERN_ERR "duet: failed to queue up work\n");
+			kfree(swork);
+			return;
 		}
 
 #ifdef CONFIG_BTRFS_DUET_BACKUP_DEBUG
-		printk(KERN_DEBUG "duet: done processing read event\n");
+		printk(KERN_DEBUG "duet: Queued up work for read event\n");
 #endif /* CONFIG_BTRFS_DUET_BACKUP_DEBUG */
 		break;
 	default:
@@ -5174,9 +5222,17 @@ long btrfs_ioctl_send(struct file *mnt_file, void __user *arg_)
 	mutex_unlock(&fs_info->send_lock);
 
 #ifdef CONFIG_BTRFS_DUET_BACKUP
-	/* We'll need a mutex to make sure we don't step on our toes with
-	 * out-of-order (o3) writes */
+	/* Mutex will make sure we don't corrupt the stream during out-of-order
+	 * (o3) writes */
 	mutex_init(&sctx->cmd_lock);
+
+	/* Out-of-order writes will be put on this work queue */
+	sctx->syn_wq = alloc_workqueue("duet-send", WQ_UNBOUND | WQ_HIGHPRI, 0);
+	if (!sctx->syn_wq) {
+		printk(KERN_ERR "send: failed to allocate work queue\n");
+		ret = -EFAULT;
+		goto out;
+	}
 
 	/* Register the task with the Duet framework */
 	if (duet_task_register(&sctx->taskid, "btrfs-send",
@@ -5233,6 +5289,13 @@ out:
 	/* Deregister the task from the Duet framework */
 	if (duet_task_deregister(sctx->taskid))
 		printk(KERN_ERR "send: failed to deregister from duet framework\n");
+
+	/* Flush and destroy work queue */
+	flush_workqueue(sctx->syn_wq);
+	destroy_workqueue(sctx->syn_wq);
+
+	/* Destroy mutex */
+	mutex_destroy(&sctx->cmd_lock);
 #endif /* CONFIG_BTRFS_DUET_BACKUP */
 
 	if (sctx) {

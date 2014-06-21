@@ -329,12 +329,15 @@ static int __vrange_to_iranges(struct btrfs_fs_info *fs_info, u64 vofft,
 	path->search_commit_root = 1;
 	path->skip_locking = 1;
 
+#ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
+	printk(KERN_DEBUG "__vrange_to_iranges: called with vofft %llu, vlen "
+		"%llu (extroot %p)\n", vofft, vlen, extroot);
+#endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
+
 	/* Iterate over all extent items of the given v-range */
 	cur_vofft = vofft;
 	cur_vlen = vlen;
 	while (cur_vlen) {
-		btrfs_release_path(path);
-
 #ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
 		printk(KERN_DEBUG "__vrange_to_iranges: vofft = %llu\n",
 			cur_vofft);
