@@ -5021,7 +5021,7 @@ static void btrfs_send_duet_handler(__u8 taskid, __u8 event_code,
 		break;
 	default:
 		printk(KERN_ERR "duet: send handler received unknown event "
-			"code %u", event_code);
+			"code %u\n", event_code);
 		break;
 	}
 }
@@ -5236,8 +5236,7 @@ long btrfs_ioctl_send(struct file *mnt_file, void __user *arg_)
 
 	/* Register the task with the Duet framework */
 	if (duet_task_register(&sctx->taskid, "btrfs-send",
-			fs_info->sb->s_blocksize, 32768 /* 32Kb */,
-			DUET_EVENT_BTRFS_READ | DUET_EVENT_BTRFS_WRITE,
+			fs_info->sb->s_blocksize, 32768, DUET_EVENT_BTRFS_READ,
 			btrfs_send_duet_handler, (void *)sctx)) {
 		printk(KERN_ERR "send: failed to register with the duet framework\n");
 		ret = -EFAULT;

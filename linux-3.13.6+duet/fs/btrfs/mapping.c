@@ -401,8 +401,7 @@ static int __vrange_to_iranges(struct btrfs_fs_info *fs_info, u64 vofft,
 		ret = __extrefs_to_iranges(ei, l, slot, root, key.objectid,
 					cur_vofft, ext_len, iterate, privdata);
 		if (ret) {
-			printk(KERN_ERR "__vrange_to_iranges: failed to "
-				"process extrefs\n");
+			printk(KERN_ERR "__vrange_to_iranges: failed to process extrefs\n");
 			goto out;
 		}
 
