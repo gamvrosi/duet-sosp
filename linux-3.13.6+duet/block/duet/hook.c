@@ -17,6 +17,7 @@
  */
 #include <linux/buffer_head.h>
 #include <linux/blk_types.h>
+#include <linux/bio.h>
 #include <linux/fs.h>
 #include "common.h"
 
@@ -42,7 +43,7 @@ static inline void mark_bio_seen(struct bio *bio)
 /* We're finally here. Just find tasks that are interested in this event,
  * and call their handlers. */
 static void duet_handle_event(__u8 event_code, struct block_device *bdev,
-	__u64 lbn, __u32 len)
+	__u64 lbn, __u32 len, void *data, int data_type)
 {
 	struct duet_task *cur;
 
@@ -58,9 +59,19 @@ static void duet_handle_event(__u8 event_code, struct block_device *bdev,
 	list_for_each_entry_rcu(cur, &duet_env.tasks, task_list) {
 		if (cur->event_mask & event_code)
 			cur->event_handler(cur->id, event_code, bdev, lbn, len,
-								cur->privdata);
+					cur->privdata, data, data_type);
 	}
 	rcu_read_unlock();
+
+	/* Release this buffer_head/bio */
+	switch (data_type) {
+	case DUET_DATA_BIO:
+		bio_put((struct bio *)data);
+		break;
+	case DUET_DATA_BH:
+		put_bh((struct buffer_head *)data);
+		break;
+	}
 }
 
 /* Callback function for asynchronous bio calls. We first restore the normal
@@ -90,7 +101,8 @@ static void duet_bio_endio(struct bio *bio, int err)
 
 	/* Transfer control to the duet event handler */
 	if (!err)
-		duet_handle_event(event_code, bdev, lbn, len);
+		duet_handle_event(event_code, bdev, lbn, len, (void *)bio,
+								DUET_DATA_BIO);
 	else
 		printk(KERN_ERR "duet_bio_endio: something went wrong %d", err);
 }
@@ -121,7 +133,8 @@ void duet_bh_endio(struct buffer_head *bh, int uptodate)
 	bh->b_end_io(bh, uptodate);
 
 	/* Transfer control to the duet event handler */
-	duet_handle_event(event_code, bdev, lbn, len);
+	duet_handle_event(event_code, bdev, lbn, len, (void *)bh,
+								DUET_DATA_BH);
 }
 EXPORT_SYMBOL_GPL(duet_bh_endio); /* export to check at _submit_bh */
 
@@ -147,6 +160,9 @@ static void duet_ba_hook(__u8 event_code, struct bio *bio)
 	mark_bio_seen(bio);
 	bio->bi_end_io = duet_bio_endio;
 	bio->bi_private = (void *)private;
+
+	/* Hold this bio until we're done */
+	bio_get(bio);
 }
 
 /* Function that is paired to submit_bio_wait calls. We assume that we get
@@ -165,7 +181,8 @@ static void duet_bw_hook(__u8 event_code, struct duet_bw_hook_data *hook_data)
 	bdev = bio->bi_bdev;
 
 	/* Transfer control to the duet event handler */
-	duet_handle_event(event_code, bdev, lbn, len);
+	duet_handle_event(event_code, bdev, lbn, len, (void *)bio,
+								DUET_DATA_BIO);
 }
 
 /* Function that is paired to submit_bh calls. We need to hijack the bh
@@ -188,6 +205,9 @@ static void duet_bh_hook(__u8 event_code, struct buffer_head *bh)
 	/* Fix up buffer head structure */
 	bh->b_end_io = duet_bh_endio;
 	bh->b_private = (void *)private;
+
+	/* Hold this buffer_head until we're done */
+	get_bh(bh);
 }
 
 void duet_hook(__u8 event_code, __u8 hook_type, void *hook_data)
@@ -205,6 +225,10 @@ void duet_hook(__u8 event_code, __u8 hook_type, void *hook_data)
 		break;
 	case DUET_SETUP_HOOK_BW_START:
 		mark_bio_seen((struct bio *)hook_data);
+
+		/* Hold this bio until we're done */
+		bio_get((struct bio *)hook_data);
+
 		break;
 	case DUET_SETUP_HOOK_BW_END:
 #ifdef CONFIG_DUET_DEBUG

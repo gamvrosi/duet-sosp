@@ -636,7 +636,8 @@ out:
 
 #ifdef CONFIG_BTRFS_DUET_SCRUB
 static void btrfs_scrub_duet_handler(__u8 taskid, __u8 event_code,
-	struct block_device *bdev, __u64 lbn, __u32 len, void *privdata)
+	struct block_device *bdev, __u64 lbn, __u32 len, void *privdata,
+	void *data, int data_type)
 {
 	struct scrub_ctx *sctx = (struct scrub_ctx *)privdata;
 

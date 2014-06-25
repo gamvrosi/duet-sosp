@@ -956,7 +956,7 @@ static int cmd_send_cancel(int argc, char **argv)
 	if (ret < 0)
 		goto out;
 
-	printf("scrub cancelled\n");
+	printf("send cancelled\n");
 
 out:
 	free(subvol);

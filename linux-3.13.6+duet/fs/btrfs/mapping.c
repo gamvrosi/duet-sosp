@@ -20,6 +20,7 @@
 #include "volumes.h"
 #include "mapping.h"
 #include "raid56.h"
+#include "transaction.h"
 
 #define BTRFS_FS_MAPPING_UNSUPP_RAID \
 		(BTRFS_BLOCK_GROUP_RAID0 | BTRFS_BLOCK_GROUP_RAID1 | \
@@ -65,11 +66,13 @@ static struct btrfs_device *__find_device(struct btrfs_fs_info *fs_info,
 static int __find_dev_extent_by_paddr(struct btrfs_device *device, u64 pofft,
 					struct btrfs_dev_extent_ctx *de_ctx)
 {
+	struct btrfs_trans_handle *trans = NULL;
 	struct btrfs_dev_extent *de;
 	struct btrfs_key key;
 	struct btrfs_root *root = device->dev_root;
 	struct btrfs_path *path;
 	struct extent_buffer *l;
+	u64 start_ctransid, ctransid;
 	int ret, slot;
 
 	if (!de_ctx)
@@ -90,9 +93,40 @@ static int __find_dev_extent_by_paddr(struct btrfs_device *device, u64 pofft,
 	path->skip_locking = 1;
 	path->reada = 2;
 
+	spin_lock(&root->root_item_lock);
+	start_ctransid = btrfs_root_ctransid(&root->root_item);
+	spin_unlock(&root->root_item_lock);
+
 	key.objectid = device->devid;
 	key.type = BTRFS_DEV_EXTENT_KEY;
 	key.offset = pofft;
+
+	/*
+	 * We need to make sure the transaction does not get committed while we
+	 * do anything on commit roots. Join a transaction to prevent this.
+	 */
+	trans = btrfs_join_transaction(root);
+	if (IS_ERR(trans)) {
+		ret = PTR_ERR(trans);
+		trans = NULL;
+		goto out;
+	}
+
+	/*
+	 * Make sure the tree has not changed after re-joining. We detect this
+	 * by comparing start_ctransid and ctransid. They should always match.
+	 */
+	spin_lock(&root->root_item_lock);
+	ctransid = btrfs_root_ctransid(&root->root_item);
+	spin_unlock(&root->root_item_lock);
+
+	if (ctransid != start_ctransid) {
+		WARN(1, KERN_WARNING "__find_dev_extent_by_paddr: the root "
+			"was modified while we were searching. This is "
+			"probably a bug.\n");
+		ret = -EIO;
+		goto out;
+	}
 
 	ret = btrfs_search_slot_for_read(root, &key, path, 0, 0);
 	if (ret != 0) {
@@ -138,6 +172,12 @@ next:
 
 out:
 	btrfs_free_path(path);
+	if (trans) {
+		if (!ret)
+			ret = btrfs_end_transaction(trans, root);
+		else
+			btrfs_end_transaction(trans, root);
+	}
 	return ret < 0 ? ret : 0;
 }
 
@@ -148,23 +188,32 @@ out:
 static int __find_extent_irange(struct btrfs_root *root, u64 vstart, u64 vofft,
 				u64 ino, u64 *iofft)
 {
+#if 0
+	struct btrfs_trans_handle *trans = NULL;
+#endif /* 0 */
 	struct btrfs_key key;
 	struct btrfs_path *path;
 	struct btrfs_file_extent_item *fi;
 	struct extent_buffer *l;
-	u64 istart;
+	u64 /* start_ctransid, ctransid, */ istart;
 	int ret = 0;
 
 	path = btrfs_alloc_path();
 	if (!path)
 		return -ENOMEM;
 
+#if 0
 	/*
 	 * Work on commit root. The related disk blocks are static as long as
 	 * CoW is applied.
 	 */
 	path->search_commit_root = 1;
 	path->skip_locking = 1;
+
+	spin_lock(&root->root_item_lock);
+	start_ctransid = btrfs_root_ctransid(&root->root_item);
+	spin_unlock(&root->root_item_lock);
+#endif /* 0 */
 
 	key.objectid = ino;
 	key.type = BTRFS_EXTENT_DATA_KEY;
@@ -174,6 +223,35 @@ static int __find_extent_irange(struct btrfs_root *root, u64 vstart, u64 vofft,
 	printk(KERN_DEBUG "__find_extent_irange looking for extent (%llu %u "
 		"%llu)\n", key.objectid, key.type, key.offset);
 #endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
+
+#if 0
+	/*
+	 * We need to make sure the transaction does not get committed while we
+	 * do anything on commit roots. Join a transaction to prevent this.
+	 */
+	trans = btrfs_join_transaction(root);
+	if (IS_ERR(trans)) {
+		ret = PTR_ERR(trans);
+		trans = NULL;
+		goto out;
+	}
+
+	/*
+	 * Make sure the tree has not changed after re-joining. We detect this
+	 * by comparing start_ctransid and ctransid. They should always match.
+	 */
+	spin_lock(&root->root_item_lock);
+	ctransid = btrfs_root_ctransid(&root->root_item);
+	spin_unlock(&root->root_item_lock);
+
+	if (ctransid != start_ctransid) {
+		WARN(1, KERN_WARNING "__vrange_to_iranges: the root was "
+			"modified while we were searching. This is probably "
+			"a bug.\n");
+		ret = -EIO;
+		goto out;
+	}
+#endif /* 0 */
 
 	ret = btrfs_search_slot(NULL, root, &key, path, 0, 0);
 	if (ret != 0) {
@@ -203,8 +281,17 @@ static int __find_extent_irange(struct btrfs_root *root, u64 vstart, u64 vofft,
 	 */
 	istart = btrfs_file_extent_offset(l, fi);
 	*iofft += (vofft - vstart) - istart;
+
 out:
 	btrfs_free_path(path);
+#if 0
+	if (trans) {
+		if (!ret)
+			ret = btrfs_end_transaction(trans, root);
+		else
+			btrfs_end_transaction(trans, root);
+	}
+#endif /* 0 */
 	return ret;
 }
 
@@ -307,13 +394,16 @@ static int __vrange_to_iranges(struct btrfs_fs_info *fs_info, u64 vofft,
 				u64 vlen, struct btrfs_root *root,
 				iterate_ranges_t iterate, void *privdata)
 {
+	struct btrfs_trans_handle *trans = NULL;
 	struct btrfs_root *extroot = fs_info->extent_root;
 	struct btrfs_key key;
 	struct btrfs_path *path;
 	struct extent_buffer *l;
 	struct btrfs_extent_item *ei;
-	u64 cur_vlen, cur_vofft;
+	u64 start_ctransid, ctransid;
 	u64 ext_size, ext_len;
+	u64 cur_vofft = vofft;
+	u64 cur_vlen = vlen;
 	int slot, ret=0;
 
 	path = btrfs_alloc_path();
@@ -329,15 +419,55 @@ static int __vrange_to_iranges(struct btrfs_fs_info *fs_info, u64 vofft,
 	path->search_commit_root = 1;
 	path->skip_locking = 1;
 
+	spin_lock(&extroot->root_item_lock);
+	start_ctransid = btrfs_root_ctransid(&extroot->root_item);
+	spin_unlock(&extroot->root_item_lock);
+
+join_trans:
 #ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
 	printk(KERN_DEBUG "__vrange_to_iranges: called with vofft %llu, vlen "
-		"%llu (extroot %p)\n", vofft, vlen, extroot);
+		"%llu (extroot %p)\n", cur_vofft, cur_vlen, extroot);
 #endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
 
+	/*
+	 * We need to make sure the transaction does not get committed while we
+	 * do anything on commit roots. Join a transaction to prevent this.
+	 */
+	trans = btrfs_join_transaction(extroot);
+	if (IS_ERR(trans)) {
+		ret = PTR_ERR(trans);
+		trans = NULL;
+		goto out;
+	}
+
+	/*
+	 * Make sure the tree has not changed after re-joining. We detect this
+	 * by comparing start_ctransid and ctransid. They should always match.
+	 */
+	spin_lock(&extroot->root_item_lock);
+	ctransid = btrfs_root_ctransid(&extroot->root_item);
+	spin_unlock(&extroot->root_item_lock);
+
+	if (ctransid != start_ctransid) {
+		WARN(1, KERN_WARNING "__vrange_to_iranges: the root was "
+			"modified while we were searching. This is probably "
+			"a bug.\n");
+		ret = -EIO;
+		goto out;
+	}
+
 	/* Iterate over all extent items of the given v-range */
-	cur_vofft = vofft;
-	cur_vlen = vlen;
 	while (cur_vlen) {
+		/* If we need to commit, end joined transaction and rejoin */
+		if (btrfs_should_end_transaction(trans, extroot)) {
+			ret = btrfs_end_transaction(trans, extroot);
+			trans = NULL;
+			if (ret < 0)
+				goto out;
+			btrfs_release_path(path);
+			goto join_trans;
+		}
+
 #ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
 		printk(KERN_DEBUG "__vrange_to_iranges: vofft = %llu\n",
 			cur_vofft);
@@ -414,6 +544,12 @@ next:
 
 out:
 	btrfs_free_path(path);
+	if (trans) {
+		if (!ret)
+			ret = btrfs_end_transaction(trans, extroot);
+		else
+			btrfs_end_transaction(trans, extroot);
+	}
 	return ret;
 }
 
@@ -451,6 +587,7 @@ int btrfs_phy_to_ino(struct btrfs_fs_info *fs_info, struct block_device *bdev,
 	/* Iterate through every device extent in the given p-range */
 	cur_pofft = bdpart_offt;
 	cur_plen = plen;
+
 	while (cur_plen) {
 #ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
 		printk(KERN_DEBUG "btrfs_phy_to_ino: current iter pofft %llu "
@@ -514,9 +651,6 @@ static int __vrange_to_pranges(struct btrfs_fs_info *fs_info,
 	path = btrfs_alloc_path();
 	if (!path)
 		return -ENOMEM;
-
-	path->search_commit_root = 1;
-	path->skip_locking = 1;
 
 	/* Find the chunk that the logical range belongs in */
 	key.objectid = BTRFS_FIRST_CHUNK_TREE_OBJECTID;
@@ -593,8 +727,8 @@ out:
 	return ret;
 
 not_found:
-	btrfs_free_path(path);
-	return -ENOENT;
+	ret = -ENOENT;
+	goto out;
 }
 
 /*
@@ -609,12 +743,15 @@ int btrfs_ino_to_phy(struct btrfs_fs_info *fs_info, struct btrfs_root *root,
 			u64 ino, u64 iofft, u64 ilen, iterate_ranges_t iterate,
 			void *privdata)
 {
+	struct btrfs_trans_handle *trans = NULL;
 	struct btrfs_key key;
 	struct btrfs_path *path;
 	struct extent_buffer *l;
 	struct btrfs_file_extent_item *fi;
+	u64 start_ctransid, ctransid;
 	u64 vofft, vlen;
-	u64 cur_iofft, cur_ilen;
+	u64 cur_iofft = iofft;
+	u64 cur_ilen = ilen;
 	int slot, ret = 0;
 
 	path = btrfs_alloc_path();
@@ -622,20 +759,51 @@ int btrfs_ino_to_phy(struct btrfs_fs_info *fs_info, struct btrfs_root *root,
 		return -ENOMEM;
 
 	/* Do some readahead, in case we need to go over multiple extents */
-	path->reada = 2;
+	//path->reada = 2;
 	path->search_commit_root = 1;
 	path->skip_locking = 1;
 
-	/* Find the first extent data item corresponding to the given i-offset */
+	spin_lock(&root->root_item_lock);
+	start_ctransid = btrfs_root_ctransid(&root->root_item);
+	spin_unlock(&root->root_item_lock);
+
+join_trans:
+	/* We need the first extent data item of the given i-offset */
 	key.objectid = ino;
 	key.type = BTRFS_EXTENT_DATA_KEY;
-	key.offset = iofft;
+	key.offset = cur_iofft;
 
 #ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
 	printk(KERN_DEBUG "btrfs_ino_to_phy: looking for (%llu %u %llu), iofft"
 		" %llu, ilen %llu\n", key.objectid, key.type, key.offset,
-		iofft, ilen);
+		cur_iofft, cur_ilen);
 #endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
+
+	/*
+	 * We need to make sure the transaction does not get committed while we
+	 * do anything on commit roots. Join a transaction to prevent this.
+	 */
+	trans = btrfs_join_transaction(root);
+	if (IS_ERR(trans)) {
+		ret = PTR_ERR(trans);
+		trans = NULL;
+		goto out;
+	}
+
+	/*
+	 * Make sure the tree has not changed after re-joining. We detect this
+	 * by comparing start_ctransid and ctransid. They should always match.
+	 */
+	spin_lock(&root->root_item_lock);
+	ctransid = btrfs_root_ctransid(&root->root_item);
+	spin_unlock(&root->root_item_lock);
+
+	if (ctransid != start_ctransid) {
+		WARN(1, KERN_WARNING "btrfs_ino_to_phy: the root was modified "
+			"while we were searching. This is probably a bug.\n");
+		ret = -EIO;
+		goto out;
+	}
 
 	ret = btrfs_search_slot_for_read(root, &key, path, 0, 0);
 	if (ret != 0) {
@@ -644,9 +812,6 @@ int btrfs_ino_to_phy(struct btrfs_fs_info *fs_info, struct btrfs_root *root,
 	}
 
 	/* Iterate over all extents corresponding to the given i-range */
-	cur_iofft = iofft;
-	cur_ilen = ilen;
-
 	while (cur_ilen) {
 		l = path->nodes[0];
 		slot = path->slots[0];
@@ -685,8 +850,10 @@ int btrfs_ino_to_phy(struct btrfs_fs_info *fs_info, struct btrfs_root *root,
 
 		/* Check if we found the extent we're looking for */
 		if (key.offset + (btrfs_file_extent_num_bytes(l, fi) -
-		    btrfs_file_extent_disk_bytenr(l,fi)) <= cur_iofft)
-			goto next;
+		    btrfs_file_extent_disk_bytenr(l,fi)) <= cur_iofft) {
+			path->slots[0]++;
+			continue;
+		}
 
 #ifdef CONFIG_BTRFS_FS_MAPPING_DEBUG
 		printk(KERN_DEBUG "btrfs_ino_to_phy: found the right extent\n");
@@ -716,12 +883,26 @@ int btrfs_ino_to_phy(struct btrfs_fs_info *fs_info, struct btrfs_root *root,
 		/* Move on to the next extent */
 		cur_iofft += vlen;
 
-next:
 		path->slots[0]++;
-		cond_resched();
+
+		/* If we need to commit, end joined transaction and rejoin */
+		if (btrfs_should_end_transaction(trans, root)) {
+			ret = btrfs_end_transaction(trans, root);
+			trans = NULL;
+			if (ret < 0)
+				goto out;
+			btrfs_release_path(path);
+			goto join_trans;
+		}
 	}
 
 out:
 	btrfs_free_path(path);
+	if (trans) {
+		if (!ret)
+			ret = btrfs_end_transaction(trans, root);
+		else
+			btrfs_end_transaction(trans, root);
+	}
 	return ret;
 }

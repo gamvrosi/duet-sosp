@@ -30,6 +30,7 @@
 #ifdef CONFIG_BTRFS_DUET_BACKUP
 #include <linux/workqueue.h>
 #include <linux/duet.h>
+#include <linux/bio.h>
 #include "mapping.h"
 #endif /* CONFIG_BTRFS_DUET_BACKUP */
 
@@ -139,6 +140,7 @@ struct synergistic_work {
 	struct block_device *bdev;
 	u64 lbn;
 	u64 len;
+	struct bio *bio;
 	struct send_ctx *sctx;
 #endif /* CONFIG_BTRFS_DUET_BACKUP */
 };
@@ -568,12 +570,21 @@ static int tlv_put_btrfs_timespec(struct send_ctx *sctx, u16 attr,
 static int send_header(struct send_ctx *sctx)
 {
 	struct btrfs_stream_header hdr;
+	int ret;
 
 	strcpy(hdr.magic, BTRFS_SEND_STREAM_MAGIC);
 	hdr.version = cpu_to_le32(BTRFS_SEND_STREAM_VERSION);
 
-	return write_buf(sctx->send_filp, &hdr, sizeof(hdr),
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+	mutex_lock(&sctx->cmd_lock);
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
+	ret = write_buf(sctx->send_filp, &hdr, sizeof(hdr),
 					&sctx->send_off);
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+	mutex_unlock(&sctx->cmd_lock);
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
+
+	return ret;
 }
 
 /*
@@ -587,9 +598,6 @@ static int begin_cmd(struct send_ctx *sctx, int cmd)
 		return -EINVAL;
 
 	BUG_ON(sctx->send_size);
-
-	/* Critical region for sending a command starts here */
-	mutex_lock(&sctx->cmd_lock);
 
 	sctx->send_size += sizeof(*hdr);
 	hdr = (struct btrfs_cmd_header *)sctx->send_buf;
@@ -611,19 +619,20 @@ static int send_cmd(struct send_ctx *sctx)
 	crc = crc32c(0, (unsigned char *)sctx->send_buf, sctx->send_size);
 	hdr->crc = cpu_to_le32(crc);
 
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+	mutex_lock(&sctx->cmd_lock);
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
 	ret = write_buf(sctx->send_filp, sctx->send_buf, sctx->send_size,
 					&sctx->send_off);
-
+	sctx->total_send_size += sctx->send_size;
+	sctx->cmd_send_size[le16_to_cpu(hdr->cmd)] += sctx->send_size;
 #ifdef CONFIG_BTRFS_DUET_BACKUP
+	mutex_unlock(&sctx->cmd_lock);
+
 	atomic64_add(sctx->send_size,
 		&sctx->send_root->fs_info->send_total_bytes);
 #endif /* CONFIG_BTRFS_DUET_BACKUP */
-	sctx->total_send_size += sctx->send_size;
-	sctx->cmd_send_size[le16_to_cpu(hdr->cmd)] += sctx->send_size;
 	sctx->send_size = 0;
-
-	/* Critical region for sending a command ends here */
-	mutex_unlock(&sctx->cmd_lock);
 
 	return ret;
 }
@@ -3577,7 +3586,8 @@ out:
 	return ret;
 }
 
-static ssize_t fill_read_buf(struct send_ctx *sctx, u64 offset, u32 len)
+static ssize_t fill_read_buf(struct send_ctx *sctx, void *read_buf, u64 ino,
+							u64 offset, u32 len)
 {
 	struct btrfs_root *root = sctx->send_root;
 	struct btrfs_fs_info *fs_info = root->fs_info;
@@ -3590,7 +3600,7 @@ static ssize_t fill_read_buf(struct send_ctx *sctx, u64 offset, u32 len)
 	unsigned pg_offset = offset & ~PAGE_CACHE_MASK;
 	ssize_t ret = 0;
 
-	key.objectid = sctx->cur_ino;
+	key.objectid = ino;
 	key.type = BTRFS_INODE_ITEM_KEY;
 	key.offset = 0;
 
@@ -3629,7 +3639,7 @@ static ssize_t fill_read_buf(struct send_ctx *sctx, u64 offset, u32 len)
 		}
 
 		addr = kmap(page);
-		memcpy(sctx->read_buf + ret, addr + pg_offset, cur_len);
+		memcpy(read_buf + ret, addr + pg_offset, cur_len);
 		kunmap(page);
 		unlock_page(page);
 		page_cache_release(page);
@@ -3663,7 +3673,8 @@ verbose_printk("btrfs: send_write offset=%llu, len=%d\n", offset, len);
 	if (ret < 0)
 		goto out;
 
-	num_read = fill_read_buf(sctx, offset, len);
+	num_read = fill_read_buf(sctx, sctx->read_buf, sctx->cur_ino, offset,
+									len);
 	if (num_read <= 0) {
 		if (num_read < 0)
 			ret = num_read;
@@ -3689,6 +3700,32 @@ out:
 }
 
 #ifdef CONFIG_BTRFS_DUET_BACKUP
+static int tlv_put_buf(struct send_ctx *sctx, void *send_buf, u32 *send_size,
+					u16 attr, const void *data, int len)
+{
+	struct btrfs_tlv_header *hdr;
+	int total_len = sizeof(*hdr) + len;
+	int left = sctx->send_max_size - *send_size;
+
+	if (unlikely(left < total_len))
+		return -EOVERFLOW;
+
+	hdr = (struct btrfs_tlv_header *) (send_buf + *send_size);
+	hdr->tlv_type = cpu_to_le16(attr);
+	hdr->tlv_len = cpu_to_le16(len);
+	memcpy(hdr + 1, data, len);
+	*send_size += total_len;
+
+	return 0;
+}
+
+static int tlv_put_u64_buf(struct send_ctx *sctx, void *send_buf,
+					u32 *send_size, u16 attr, u64 value)
+{
+	__le64 tmp = cpu_to_le64(value);
+	return tlv_put_buf(sctx, send_buf, send_size, attr, &tmp, sizeof(tmp));
+}
+
 /*
  * Read some bytes from the current inode/file and send an out-of-order write
  * command to user space.
@@ -3696,40 +3733,78 @@ out:
 static int send_o3_write(struct send_ctx *sctx, u64 ino, u64 offset, u32 len)
 {
 	int ret = 0;
+	char *send_buf, *read_buf;
 	ssize_t num_read = 0;
-	u64 cur_ino;
+	struct btrfs_cmd_header *hdr;
+	u32 crc, send_size = 0;
 
 verbose_printk("btrfs: send_o3_write ino=%llu, offset=%llu, len=%d\n", ino, offset, len);
 
-	ret = begin_cmd(sctx, BTRFS_SEND_C_O3_WRITE);
-	if (ret < 0)
-		goto out;
+	send_buf = vmalloc(BTRFS_SEND_BUF_SIZE);
+	if (!send_buf)
+		return -ENOMEM;
 
-	/* Change then restore sctx->cur_ino to make fill_read_buf happy */
-#ifdef CONFIG_BTRFS_DUET_BACKUP_DEBUG
-	printk("send_o3_write: swapping cur_ino %llu with ino %llu\n",
-		sctx->cur_ino, ino);
-#endif /* CONFIG_BTRFS_DUET_BACKUP_DEBUG */
-	cur_ino = sctx->cur_ino;
-	sctx->cur_ino = ino;
-	num_read = fill_read_buf(sctx, offset, len);
-	sctx->cur_ino = cur_ino;
+	read_buf = vmalloc(BTRFS_SEND_READ_SIZE);
+	if (!read_buf) {
+		vfree(sctx->send_buf);
+		return -ENOMEM;
+	}
+
+	printk(KERN_DEBUG "btrfs: send_o3_write ino=%llu, offset=%llu, len=%d\n", ino, offset, len);
+
+	send_size += sizeof(*hdr);
+	hdr = (struct btrfs_cmd_header *)send_buf;
+	hdr->cmd = cpu_to_le16(BTRFS_SEND_C_O3_WRITE);
+
+	/*ret = begin_cmd(sctx, BTRFS_SEND_C_O3_WRITE);
+	if (ret < 0)
+		goto out;*/
+
+	/*num_read = fill_read_buf(sctx, read_buf, ino, offset, len);
 	if (num_read <= 0) {
 		if (num_read < 0)
 			ret = num_read;
 		goto out;
-	}
+	}*/
 
-	TLV_PUT_U64(sctx, BTRFS_SEND_A_INO, ino);
+	if (tlv_put_u64_buf(sctx, send_buf, &send_size, BTRFS_SEND_A_INO, ino))
+		goto tlv_put_failure;
+	if (tlv_put_u64_buf(sctx, send_buf, &send_size,
+					BTRFS_SEND_A_FILE_OFFSET, offset))
+		goto tlv_put_failure;
+	/*if (tlv_put_buf(sctx, send_buf, &send_size, BTRFS_SEND_A_DATA,
+							read_buf, num_read))
+		goto tlv_put_failure;*/
+
+	/*TLV_PUT_U64(sctx, BTRFS_SEND_A_INO, ino);
 	TLV_PUT_U64(sctx, BTRFS_SEND_A_FILE_OFFSET, offset);
-	TLV_PUT(sctx, BTRFS_SEND_A_DATA, sctx->read_buf, num_read);
+	TLV_PUT(sctx, BTRFS_SEND_A_DATA, sctx->read_buf, num_read);*/
 
-	atomic64_add(sctx->send_size,
-			&sctx->send_root->fs_info->send_best_effort);
-	ret = send_cmd(sctx);
+	hdr = (struct btrfs_cmd_header *)send_buf;
+	hdr->len = cpu_to_le32(send_size - sizeof(*hdr));
+	hdr->crc = 0;
+
+	crc = crc32c(0, (unsigned char *)send_buf, send_size);
+	hdr->crc = cpu_to_le32(crc);
+
+	mutex_lock(&sctx->cmd_lock);
+	//ret = write_buf(sctx->send_filp, send_buf, send_size, &sctx->send_off);
+
+	if (ret > 0) {
+		sctx->total_send_size += send_size;
+		sctx->cmd_send_size[le16_to_cpu(hdr->cmd)] += send_size;
+	}
+	mutex_unlock(&sctx->cmd_lock);
+
+	atomic64_add(send_size, &sctx->send_root->fs_info->send_total_bytes);
+	atomic64_add(send_size, &sctx->send_root->fs_info->send_best_effort);
+
+	/* ret = send_cmd(sctx); */
 
 tlv_put_failure:
 out:
+	vfree(sctx->send_buf);
+	vfree(sctx->read_buf);
 	if (ret < 0)
 		return ret;
 	return num_read;
@@ -3738,11 +3813,11 @@ out:
 struct write_range_ctx {
 	u64 unset_iofft;
 	u64 unset_pofft;
-	u64 unset_len;	/* interval should be contiguous in p- and i- level */
+	u64 unset_len;		/* total length of returned unset interval */
 	struct block_device *unset_bdev;
-	u64 processed_bytes;
+	u64 skipped_bytes;	/* total bytes skipped (for being set) */
 	struct send_ctx *sctx;
-	int done;
+	int done;		/* will be set if end of range is reached */
 };
 
 static int find_unset_range(u64 start, u64 len, void *bdevp, void *privdata) {
@@ -3769,7 +3844,7 @@ static int find_unset_range(u64 start, u64 len, void *bdevp, void *privdata) {
 		ret = duet_chk_done(taskid, bdev, cur_lbn, min(blksize,
 								cur_len));
 		if (ret == 1) {
-			wrctx->processed_bytes += min(blksize, cur_len);
+			wrctx->skipped_bytes += min(blksize, cur_len);
 			cur_lbn += min(blksize, cur_len);
 			cur_len -= min(blksize, cur_len);
 		} else {
@@ -3791,7 +3866,7 @@ static int find_unset_range(u64 start, u64 len, void *bdevp, void *privdata) {
 			if (wrctx->unset_len == 0) {
 				wrctx->unset_pofft = cur_lbn;
 				wrctx->unset_bdev = bdev;
-				wrctx->unset_iofft += wrctx->processed_bytes;
+				wrctx->unset_iofft += wrctx->skipped_bytes;
 			}
 			wrctx->unset_len += min(blksize, cur_len);
 			cur_lbn += min(blksize, cur_len);
@@ -3808,7 +3883,7 @@ static int find_unset_range(u64 start, u64 len, void *bdevp, void *privdata) {
 		wrctx->done = 1;
 
 done:
-	return ret;
+	return ret == -1 ? ret : 0;
 
 chk_fail:
 	printk(KERN_ERR "find_unset_range: duet_chk_done failed\n");
@@ -3817,11 +3892,22 @@ chk_fail:
 #endif /* CONFIG_BTRFS_DUET_BACKUP */
 
 static int send_write(struct send_ctx *sctx, u64 offset, u32 len) {
+#ifdef CONFIG_BTRFS_DUET_BACKUP
 	int ret, num;
 	u64 cur_offt = offset;
 	u64 cur_len = len;
-#ifdef CONFIG_BTRFS_DUET_BACKUP
+#ifdef CONFIG_BTRFS_DUET_BACKUP_DEBUG
+	u64 bytes_sent = 0;
+#endif /* CONFIG_BTRFS_DUET_BACKUP_DEBUG */
 	struct write_range_ctx wrctx;
+
+#ifdef CONFIG_BTRFS_DUET_BACKUP_DEBUG
+	printk(KERN_DEBUG "duet: send_write about to send %llu bytes (ino:%llu offt:%llu)\n",
+		len, sctx->cur_ino, offset);
+#endif /* CONFIG_BTRFS_DUET_BACKUP_DEBUG */
+
+	if (!duet_is_online())
+		goto write_all;
 
 	memset(&wrctx, 0, sizeof(wrctx));
 	wrctx.sctx = sctx;
@@ -3831,6 +3917,7 @@ again:
 	wrctx.unset_pofft = 0;
 	wrctx.unset_len = 0;
 	wrctx.unset_bdev = NULL;
+	wrctx.skipped_bytes = 0;
 
 	/* Find the longest contiguous range that has not been sent yet,
 	 * starting from cur_offt, and up to cur_len */
@@ -3845,6 +3932,12 @@ again:
 	}
 
 	if (wrctx.unset_len) {
+#ifdef CONFIG_BTRFS_DUET_BACKUP_DEBUG
+		bytes_sent += (wrctx.skipped_bytes + wrctx.unset_len);
+		printk(KERN_DEBUG "duet: send_write sending %llu bytes (%llu/%llu)\n",
+			wrctx.unset_len, bytes_sent, len);
+#endif /* CONFIG_BTRFS_DUET_BACKUP_DEBUG */
+
 		/* Mark the processed bytes first, to avoid counting these as
 		 * synergistic reads */
 		ret = duet_mark_done(sctx->taskid, wrctx.unset_bdev,
@@ -3867,22 +3960,30 @@ write_more:
 			goto out;
 		}
 		wrctx.unset_len -= num;
-		cur_offt += num;
 		wrctx.unset_iofft += num;
 		wrctx.unset_pofft += num;
+		cur_offt += num;
 
 		if (wrctx.unset_len)
 			goto write_more;
 
+		/* At this point, writing is done */
+		cur_offt += wrctx.skipped_bytes;
+
 		if (cur_offt < offset + len)
 			goto again;
 	}
-#else
-	ret = __send_write(sctx, offset, len);
-#endif /* CONFIG_BTRFS_DUET_BACKUP */
 
 out:
-	return ret;
+#ifdef CONFIG_BTRFS_DUET_BACKUP_DEBUG
+	printk(KERN_DEBUG "duet: send_write sent %llu out of %llu bytes\n",
+		bytes_sent, len);
+#endif /* CONFIG_BTRFS_DUET_BACKUP_DEBUG */
+	return ret == 0 ? len : ret;
+
+write_all:
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
+	return __send_write(sctx, offset, len);
 }
 
 /*
@@ -4898,6 +4999,7 @@ static int cb_send_o3_write(u64 istart, u64 ilen, void *inop, void *privdata)
 {
 	struct send_ctx *sctx = (struct send_ctx *)privdata;
 	u64 ino = *((u64 *)inop);
+	u64 l, ipos = 0;
 	int ret = 0;
 
 #ifdef CONFIG_BTRFS_DUET_BACKUP_DEBUG
@@ -4905,7 +5007,28 @@ static int cb_send_o3_write(u64 istart, u64 ilen, void *inop, void *privdata)
 		ino, istart, ilen);
 #endif /* CONFIG_BTRFS_DUET_BACKUP_DEBUG */
 
-	ret = send_o3_write(sctx, ino, istart, ilen);
+	/*
+		bio_for_each_segment(bv, bio, i) {
+                char *data = bvec_kmap_irq(bv, &flags);
+                memset(data, 0, bv->bv_len);
+                flush_dcache_page(bv->bv_page);
+                bvec_kunmap_irq(data, &flags);
+        */
+
+	while (ipos < ilen) {
+		l = ilen - ipos;
+		if (l > BTRFS_SEND_READ_SIZE)
+			l = BTRFS_SEND_READ_SIZE;
+		ret = send_o3_write(sctx, ino, istart + ipos, l);
+		if (ret < 0)
+			goto out;
+		if (!ret)
+			break;
+		ipos += ret;
+	}
+	ret = 0;
+
+out:
 	if (ret)
 		printk(KERN_ERR "cb_send_o3_write: failed to send O3 write "
 			"(ino %llu, iofft %llu, ilen %llu)\n", ino, istart,
@@ -4914,6 +5037,33 @@ static int cb_send_o3_write(u64 istart, u64 ilen, void *inop, void *privdata)
 	return ret;
 }
 
+static int lock_bio_pages(struct bio *bio, int do_lock)
+{
+	int segno;
+	struct bio_vec *bvec;
+
+	bio_for_each_segment(bvec, bio, segno) {
+		if (do_lock)
+			lock_page(bvec->bv_page);
+		else
+			unlock_page(bvec->bv_page);
+	}
+
+	return 0;
+}
+
+/*
+ * This is the core of the synergistic backup. We are passed the physical range
+ * that was read. We first tease out the ranges of pages/blocks that are of
+ * interest (i.e. not backed up yet). Then, for each such range, we repeat the
+ * following: mark first as done, to avoid any future checks that would lead us
+ * back to this handler;
+ * then, grab all the file offset that correspond to the range and also belong
+ * to the snapshot we're backing up; finally, send o3 writes for each range of
+ * such offsets, using the pages in the bio. We can do the latter without
+ * worrying about freshness because the pages belong to an inode on a read-only
+ * snapshot. This means that if they're in memory, they're good enough to send.
+ */
 static void __handle_read_event(struct work_struct *work)
 {
 	struct synergistic_work *swork = (struct synergistic_work *)work;
@@ -4956,16 +5106,18 @@ static void __handle_read_event(struct work_struct *work)
 			goto out;
 		}
 
+#if 0
 		/* Send an o3 write for each i-range in p-range */
 		if (btrfs_phy_to_ino(swork->sctx->send_root->fs_info,
 				swork->bdev, wrctx.unset_pofft, wrctx.unset_len,
 				swork->sctx->send_root, cb_send_o3_write,
-				(void *)swork->sctx)) {
+				(void *)swork)) {
 			printk(KERN_ERR "duet-read: failed to go over i-ranges"
 				" in range p%llu %llub\n", wrctx.unset_pofft,
 				wrctx.unset_len);
-			return;
+			goto out;
 		}
+#endif /* 0 */
 
 		cur_len -= (cur_lbn + cur_len) - (wrctx.unset_pofft +
 							wrctx.unset_len);
@@ -4976,15 +5128,25 @@ static void __handle_read_event(struct work_struct *work)
 	printk(KERN_DEBUG "__handle_read_event: done\n");
 #endif /* CONFIG_BTRFS_DUET_BACKUP_DEBUG */
 out:
+	/* Unlock pages */
+	lock_bio_pages(swork->bio, 0);
+
+	/* Let the bio go */
+	bio_put(swork->bio);
 	kfree((void *)work);
 	return;
 }
 
 static void btrfs_send_duet_handler(__u8 taskid, __u8 event_code,
-	struct block_device *bdev, __u64 lbn, __u32 len, void *privdata)
+	struct block_device *bdev, __u64 lbn, __u32 len, void *privdata,
+	void *data, int data_type)
 {
 	struct send_ctx *sctx = (struct send_ctx *)privdata;
 	struct synergistic_work *swork;
+
+	/* TODO: Support buffer_head data type */
+	if (data_type != DUET_DATA_BIO)
+		return;
 
 	switch(event_code) {
 	case DUET_EVENT_BTRFS_READ:
@@ -5003,11 +5165,19 @@ static void btrfs_send_duet_handler(__u8 taskid, __u8 event_code,
 
 		INIT_WORK((struct work_struct *)swork, __handle_read_event);
 
+		/* Get a hold on that bio, so that it doesn't go away */
+		bio_get((struct bio *)data);
+
+		/* Also get a hold on all its pages. This is sufficient because
+		 * our snapshot is read-only. */
+		lock_bio_pages((struct bio *)data, 1);
+
 		/* Populate synergistic work struct */
 		swork->bdev = bdev;
 		swork->lbn = lbn;
 		swork->len = len;
 		swork->sctx = sctx;
+		swork->bio = (struct bio *)data;
 
 		if (queue_work(sctx->syn_wq, (struct work_struct *)swork) != 1) {
 			printk(KERN_ERR "duet: failed to queue up work\n");

@@ -22,10 +22,17 @@
 /*
  * Task-specific event handling function. Should handle all event types
  * registered in the event mask. Arguments: __u8 taskid, __u8 event_code,
- * struct block_device bdev, __u64 lbn, __u32 len, void *private
+ * struct block_device bdev, __u64 lbn, __u32 len, void *private,
+ * void *data, int data_type
  */
 typedef void (duet_event_handler_t) (__u8, __u8, struct block_device *,
-						__u64, __u32, void *);
+					__u64, __u32, void *, void *, int);
+
+/* Return data types: we need this to access the data at the handler */
+enum {
+	DUET_DATA_BIO = 1,		/* the data pointer is to a bio */
+	DUET_DATA_BH,
+};
 
 /* Hook types */
 enum {
