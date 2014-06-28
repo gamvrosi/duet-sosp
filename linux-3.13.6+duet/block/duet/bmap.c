@@ -117,6 +117,8 @@ int duet_bmap_set(__u8 *bmap, __u32 bmap_bytelen, __u64 first_byte,
 {
 	__u32 start, num;
 
+	/* TODO: Examine to check if it would mark a block which is only
+	 * partially included in the range */
 	start = (req_byte - first_byte) / blksize;
 	num = req_bytelen / blksize + (req_bytelen % blksize ? 1 : 0);
 
