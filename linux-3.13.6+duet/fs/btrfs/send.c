@@ -4974,7 +4974,7 @@ static int __tlv_put_o3_data(void *send_buf, u32 *send_size, u16 attr,
 
 		/* If remaining bytes are more than those in bvec,
 		 * copy what's left in this bvec, and move on */
-		if (len > bvec_rem) {
+		if (len >= bvec_rem) {
 			memcpy(hdr + 1,
 			       addr + bvec->bv_offset + swork->bvec_offt,
 			       bvec_rem);
@@ -4988,6 +4988,8 @@ static int __tlv_put_o3_data(void *send_buf, u32 *send_size, u16 attr,
 			       len);
 			swork->bvec_offt += len;
 			len = 0;
+			kunmap(bvec->bv_page);
+			break;
 		}
 
 		kunmap(bvec->bv_page);
@@ -4996,7 +4998,7 @@ static int __tlv_put_o3_data(void *send_buf, u32 *send_size, u16 attr,
 	if (len) {
 		printk(KERN_ERR "send_o3_write: somehow we wanted to send more"
 				" data than that available in the bio. This is"
-				" probably a bug.\n");
+				" probably a bug (len = %d).\n", len);
 		return -EIO;
 	}
 
@@ -5218,7 +5220,7 @@ static void __handle_read_event(struct work_struct *work)
 			/* If remaining bytes are more than those in the bvec,
 			 * decrement skipped_bytes (bvec_idx will be incremented
 			 * by the macro) */
-			if (wrctx.skipped_bytes > bvec_rem) {
+			if (wrctx.skipped_bytes >= bvec_rem) {
 				wrctx.skipped_bytes -= bvec_rem;
 				swork->bvec_offt = 0;
 			/* Otherwise, move offset and break out of the loop. */
