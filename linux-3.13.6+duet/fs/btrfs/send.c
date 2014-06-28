@@ -4970,7 +4970,7 @@ static int __tlv_put_o3_data(void *send_buf, u32 *send_size, u16 attr,
 			break;
 
 		addr = kmap(bvec->bv_page);
-		bvec_rem = bvec->bv_len - swork->bvec_offt + 1;
+		bvec_rem = bvec->bv_len - swork->bvec_offt;
 
 		/* If remaining bytes are more than those in bvec,
 		 * copy what's left in this bvec, and move on */
@@ -5214,7 +5214,7 @@ static void __handle_read_event(struct work_struct *work)
 			if (!wrctx.skipped_bytes)
 				break;
 
-			bvec_rem = bvec->bv_len - swork->bvec_offt + 1;
+			bvec_rem = bvec->bv_len - swork->bvec_offt;
 			/* If remaining bytes are more than those in the bvec,
 			 * decrement skipped_bytes (bvec_idx will be incremented
 			 * by the macro) */
