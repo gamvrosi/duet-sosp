@@ -3817,14 +3817,21 @@ again:
 	wrctx.skipped_bytes = 0;
 
 	/* Find the longest contiguous range that has not been sent yet,
-	 * starting from cur_offt, and up to cur_len */
+	 * starting from cur_offt, and up to cur_len. If there's none,
+	 * that's ok, less work for us! */
 	ret = btrfs_ino_to_phy(sctx->send_root->fs_info, sctx->send_root,
 				sctx->cur_ino, cur_offt, cur_len,
 				find_unset_range, &wrctx);
-	if (ret) {
-		printk(KERN_ERR "duet: failed to find an unset contiguous "
-			"range to write at [%llu, %llu] for task #%d\n",
-			cur_offt, cur_offt+cur_len, sctx->taskid);
+	if (ret == -ENOENT || ret == -ENOEXEC) {
+		printk(KERN_INFO "duet: %s in [%llu, %llu] for task #%d (and "
+			"that's ok!)\n", ret == -ENOENT ? "no unset contiguous"
+			" range found" : "failed to execute callback in",
+			cur_offt, cur_offt + cur_len, sctx->taskid);
+		goto write_all;
+	} else if (ret) {
+		printk(KERN_ERR "duet: btrfs_ino_to_phy failed for range "
+			"[%llu, %llu] for task #%d (err %d)\n", cur_offt,
+			cur_offt + cur_len, sctx->taskid, ret);
 		goto out;
 	}
 
@@ -5179,6 +5186,7 @@ static void __handle_read_event(struct work_struct *work)
 
 	while (cur_len && !wrctx.done) {
 		struct bio_vec *bvec;
+		int ret = 0;
 
 #ifdef CONFIG_BTRFS_DUET_BACKUP_DEBUG
 		printk(KERN_DEBUG "duet-read: looking for unset ranges in "
@@ -5239,14 +5247,19 @@ static void __handle_read_event(struct work_struct *work)
 		}
 
 		/* Send an o3 write for each i-range in p-range */
-		if (btrfs_phy_to_ino(swork->sctx->send_root->fs_info,
+		ret = btrfs_phy_to_ino(swork->sctx->send_root->fs_info,
 				swork->bdev, wrctx.unset_pofft, wrctx.unset_len,
 				swork->sctx->send_root, send_o3_write,
-				(void *)swork)) {
+				(void *)swork);
+		if (ret && ret != -ENOENT) {
 			printk(KERN_ERR "duet-read: failed to go over i-ranges"
 				" in range p%llu %llub\n", wrctx.unset_pofft,
 				wrctx.unset_len);
 			goto out;
+		} else if (ret == -ENOENT) {
+			printk(KERN_INFO "duet-read: found no i-ranges in send"
+				" root for p%llu %llub (and that's ok).\n",
+				wrctx.unset_pofft, wrctx.unset_len);
 		}
 
 		cur_len -= (cur_lbn + cur_len) - (wrctx.unset_pofft +

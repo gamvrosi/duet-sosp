@@ -184,6 +184,7 @@ out:
 /*
  * Find the data item referenced in the metadata tree, compute and return the
  * i-range for this file
+ * Possible return values: -ENOMEM, -ENOENT, 0
  */
 static int __find_extent_irange(struct btrfs_root *root, u64 vstart, u64 vofft,
 				u64 ino, u64 *iofft)
@@ -302,8 +303,11 @@ struct extref_ctx {
 	u64 iofft;
 };
 
-/* Go over all refs for this extent item, check if they belong to
- * the given root, and return each irange separately */
+/*
+ * Go over all refs for this extent item, check if they belong to
+ * the given root, and return each irange separately
+ * Possible return values: -ENOMEM, -EFAULT, -ENOENT, 0
+ */
 static int __extrefs_to_iranges(struct btrfs_extent_item *ei,
 				struct extent_buffer *l, int slot,
 				struct btrfs_root *root, u64 vstart,
@@ -380,7 +384,9 @@ next:
 	}
 
 	if (!cur_processed) {
-		ret = -EINVAL;
+		/* We didn't find an extdata ref */
+		/* TODO: Maybe elevate to -EINVAL? */
+		ret = -ENOENT;
 		goto out;
 	}
 
@@ -389,7 +395,10 @@ out:
 	return ret;
 }
 
-/* The v-range given is assumed to belong in the same device extent */
+/*
+ * The v-range given is assumed to belong in the same device extent
+ * Possible return values: -ENOMEM, -EIO, -ENOENT, 0
+ */
 static int __vrange_to_iranges(struct btrfs_fs_info *fs_info, u64 vofft,
 				u64 vlen, struct btrfs_root *root,
 				iterate_ranges_t iterate, void *privdata)
@@ -530,7 +539,7 @@ join_trans:
 
 		ret = __extrefs_to_iranges(ei, l, slot, root, key.objectid,
 					cur_vofft, ext_len, iterate, privdata);
-		if (ret) {
+		if (ret && ret != -ENOENT) {
 			printk(KERN_ERR "__vrange_to_iranges: failed to process extrefs\n");
 			goto out;
 		}
@@ -556,7 +565,11 @@ out:
 /*
  * Given a block device, a physical address range, and a root, find all the
  * metadata items that correspond to the range, and call the provided
- * callback for each
+ * callback for each.
+ * We return -ENOENT if we couldn't find a suitable i-range, or any i-ranges
+ * we manage to find. Not finding an i-range for a p-range is *not*
+ * considered a fatal error. Any other error (ret < 0) can be safely
+ * considered fatal.
  */
 int btrfs_phy_to_ino(struct btrfs_fs_info *fs_info, struct block_device *bdev,
 			u64 pofft, u64 plen, struct btrfs_root *root,
@@ -616,7 +629,7 @@ int btrfs_phy_to_ino(struct btrfs_fs_info *fs_info, struct block_device *bdev,
 
 		ret = __vrange_to_iranges(fs_info, vofft, vlen, root,
 							iterate, privdata);
-		if (ret) {
+		if (ret && ret != -ENOENT) {
 			printk(KERN_DEBUG "btrfs_phy_to_ino: item iteration failed\n");
 			goto out;
 		}
@@ -717,8 +730,10 @@ static int __vrange_to_pranges(struct btrfs_fs_info *fs_info,
 
 			ret = iterate(pofft, vlen, (void *)device->bdev,
 								privdata);
-			if (ret)
+			if (ret) {
+				ret = -ENOEXEC;
 				goto out;
+			}
 		}
 	}
 
@@ -738,6 +753,8 @@ not_found:
  * are no guarantees of contiguity between the levels, so we will invoke the
  * given callback on each physical contiguous range separately. Finally, the
  * node must belong to the given root.
+ * Note that if we can't find a range, we just return -ENOENT. Every other
+ * error can be considered fatal.
  */
 int btrfs_ino_to_phy(struct btrfs_fs_info *fs_info, struct btrfs_root *root,
 			u64 ino, u64 iofft, u64 ilen, iterate_ranges_t iterate,
@@ -874,11 +891,10 @@ join_trans:
 		}
 
 		/* Process this v-range */
-		if (__vrange_to_pranges(fs_info, root, vofft, vlen, iterate,
-								privdata)) {
-			ret = -ENOENT;
+		ret = __vrange_to_pranges(fs_info, root, vofft, vlen, iterate,
+								privdata);
+		if (ret && ret != -ENOENT)
 			goto out;
-		}
 
 		/* Move on to the next extent */
 		cur_iofft += vlen;
