@@ -5323,7 +5323,8 @@ static void btrfs_send_duet_handler(__u8 taskid, __u8 event_code,
 		swork->sctx = sctx;
 		swork->bio = (struct bio *)data;
 
-		if (queue_work(sctx->syn_wq, (struct work_struct *)swork) != 1) {
+		if (sctx->syn_wq && queue_work(sctx->syn_wq,
+					(struct work_struct *)swork) != 1) {
 			printk(KERN_ERR "duet: failed to queue up work\n");
 			kfree(swork);
 			return;
@@ -5350,6 +5351,9 @@ long btrfs_ioctl_send(struct file *mnt_file, void __user *arg_)
 	struct btrfs_ioctl_send_args *arg = NULL;
 	struct btrfs_key key;
 	struct send_ctx *sctx = NULL;
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+	struct workqueue_struct *tmp_wq = NULL;
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
 	u32 i;
 	u64 *clone_sources_tmp = NULL;
 
@@ -5599,13 +5603,15 @@ out:
 			atomic64_read(&fs_info->send_best_effort));
 #endif /* CONFIG_BTRFS_DUET_BACKUP_DEBUG */
 
+	/* Flush and destroy work queue */
+	tmp_wq = sctx->syn_wq;
+	sctx->syn_wq = NULL;
+	flush_workqueue(tmp_wq);
+	destroy_workqueue(tmp_wq);
+
 	/* Deregister the task from the Duet framework */
 	if (duet_task_deregister(sctx->taskid))
 		printk(KERN_ERR "send: failed to deregister from duet framework\n");
-
-	/* Flush and destroy work queue */
-	flush_workqueue(sctx->syn_wq);
-	destroy_workqueue(sctx->syn_wq);
 
 	/* Destroy mutex */
 	mutex_destroy(&sctx->cmd_lock);
