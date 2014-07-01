@@ -132,6 +132,7 @@ struct send_ctx {
 
 #ifdef CONFIG_BTRFS_DUET_BACKUP
 	struct mutex cmd_lock;
+	spinlock_t wq_lock;
 	struct workqueue_struct *syn_wq;
 	__u8 taskid;
 };
@@ -5323,12 +5324,15 @@ static void btrfs_send_duet_handler(__u8 taskid, __u8 event_code,
 		swork->sctx = sctx;
 		swork->bio = (struct bio *)data;
 
-		if (sctx->syn_wq && queue_work(sctx->syn_wq,
+		spin_lock(&sctx->wq_lock);
+		if (!sctx->syn_wq || queue_work(sctx->syn_wq,
 					(struct work_struct *)swork) != 1) {
 			printk(KERN_ERR "duet: failed to queue up work\n");
+			spin_unlock(&sctx->wq_lock);
 			kfree(swork);
 			return;
 		}
+		spin_unlock(&sctx->wq_lock);
 
 #ifdef CONFIG_BTRFS_DUET_BACKUP_DEBUG
 		printk(KERN_DEBUG "duet: Queued up work for read event\n");
@@ -5543,6 +5547,7 @@ long btrfs_ioctl_send(struct file *mnt_file, void __user *arg_)
 	/* Mutex will make sure we don't corrupt the stream during out-of-order
 	 * (o3) writes */
 	mutex_init(&sctx->cmd_lock);
+	spin_lock_init(&sctx->wq_lock);
 
 	/* Out-of-order writes will be put on this work queue */
 	sctx->syn_wq = alloc_workqueue("duet-send", WQ_UNBOUND | WQ_HIGHPRI, 0);
@@ -5604,8 +5609,10 @@ out:
 #endif /* CONFIG_BTRFS_DUET_BACKUP_DEBUG */
 
 	/* Flush and destroy work queue */
+	spin_lock(&sctx->wq_lock);
 	tmp_wq = sctx->syn_wq;
 	sctx->syn_wq = NULL;
+	spin_unlock(&sctx->wq_lock);
 	flush_workqueue(tmp_wq);
 	destroy_workqueue(tmp_wq);
 
