@@ -1665,6 +1665,8 @@ struct btrfs_fs_info {
 
 #ifdef CONFIG_BTRFS_DUET_BACKUP
 	/* progress-related state for send */
+	u64 send_elapsed_rtime;
+	u64 send_elapsed_wtime;
 	atomic64_t send_total_bytes;
 	atomic64_t send_best_effort;
 	atomic64_t send_start_jiffies;

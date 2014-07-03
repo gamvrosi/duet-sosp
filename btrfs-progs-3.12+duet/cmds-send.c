@@ -1034,18 +1034,12 @@ static int cmd_send_status(int argc, char **argv)
 		goto out;
 	}
 
-	if (!sa.progress.running)
-		printf("Sent %llu bytes, finished after %u sec.\n"
-			"Sent %llu bytes out of order.\n",
-			sa.progress.sent_total_bytes,
-			sa.progress.elapsed_time,
-			sa.progress.sent_best_effort);
-	else
-		printf("Sent %llu bytes, running for %u sec.\n"
-			"Sent %llu bytes out of order.\n",
-			sa.progress.sent_total_bytes,
-			sa.progress.elapsed_time,
-			sa.progress.sent_best_effort);
+	printf("Sent %llu bytes, %s %u sec.\nSent %llu bytes out of order.\n"
+		"Spent %u sec doing read I/O, %u sec doing write I/O.\n",
+		sa.progress.sent_total_bytes,
+		sa.progress.running ? "running for" : "finished after",
+		sa.progress.elapsed_time, sa.progress.sent_best_effort,
+		sa.progress.elapsed_rtime, sa.progress.elapsed_wtime);
 
 	return 0;
 out:

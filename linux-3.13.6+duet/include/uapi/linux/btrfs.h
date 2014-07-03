@@ -489,6 +489,8 @@ struct btrfs_ioctl_received_subvol_args {
 struct btrfs_send_progress {
 	__u64 sent_total_bytes;		/* out */
 	__u64 sent_best_effort;		/* out */
+	__u32 elapsed_rtime;		/* out */
+	__u32 elapsed_wtime;		/* out */
 	__u32 elapsed_time;		/* out */
 	__u8 running;			/* out */
 };

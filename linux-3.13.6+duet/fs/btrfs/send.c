@@ -32,6 +32,7 @@
 #include <linux/workqueue.h>
 #include <linux/duet.h>
 #include <linux/bio.h>
+#include <linux/ktime.h>
 #include "mapping.h"
 #endif /* CONFIG_BTRFS_DUET_BACKUP */
 
@@ -579,16 +580,23 @@ static int send_header(struct send_ctx *sctx)
 {
 	struct btrfs_stream_header hdr;
 	int ret;
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+	ktime_t start, finish;
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
 
 	strcpy(hdr.magic, BTRFS_SEND_STREAM_MAGIC);
 	hdr.version = cpu_to_le32(BTRFS_SEND_STREAM_VERSION);
 
 #ifdef CONFIG_BTRFS_DUET_BACKUP
 	mutex_lock(&sctx->cmd_lock);
+	start = ktime_get();
 #endif /* CONFIG_BTRFS_DUET_BACKUP */
 	ret = write_buf(sctx->send_filp, &hdr, sizeof(hdr),
 					&sctx->send_off);
 #ifdef CONFIG_BTRFS_DUET_BACKUP
+	finish = ktime_get();
+	sctx->send_root->fs_info->send_elapsed_wtime +=
+						ktime_us_delta(finish, start);
 	mutex_unlock(&sctx->cmd_lock);
 #endif /* CONFIG_BTRFS_DUET_BACKUP */
 
@@ -619,6 +627,9 @@ static int send_cmd(struct send_ctx *sctx)
 	int ret;
 	struct btrfs_cmd_header *hdr;
 	u32 crc;
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+	ktime_t start, finish;
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
 
 	hdr = (struct btrfs_cmd_header *)sctx->send_buf;
 	hdr->len = cpu_to_le32(sctx->send_size - sizeof(*hdr));
@@ -629,12 +640,16 @@ static int send_cmd(struct send_ctx *sctx)
 
 #ifdef CONFIG_BTRFS_DUET_BACKUP
 	mutex_lock(&sctx->cmd_lock);
+	start = ktime_get();
 #endif /* CONFIG_BTRFS_DUET_BACKUP */
 	ret = write_buf(sctx->send_filp, sctx->send_buf, sctx->send_size,
 					&sctx->send_off);
 	sctx->total_send_size += sctx->send_size;
 	sctx->cmd_send_size[le16_to_cpu(hdr->cmd)] += sctx->send_size;
 #ifdef CONFIG_BTRFS_DUET_BACKUP
+	finish = ktime_get();
+	sctx->send_root->fs_info->send_elapsed_wtime +=
+						ktime_us_delta(finish, start);
 	mutex_unlock(&sctx->cmd_lock);
 
 	atomic64_add(sctx->send_size,
@@ -3670,6 +3685,9 @@ static int __send_write(struct send_ctx *sctx, u64 offset, u32 len)
 	int ret = 0;
 	struct fs_path *p;
 	ssize_t num_read = 0;
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+	ktime_t start, finish;
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
 
 	p = fs_path_alloc();
 	if (!p)
@@ -3681,8 +3699,13 @@ verbose_printk("btrfs: send_write offset=%llu, len=%d\n", offset, len);
 	if (ret < 0)
 		goto out;
 
+	start = ktime_get();
 	num_read = fill_read_buf(sctx, sctx->read_buf, sctx->cur_ino, offset,
 									len);
+	finish = ktime_get();
+	sctx->send_root->fs_info->send_elapsed_rtime +=
+						ktime_us_delta(finish, start);
+
 	if (num_read <= 0) {
 		if (num_read < 0)
 			ret = num_read;
@@ -4925,6 +4948,7 @@ static int __send_o3_cmd(void *send_buf, u32 *send_size, struct send_ctx *sctx)
 	int ret;
 	struct btrfs_cmd_header *hdr;
 	u32 crc;
+	ktime_t start, finish;
 
 	hdr = (struct btrfs_cmd_header *)send_buf;
 	hdr->len = cpu_to_le32(*send_size - sizeof(*hdr));
@@ -4934,9 +4958,13 @@ static int __send_o3_cmd(void *send_buf, u32 *send_size, struct send_ctx *sctx)
 	hdr->crc = cpu_to_le32(crc);
 
 	mutex_lock(&sctx->cmd_lock);
+	start = ktime_get();
 	ret = write_buf(sctx->send_filp, send_buf, *send_size,
 							&sctx->send_off);
 
+	finish = ktime_get();
+	sctx->send_root->fs_info->send_elapsed_wtime +=
+						ktime_us_delta(finish, start);
 	sctx->total_send_size += *send_size;
 	sctx->cmd_send_size[le16_to_cpu(hdr->cmd)] += *send_size;
 	mutex_unlock(&sctx->cmd_lock);
@@ -5531,6 +5559,8 @@ long btrfs_ioctl_send(struct file *mnt_file, void __user *arg_)
 	/* Store context in fs_info */
 	mutex_lock(&fs_info->send_lock);
 #ifdef CONFIG_BTRFS_DUET_BACKUP
+	fs_info->send_elapsed_rtime = 0;
+	fs_info->send_elapsed_wtime = 0;
 	atomic64_set(&fs_info->send_total_bytes, 0);
 	atomic64_set(&fs_info->send_best_effort, 0);
 	atomic64_set(&fs_info->send_start_jiffies, jiffies);
@@ -5701,6 +5731,8 @@ long btrfs_ioctl_send_progress(struct btrfs_root *root, void __user *arg)
 			atomic64_read(&fs_info->send_start_jiffies) / HZ;
 	}
 
+	sa->progress.elapsed_rtime = (u32) (fs_info->send_elapsed_rtime / 1E6);
+	sa->progress.elapsed_wtime = (u32) (fs_info->send_elapsed_wtime / 1E6);
 	sa->progress.sent_total_bytes =
 		atomic64_read(&fs_info->send_total_bytes);
 	sa->progress.sent_best_effort =
