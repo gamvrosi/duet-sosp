@@ -25,9 +25,22 @@ config DUET_BTRFS
 
 	help
 	  This option enables Duet hook support for the btrfs file system.
-	  The hooks offered can be found in fs/btrfs/duet_btrfs.h
+	  The hooks offered can be found in linux/duet.h
 
-	  This option required support for the duet core framework
+	  This option requires support for the duet core framework
+	  (CONFIG_DUET).
+
+	  If unsure, say N.
+
+config DUET_CACHE
+	bool "Duet synergy framework support for the page cache"
+	depends on DUET
+
+	help
+	  This option enables Duet hook support at the page cache level.
+	  The hooks offered can be found in linux/duet.h
+
+	  This option requires support for the duet core framework
 	  (CONFIG_DUET).
 
 	  If unsure, say N.

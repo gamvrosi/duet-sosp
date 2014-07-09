@@ -635,34 +635,49 @@ out:
 #endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
 
 #ifdef CONFIG_BTRFS_DUET_SCRUB
-static void btrfs_scrub_duet_handler(__u8 taskid, __u8 event_code,
-	struct block_device *bdev, __u64 lbn, __u32 len, void *privdata,
-	void *data, int data_type)
+static void btrfs_scrub_duet_handler(__u8 taskid, __u8 event_code, void *owner,
+	__u64 offt, __u32 len, void *data, int data_type, void *privdata)
 {
 	struct scrub_ctx *sctx = (struct scrub_ctx *)privdata;
+	struct block_device *bdev;
 
 #ifdef CONFIG_BTRFS_FS_SCRUB_DEBUG
 	printk(KERN_DEBUG "duet: In the btrfs_scrub_duet_handler\n");
 #endif /* CONFIG_BTRFS_FS_SCRUB_DEBUG */
 
-	/* Check that the event refers to the device we're scrubbing */
-	if (sctx->scrub_bdev != bdev->bd_contains)
-		return;
-
 	/* Since we got all the way here, we're on the right device.
-	 * Handle the event now */
-	if (event_code & DUET_EVENT_BTRFS_WRITE) {
-		if (duet_mark_todo(taskid, bdev, lbn, len) == -1)
-			printk(KERN_ERR "duet: failed to mark_todo [%llu, "
-				"%llu] range for task #%d\n", lbn, lbn+len,
-				taskid);
-	}
+	 * Handle the event now
+	 * Note that we shouldn't get here with an unsupported event
+	 * code, but we check that for correctness anyway. */
+	switch (event_code) {
+	case DUET_EVENT_BTRFS_WRITE:
+		bdev = (struct block_device *)owner;
 
-	if (event_code & DUET_EVENT_BTRFS_READ) {
-		if (duet_mark_done(taskid, bdev, lbn, len) == -1)
-			printk(KERN_ERR "duet: failed to mark_done [%llu, "
-				"%llu] range for task #%d\n", lbn, lbn+len,
+		/* Check that the event refers to the device we're scrubbing */
+		if (sctx->scrub_bdev != bdev->bd_contains)
+			return;
+
+		if (duet_mark_todo(taskid, bdev, offt, len) == -1)
+			printk(KERN_ERR "duet: failed to mark_todo [%llu, "
+				"%llu] range for task #%d\n", offt, offt+len,
 				taskid);
+		break;
+	case DUET_EVENT_BTRFS_READ:
+		bdev = (struct block_device *)owner;
+
+		/* Check that the event refers to the device we're scrubbing */
+		if (sctx->scrub_bdev != bdev->bd_contains)
+			return;
+
+		if (duet_mark_done(taskid, bdev, offt, len) == -1)
+			printk(KERN_ERR "duet: failed to mark_done [%llu, "
+				"%llu] range for task #%d\n", offt, offt+len,
+				taskid);
+		break;
+	default:
+		printk(KERN_ERR "duet: received unsupported event code (%d). "
+			"This is a bug.\n", event_code);
+		break;
 	}
 }
 #endif /* CONFIG_BTRFS_DUET_SCRUB */

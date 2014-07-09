@@ -5309,12 +5309,12 @@ buf_err:
 	return;
 }
 
-static void btrfs_send_duet_handler(__u8 taskid, __u8 event_code,
-	struct block_device *bdev, __u64 lbn, __u32 len, void *privdata,
-	void *data, int data_type)
+static void btrfs_send_duet_handler(__u8 taskid, __u8 event_code, void *owner,
+	__u64 offt, __u32 len, void *data, int data_type, void *privdata)
 {
 	struct send_ctx *sctx = (struct send_ctx *)privdata;
 	struct synergistic_work *swork;
+	struct block_device *bdev;
 
 	/* TODO: Support buffer_head data type */
 	if (data_type != DUET_DATA_BIO)
@@ -5322,9 +5322,11 @@ static void btrfs_send_duet_handler(__u8 taskid, __u8 event_code,
 
 	switch(event_code) {
 	case DUET_EVENT_BTRFS_READ:
+		bdev = (struct block_device *)owner;
+
 #ifdef CONFIG_BTRFS_DUET_BACKUP_DEBUG
 		printk(KERN_DEBUG "duet: caught read on [%llu, %llu].\n",
-			lbn, lbn + len);
+			offt, offt+len);
 #endif /* CONFIG_BTRFS_DUET_BACKUP_DEBUG */
 
 		swork = (struct synergistic_work *)kzalloc(sizeof(
@@ -5347,7 +5349,7 @@ static void btrfs_send_duet_handler(__u8 taskid, __u8 event_code,
 
 		/* Populate synergistic work struct */
 		swork->bdev = bdev;
-		swork->lbn = lbn;
+		swork->lbn = offt;
 		swork->len = len;
 		swork->sctx = sctx;
 		swork->bio = (struct bio *)data;

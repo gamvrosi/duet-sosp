@@ -373,13 +373,12 @@ static void bmaptree_dispose(struct rb_root *root)
 	}
 }
 
-static void echo_handler(__u8 taskid, __u8 event_code,
-			struct block_device *bdev, __u64 lbn, __u32 len,
-			void *privdata, void *data, int data_type)
+static void echo_handler(__u8 taskid, __u8 event_code, void *owner, __u64 offt,
+			__u32 len, void *data, int data_type, void *privdata)
 {
 	printk(KERN_DEBUG "duet: echo_handler called\n"
 		"duet: taskid = %u, event_code = %u, lbn = %llu, len = %u, "
-		"data_type = %d\n", taskid, event_code, lbn, len, data_type);
+		"data_type = %d\n", taskid, event_code, offt, len, data_type);
 }
 
 /* Properly allocate and initialize a task struct */

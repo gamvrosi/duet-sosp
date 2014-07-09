@@ -42,34 +42,39 @@ static inline void mark_bio_seen(struct bio *bio)
 
 /* We're finally here. Just find tasks that are interested in this event,
  * and call their handlers. */
-static void duet_handle_event(__u8 event_code, struct block_device *bdev,
-	__u64 lbn, __u32 len, void *data, int data_type)
+static void duet_handle_event(__u8 event_code, void *owner, __u64 offt,
+					__u32 len, void *data, int data_type)
 {
 	struct duet_task *cur;
 
+	if (data_type == DUET_DATA_PAGE)
+		get_page((struct page *)data);
+
 #ifdef CONFIG_DUET_DEBUG
-	printk(KERN_INFO "duet event: code %u, bdev %p, devid %u, contains %p,"
-		" lbn %llu, len %u\n", event_code, bdev, bdev ? bdev->bd_dev :
-		0, bdev->bd_contains ? bdev->bd_contains : 0, lbn, len);
+	printk(KERN_INFO "duet event: event %u, %s %p, offt %llu, len %u\n",
+		event_code, (data_type == DUET_DATA_PAGE) ? "inode" : "bdev",
+		owner, offt, len);
 #endif /* CONFIG_DUET_DEBUG */
 
-	/* Go over the task list, and look for a task referring to the bdev
-	 * and where the event code matches the event mask */
+	/* Look for tasks interested in this event type and invoke callbacks */
 	rcu_read_lock();
 	list_for_each_entry_rcu(cur, &duet_env.tasks, task_list) {
 		if (cur->event_mask & event_code)
-			cur->event_handler(cur->id, event_code, bdev, lbn, len,
-					cur->privdata, data, data_type);
+			cur->event_handler(cur->id, event_code, owner, offt,
+					len, data, data_type, cur->privdata);
 	}
 	rcu_read_unlock();
 
-	/* Release this buffer_head/bio */
+	/* Release the data */
 	switch (data_type) {
 	case DUET_DATA_BIO:
 		bio_put((struct bio *)data);
 		break;
 	case DUET_DATA_BH:
 		put_bh((struct buffer_head *)data);
+		break;
+	case DUET_DATA_PAGE:
+		put_page((struct page *)data);
 		break;
 	}
 }
@@ -101,8 +106,8 @@ static void duet_bio_endio(struct bio *bio, int err)
 
 	/* Transfer control to the duet event handler */
 	if (!err)
-		duet_handle_event(event_code, bdev, lbn, len, (void *)bio,
-								DUET_DATA_BIO);
+		duet_handle_event(event_code, (void *)bdev, lbn, len,
+						(void *)bio, DUET_DATA_BIO);
 	else
 		printk(KERN_ERR "duet_bio_endio: something went wrong %d", err);
 }
@@ -133,7 +138,7 @@ void duet_bh_endio(struct buffer_head *bh, int uptodate)
 	bh->b_end_io(bh, uptodate);
 
 	/* Transfer control to the duet event handler */
-	duet_handle_event(event_code, bdev, lbn, len, (void *)bh,
+	duet_handle_event(event_code, (void *)bdev, lbn, len, (void *)bh,
 								DUET_DATA_BH);
 }
 EXPORT_SYMBOL_GPL(duet_bh_endio); /* export to check at _submit_bh */
@@ -181,7 +186,7 @@ static void duet_bw_hook(__u8 event_code, struct duet_bw_hook_data *hook_data)
 	bdev = bio->bi_bdev;
 
 	/* Transfer control to the duet event handler */
-	duet_handle_event(event_code, bdev, lbn, len, (void *)bio,
+	duet_handle_event(event_code, (void *)bdev, lbn, len, (void *)bio,
 								DUET_DATA_BIO);
 }
 
@@ -208,6 +213,32 @@ static void duet_bh_hook(__u8 event_code, struct buffer_head *bh)
 
 	/* Hold this buffer_head until we're done */
 	get_bh(bh);
+}
+
+/* We're in RCU context so whatever happens, stay awake! */
+void duet_page_hook(__u8 event_code, struct page *page) {
+
+#ifdef CONFIG_DUET_DEBUG /* XXX: remove when done testing */
+	switch (event_code) {
+	case DUET_EVENT_CACHE_INSERT:
+		printk(KERN_DEBUG "duet: Caught cache insertion event\n");
+		break;
+	case DUET_EVENT_CACHE_REMOVE:
+		printk(KERN_DEBUG "duet: Caught cache deletion event\n");
+		break;
+	default:
+		printk(KERN_DEBUG "duet: Caught unknown event (%u)\n",
+			event_code);
+		break;
+	}
+#endif /* CONFIG_DUET_DEBUG */
+
+	BUG_ON(!page);
+	BUG_ON(!page->mapping);
+
+	duet_handle_event(event_code, (void *)page->mapping->host,
+			(__u64)page->index << PAGE_SHIFT, PAGE_SIZE,
+			(void *)page, DUET_DATA_PAGE);
 }
 
 void duet_hook(__u8 event_code, __u8 hook_type, void *hook_data)
@@ -243,6 +274,13 @@ void duet_hook(__u8 event_code, __u8 hook_type, void *hook_data)
 			event_code);
 #endif /* CONFIG_DUET_DEBUG */
 		duet_bh_hook(event_code, (struct buffer_head *)hook_data);
+		break;
+	case DUET_SETUP_HOOK_PAGE:
+#ifdef CONFIG_DUET_DEBUG
+		printk(KERN_INFO "duet: Setting up PAGE hook (code %u)\n",
+			event_code);
+#endif /* CONFIG_DUET_DEBUG */
+		duet_page_hook(event_code, (struct page *)hook_data);
 		break;
 	default:
 #ifdef CONFIG_DUET_DEBUG

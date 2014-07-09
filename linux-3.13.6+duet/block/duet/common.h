@@ -28,6 +28,10 @@
 
 #define TASK_NAME_LEN 128
 
+#ifdef CONFIG_DUET_CACHE
+extern void (*duet_hook_fp)(__u8, __u8, void *);
+#endif /* CONFIG_DUET_CACHE */
+
 enum {
 	DUET_STATUS_OFF = 0,
 	DUET_STATUS_ON,
