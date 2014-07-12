@@ -216,23 +216,8 @@ static void duet_bh_hook(__u8 event_code, struct buffer_head *bh)
 }
 
 /* We're in RCU context so whatever happens, stay awake! */
-void duet_page_hook(__u8 event_code, struct page *page) {
-
-#ifdef CONFIG_DUET_DEBUG /* XXX: remove when done testing */
-	switch (event_code) {
-	case DUET_EVENT_CACHE_INSERT:
-		printk(KERN_DEBUG "duet: Caught cache insertion event\n");
-		break;
-	case DUET_EVENT_CACHE_REMOVE:
-		printk(KERN_DEBUG "duet: Caught cache deletion event\n");
-		break;
-	default:
-		printk(KERN_DEBUG "duet: Caught unknown event (%u)\n",
-			event_code);
-		break;
-	}
-#endif /* CONFIG_DUET_DEBUG */
-
+void duet_page_hook(__u8 event_code, struct page *page)
+{
 	BUG_ON(!page);
 	BUG_ON(!page->mapping);
 
