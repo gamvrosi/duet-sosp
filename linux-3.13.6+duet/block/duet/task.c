@@ -109,6 +109,16 @@ static int bmaptree_chkupd(struct duet_task *task, struct block_device *bdev,
 	lbn_gran = task->blksize * task->bmapsize * 8;
 	node_lbn = rlbn - (rlbn % lbn_gran);
 
+	/*
+	 * Obtain RBBT lock. This will slow us down, but only the work queue
+	 * items and the maintenance threads should get here, so the foreground
+	 * workload should not be affected. Additionally, only a quarter of the
+	 * code will be executed at any call (depending on the set, chk, found
+	 * flags), and only the calls that are required to add/remove nodes to
+	 * the tree will be costly
+	 */
+	mutex_lock(&task->bmaptree_mutex);
+
 	while (rem_len) {
 		/* Look up node_lbn */
 		found = 0;
@@ -162,21 +172,25 @@ static int bmaptree_chkupd(struct duet_task *task, struct block_device *bdev,
 			if (!found && !chk) {
 				/* Insert the new node */
 				dnode = dnode_init(task, node_lbn);
-				if (!dnode)
-					return -1;
+				if (!dnode) {
+					ret = -1;
+					goto done;
+				}
 
 				rb_link_node(&dnode->node, parent, link);
 				rb_insert_color(&dnode->node, &task->bmaptree);
 			} else if (!found && chk) {
 				/* Looking for set bits, node didn't exist */
-				return 0;
+				ret = 0;
+				goto done;
 			}
 
 			/* Set the bits */
 			if (!chk && duet_bmap_set(dnode->bmap, task->bmapsize,
 			    dnode->lbn, task->blksize, cur_lbn, cur_len, 1)) {
 				/* We got -1, something went wrong */
-				return -1;
+				ret = -1;
+				goto done;
 			/* Check the bits */
 			} else if (chk) {
 				ret = duet_bmap_chk(dnode->bmap, task->bmapsize,
@@ -185,7 +199,7 @@ static int bmaptree_chkupd(struct duet_task *task, struct block_device *bdev,
 				/* Check if we failed, or found a bit set/unset
 				 * when it shouldn't be */
 				if (ret != 1)
-					return ret;
+					goto done;
 			}
 
 		} else if (found) {
@@ -193,7 +207,8 @@ static int bmaptree_chkupd(struct duet_task *task, struct block_device *bdev,
 			if (!chk && duet_bmap_set(dnode->bmap, task->bmapsize,
 			    dnode->lbn, task->blksize, cur_lbn, cur_len, 0)) {
 				/* We got -1, something went wrong */
-				return -1;
+				ret = -1;
+				goto done;
 			/* Check the bits */
 			} else if (chk) {
 				ret = duet_bmap_chk(dnode->bmap, task->bmapsize,
@@ -202,7 +217,7 @@ static int bmaptree_chkupd(struct duet_task *task, struct block_device *bdev,
 				/* Check if we failed, or found a bit set/unset
 				 * when it shouldn't be */
 				if (ret != 1)
-					return ret;
+					goto done;
 			}
 
 			if (!chk) {
@@ -230,9 +245,13 @@ static int bmaptree_chkupd(struct duet_task *task, struct block_device *bdev,
 	 * Return 0 for success in the case that chk is not set, or 1 for
 	 * success when chk is set. */
 	if (!chk)
-		return 0;
+		ret = 0;
 	else
-		return 1;
+		ret = 1;
+
+done:
+	mutex_unlock(&task->bmaptree_mutex);
+	return ret;
 }
 
 /* Find task and increment its refcount */
