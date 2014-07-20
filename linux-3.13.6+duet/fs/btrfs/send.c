@@ -138,7 +138,7 @@ struct send_ctx {
 	__u8 taskid;
 };
 
-struct synergistic_work {
+struct send_synwork {
 	struct work_struct work;
 	struct block_device *bdev;
 	u64 lbn;
@@ -4978,7 +4978,7 @@ static int __send_o3_cmd(void *send_buf, u32 *send_size, struct send_ctx *sctx)
 
 
 static int __tlv_put_o3_data(void *send_buf, u32 *send_size, u16 attr,
-			struct synergistic_work *swork, u64 *iofft, u64 *ilen)
+			struct send_synwork *swork, u64 *iofft, u64 *ilen)
 {
 	int len = (int) min((u64) BTRFS_SEND_READ_SIZE, *ilen);
 	struct btrfs_tlv_header *hdr;
@@ -5064,7 +5064,7 @@ static int __tlv_put_o3_u64(void *send_buf, u32 *send_size, u16 attr, u64 val)
 
 static int send_o3_write(u64 iofft, u64 ilen, void *inop, void *privdata)
 {
-	struct synergistic_work *swork = (struct synergistic_work *)privdata;
+	struct send_synwork *swork = (struct send_synwork *)privdata;
 	int ret = 0;
 	u32 send_size = 0;
 	u64 ino = *((u64 *)inop);
@@ -5188,7 +5188,7 @@ static inline int put_bio_pages(struct bio *bio) {
  * Correctness: We can do the latter without worrying about freshness, because
  *   the pages belong to an inode on a read-only snapshot. This means that as
  *   long as they're in memory, they're fresh enough to send.
- * Methodology: We use the (bvec_idx, bvec_offt) fields in the synergistic_work
+ * Methodology: We use the (bvec_idx, bvec_offt) fields in the send_synwork
  *   struct to keep track where we are in the bio, taking into account the
  *   bytes that have already been processed for sending, or skipped. This way,
  *   we keep track of progress made between finding unset intervals, and
@@ -5196,7 +5196,7 @@ static inline int put_bio_pages(struct bio *bio) {
  */
 static void __handle_read_event(struct work_struct *work)
 {
-	struct synergistic_work *swork = (struct synergistic_work *)work;
+	struct send_synwork *swork = (struct send_synwork *)work;
 	struct write_range_ctx wrctx;
 	u64 cur_lbn, cur_len;
 
@@ -5313,7 +5313,7 @@ static void btrfs_send_duet_handler(__u8 taskid, __u8 event_code, void *owner,
 	__u64 offt, __u32 len, void *data, int data_type, void *privdata)
 {
 	struct send_ctx *sctx = (struct send_ctx *)privdata;
-	struct synergistic_work *swork;
+	struct send_synwork *swork;
 	struct block_device *bdev;
 
 	/* TODO: Support buffer_head data type */
@@ -5329,11 +5329,10 @@ static void btrfs_send_duet_handler(__u8 taskid, __u8 event_code, void *owner,
 			offt, offt+len);
 #endif /* CONFIG_BTRFS_DUET_BACKUP_DEBUG */
 
-		swork = (struct synergistic_work *)kzalloc(sizeof(
-					struct synergistic_work), GFP_ATOMIC);
+		swork = (struct send_synwork *)kzalloc(sizeof(
+					struct send_synwork), GFP_ATOMIC);
 		if (!swork) {
-			printk(KERN_ERR "duet: failed to allocate synergistic "
-				"work\n");
+			printk(KERN_ERR "duet-send: failed to allocate work item\n");
 			return;
 		}
 
@@ -5357,7 +5356,7 @@ static void btrfs_send_duet_handler(__u8 taskid, __u8 event_code, void *owner,
 		spin_lock(&sctx->wq_lock);
 		if (!sctx->syn_wq || queue_work(sctx->syn_wq,
 					(struct work_struct *)swork) != 1) {
-			printk(KERN_ERR "duet: failed to queue up work\n");
+			printk(KERN_ERR "duet-send: failed to queue up work\n");
 			spin_unlock(&sctx->wq_lock);
 			kfree(swork);
 			return;
@@ -5365,11 +5364,11 @@ static void btrfs_send_duet_handler(__u8 taskid, __u8 event_code, void *owner,
 		spin_unlock(&sctx->wq_lock);
 
 #ifdef CONFIG_BTRFS_DUET_BACKUP_DEBUG
-		printk(KERN_DEBUG "duet: Queued up work for read event\n");
+		printk(KERN_DEBUG "duet-send: Queued up work for read event\n");
 #endif /* CONFIG_BTRFS_DUET_BACKUP_DEBUG */
 		break;
 	default:
-		printk(KERN_ERR "duet: send handler received unknown event "
+		printk(KERN_ERR "duet-send: handler received unknown event "
 			"code %u\n", event_code);
 		break;
 	}

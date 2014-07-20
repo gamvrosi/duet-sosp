@@ -32,6 +32,9 @@
 #ifdef CONFIG_DUET_BTRFS
 #include <linux/duet.h>
 #endif /* CONFIG_DUET_BTRFS */
+#ifdef CONFIG_BTRFS_DUET_SCRUB
+#include <linux/workqueue.h>
+#endif /* CONFIG_BTRFS_DUET_SCRUB */
 #ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
 #include <linux/timer.h>
 
@@ -188,6 +191,17 @@ struct scrub_ctx {
 #ifdef CONFIG_BTRFS_DUET_SCRUB
 	__u8			taskid;
 	struct block_device	*scrub_bdev;
+	spinlock_t		wq_lock;
+	struct workqueue_struct	*syn_wq;
+};
+
+struct scrub_synwork {
+        struct work_struct work;
+        struct block_device *bdev;
+	__u8 code;
+        u64 lbn;
+        u64 len;
+        struct scrub_ctx *sctx;
 #endif /* CONFIG_BTRFS_DUET_SCRUB */
 };
 
@@ -387,6 +401,9 @@ static void scrub_free_csums(struct scrub_ctx *sctx)
 static noinline_for_stack void scrub_free_ctx(struct scrub_ctx *sctx)
 {
 	int i;
+#ifdef CONFIG_BTRFS_DUET_SCRUB
+	struct workqueue_struct *tmp_wq = NULL;
+#endif /* CONFIG_BTRFS_DUET_SCRUB */
 
 	if (!sctx)
 		return;
@@ -394,6 +411,14 @@ static noinline_for_stack void scrub_free_ctx(struct scrub_ctx *sctx)
 	scrub_free_wr_ctx(&sctx->wr_ctx);
 
 #ifdef CONFIG_BTRFS_DUET_SCRUB
+	/* Flush and destroy work queue */
+	spin_lock(&sctx->wq_lock);
+	tmp_wq = sctx->syn_wq;
+	sctx->syn_wq = NULL;
+	spin_unlock(&sctx->wq_lock);
+	flush_workqueue(tmp_wq);
+	destroy_workqueue(tmp_wq);
+
 	/* Deregister the task from the Duet framework */
 	if (duet_task_deregister(sctx->taskid))
 		printk(KERN_ERR "scrub: failed to deregister from duet framework\n");
@@ -635,50 +660,87 @@ out:
 #endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
 
 #ifdef CONFIG_BTRFS_DUET_SCRUB
+/*
+ * This is the core of the synergistic scrubber. We are passed the physical
+ * range that was read or written, and we need to mark or unmark it
+ * respectively.
+ */
+static void __handle_event(struct work_struct *work)
+{
+	struct scrub_synwork *swork = (struct scrub_synwork *)work;
+
+	switch (swork->code) {
+	case DUET_EVENT_BTRFS_WRITE:
+		if (duet_mark_todo(swork->sctx->taskid, swork->bdev,
+						swork->lbn, swork->len) == -1)
+			printk(KERN_ERR "duet-scrub: failed to mark_todo "
+				"[%llu, %llu] range for task #%d\n",
+				swork->lbn, swork->lbn + swork->len,
+				swork->sctx->taskid);
+		break;
+	case DUET_EVENT_BTRFS_READ:
+		if (duet_mark_done(swork->sctx->taskid, swork->bdev,
+						swork->lbn, swork->len) == -1)
+			printk(KERN_ERR "duet-scrub: failed to mark_done "
+				"[%llu, %llu] range for task #%d\n",
+				swork->lbn, swork->lbn + swork->len,
+				swork->sctx->taskid);
+		break;
+	default:
+		printk(KERN_ERR "duet-scrub: received unsupported event code "
+			"(%d). This is a bug.\n", swork->code);
+		break;
+	}
+}
+
 static void btrfs_scrub_duet_handler(__u8 taskid, __u8 event_code, void *owner,
 	__u64 offt, __u32 len, void *data, int data_type, void *privdata)
 {
 	struct scrub_ctx *sctx = (struct scrub_ctx *)privdata;
+        struct scrub_synwork *swork;
 	struct block_device *bdev;
 
 #ifdef CONFIG_BTRFS_FS_SCRUB_DEBUG
 	printk(KERN_DEBUG "duet: In the btrfs_scrub_duet_handler\n");
 #endif /* CONFIG_BTRFS_FS_SCRUB_DEBUG */
 
-	/* Since we got all the way here, we're on the right device.
-	 * Handle the event now
-	 * Note that we shouldn't get here with an unsupported event
-	 * code, but we check that for correctness anyway. */
-	switch (event_code) {
-	case DUET_EVENT_BTRFS_WRITE:
-		bdev = (struct block_device *)owner;
+	/* Verify that this event code is valid (redundant) */
+	if (!(event_code & (DUET_EVENT_BTRFS_WRITE | DUET_EVENT_BTRFS_READ)))
+		return;
 
-		/* Check that the event refers to the device we're scrubbing */
-		if (sctx->scrub_bdev != bdev->bd_contains)
-			return;
+	/* Verify that the event refers to the device we're scrubbing */
+	bdev = (struct block_device *)owner;
+	if (sctx->scrub_bdev != bdev->bd_contains)
+		return;
 
-		if (duet_mark_todo(taskid, bdev, offt, len) == -1)
-			printk(KERN_ERR "duet: failed to mark_todo [%llu, "
-				"%llu] range for task #%d\n", offt, offt+len,
-				taskid);
-		break;
-	case DUET_EVENT_BTRFS_READ:
-		bdev = (struct block_device *)owner;
-
-		/* Check that the event refers to the device we're scrubbing */
-		if (sctx->scrub_bdev != bdev->bd_contains)
-			return;
-
-		if (duet_mark_done(taskid, bdev, offt, len) == -1)
-			printk(KERN_ERR "duet: failed to mark_done [%llu, "
-				"%llu] range for task #%d\n", offt, offt+len,
-				taskid);
-		break;
-	default:
-		printk(KERN_ERR "duet: received unsupported event code (%d). "
-			"This is a bug.\n", event_code);
-		break;
+	/* Since we got all the way here, we're on the right device. Create
+	 * a work items to handle the event. */
+	swork = (struct scrub_synwork *)kzalloc(sizeof(struct scrub_synwork),
+								GFP_ATOMIC);
+	if (!swork) {
+		printk(KERN_ERR "duet-scrub: failed to allocate work item\n");
+		return;
 	}
+
+	INIT_WORK((struct work_struct *)swork, __handle_event);
+
+	/* We don't need to get the bio or its pages, since we won't be accessing
+	 * it, or any of its data. Just populate the synergistic work struct. */
+	swork->bdev = bdev;
+	swork->lbn = offt;
+	swork->len = len;
+	swork->sctx = sctx;
+	swork->code = event_code;
+
+	spin_lock(&sctx->wq_lock);
+	if (!sctx->syn_wq || queue_work(sctx->syn_wq,
+					(struct work_struct *)swork) != 1) {
+		printk(KERN_ERR "duet-scrub: failed to queue up work\n");
+		spin_unlock(&sctx->wq_lock);
+		kfree(swork);
+		return;
+	}
+	spin_unlock(&sctx->wq_lock);
 }
 #endif /* CONFIG_BTRFS_DUET_SCRUB */
 
@@ -842,6 +904,14 @@ struct scrub_ctx *scrub_setup_ctx(struct btrfs_device *dev, u64 deadline,
 	sctx->scrub_bdev = dev->bdev;
 	while (sctx->scrub_bdev != sctx->scrub_bdev->bd_contains)
 		sctx->scrub_bdev = sctx->scrub_bdev->bd_contains;
+
+	/* Synergistic work will be put on this work queue */
+	spin_lock_init(&sctx->wq_lock);
+	sctx->syn_wq = alloc_workqueue("duet-scrub", WQ_UNBOUND | WQ_HIGHPRI, 0);
+	if (!sctx->syn_wq) {
+		printk(KERN_ERR "scrub: failed to allocate work queue\n");
+		return ERR_PTR(-EFAULT);
+	}
 
 	/* Register the task with the Duet framework */
 	if (duet_task_register(&sctx->taskid, "btrfs-scrub",
