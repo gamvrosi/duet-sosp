@@ -101,15 +101,12 @@ static void duet_bio_endio(struct bio *bio, int err)
 	bio->bi_private = private->real_private;
 	kfree(private);
 
+	/* Transfer control to the duet event handler */
+	duet_handle_event(event_code, (void *)bdev, lbn, len, (void *)bio,
+								DUET_DATA_BIO);
+
 	/* Call the real callback */
 	bio->bi_end_io(bio, err);
-
-	/* Transfer control to the duet event handler */
-	if (!err)
-		duet_handle_event(event_code, (void *)bdev, lbn, len,
-						(void *)bio, DUET_DATA_BIO);
-	else
-		printk(KERN_ERR "duet_bio_endio: something went wrong %d", err);
 }
 
 /* Callback function for asynchronous bh calls. We first restore the normal
@@ -134,12 +131,12 @@ void duet_bh_endio(struct buffer_head *bh, int uptodate)
 	bh->b_private = private->real_private;
 	kfree(private);
 
-	/* Call the real callback */
-	bh->b_end_io(bh, uptodate);
-
 	/* Transfer control to the duet event handler */
 	duet_handle_event(event_code, (void *)bdev, lbn, len, (void *)bh,
 								DUET_DATA_BH);
+
+	/* Call the real callback */
+	bh->b_end_io(bh, uptodate);
 }
 EXPORT_SYMBOL_GPL(duet_bh_endio); /* export to check at _submit_bh */
 
