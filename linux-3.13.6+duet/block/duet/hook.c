@@ -47,9 +47,6 @@ static void duet_handle_event(__u8 event_code, void *owner, __u64 offt,
 {
 	struct duet_task *cur;
 
-	if (data_type == DUET_DATA_PAGE)
-		get_page((struct page *)data);
-
 #ifdef CONFIG_DUET_DEBUG
 	printk(KERN_INFO "duet event: event %u, %s %p, offt %llu, len %u\n",
 		event_code, (data_type == DUET_DATA_PAGE) ? "inode" : "bdev",
@@ -64,19 +61,6 @@ static void duet_handle_event(__u8 event_code, void *owner, __u64 offt,
 					len, data, data_type, cur->privdata);
 	}
 	rcu_read_unlock();
-
-	/* Release the data */
-	switch (data_type) {
-	case DUET_DATA_BIO:
-		bio_put((struct bio *)data);
-		break;
-	case DUET_DATA_BH:
-		put_bh((struct buffer_head *)data);
-		break;
-	case DUET_DATA_PAGE:
-		put_page((struct page *)data);
-		break;
-	}
 }
 
 /* Callback function for asynchronous bio calls. We first restore the normal
@@ -162,9 +146,6 @@ static void duet_ba_hook(__u8 event_code, struct bio *bio)
 	mark_bio_seen(bio);
 	bio->bi_end_io = duet_bio_endio;
 	bio->bi_private = (void *)private;
-
-	/* Hold this bio until we're done */
-	bio_get(bio);
 }
 
 /* Function that is paired to submit_bio_wait calls. We assume that we get
@@ -207,9 +188,6 @@ static void duet_bh_hook(__u8 event_code, struct buffer_head *bh)
 	/* Fix up buffer head structure */
 	bh->b_end_io = duet_bh_endio;
 	bh->b_private = (void *)private;
-
-	/* Hold this buffer_head until we're done */
-	get_bh(bh);
 }
 
 /* We're in RCU context so whatever happens, stay awake! */
@@ -238,10 +216,6 @@ void duet_hook(__u8 event_code, __u8 hook_type, void *hook_data)
 		break;
 	case DUET_SETUP_HOOK_BW_START:
 		mark_bio_seen((struct bio *)hook_data);
-
-		/* Hold this bio until we're done */
-		bio_get((struct bio *)hook_data);
-
 		break;
 	case DUET_SETUP_HOOK_BW_END:
 #ifdef CONFIG_DUET_DEBUG
