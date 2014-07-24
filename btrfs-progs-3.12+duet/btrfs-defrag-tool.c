@@ -1,0 +1,682 @@
+/*
+ * Copyright (C) 2014 George Amvrosiadis.  All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public
+ * License v2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public
+ * License along with this program; if not, write to the
+ * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
+ * Boston, MA 021110-1307, USA.
+ */
+
+/* Notes:
+   - Check efficiency of sync'ing and re-reading root tree, fs
+     root, path
+   - Incorporate in filebench
+   - Quick fragmentation fix: start writing from the (last-1) block
+     Right fragmentation fix: linked-list with (fname, cur_block,
+     rem_blocks), and switch through files for the writes
+   - Why not defrag slightly fragmented files?
+ */
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <uuid/uuid.h>
+#include <limits.h>
+#include <sys/ioctl.h>
+#include <sys/types.h>
+
+#include "kerncompat.h"
+#include "radix-tree.h"
+#include "ctree.h"
+#include "disk-io.h"
+#include "print-tree.h"
+#include "transaction.h"
+#include "version.h"
+#include "utils.h"
+#include "ioctl.h"
+
+/* Some global variables */
+struct argflags
+{
+	short int verbose;
+	short int stats;
+	short int fragment;
+	double f;
+} args;
+
+struct fs_stats
+{
+	unsigned long long tblocks;
+	unsigned long long textents;
+	unsigned long long tfiles;
+
+	u32 leafsize;
+	char mntpath[PATH_MAX];
+	char devname[256];
+	struct btrfs_fs_info *info;
+} stats;
+
+struct filepath
+{
+	char comp[BTRFS_NAME_LEN];
+	struct filepath *next;
+};
+
+static int print_usage(void)
+{
+	fprintf(stderr, "usage: btrfs-defrag-tool [-s] device\n");
+	fprintf(stderr, "\t-s   : prints per-file fragmentation statistics for device\n");
+	fprintf(stderr, "\t-f F : fragments the filesystem to at least F*100%% (0.0 <= F <= 1.0)\n");
+	fprintf(stderr, "\t-v   : be verbose! I want to know everything!\n");
+	fprintf(stderr, "\t       filesystem MUST be mounted\n");
+	fprintf(stderr, "%s\n", BTRFS_BUILD_VERSION);
+	exit(1);
+}
+
+static int sync_btrfs(char *path)
+{
+	int fd, res, e;
+	DIR *dirstream = NULL;
+
+	if (path == NULL) path = stats.mntpath;
+
+	fd = open_file_or_dir(path, &dirstream);
+	if (fd < 0) {
+		fprintf(stderr, "Error: couldn't open '%s'\n", path);
+		return 1;
+	}
+
+	if (args.verbose >= 2)
+		printf("- Syncing '%s'\n", path);
+	res = ioctl(fd, BTRFS_IOC_SYNC);
+	e = errno;
+	close_file_or_dir(fd, dirstream);
+	if (res < 0) {
+		fprintf(stderr, "Error: unable to sync '%s' - %s\n",
+			path, strerror(e));
+		return 1;
+	}
+
+	return 0;
+}
+
+static int defrag_file(char *path, short int flush)
+{
+	int fd, ret = 0, e = 0;
+	int fancy_ioctl = flush;
+	struct btrfs_ioctl_defrag_range_args range;
+	DIR *dirstream = NULL;
+
+	/* Initialization of defrag ioctl parameters */
+	memset(&range, 0, sizeof(range));
+	range.len = (u64)-1;
+	if (flush) range.flags |= BTRFS_DEFRAG_RANGE_START_IO;
+
+	/* Open file for defrag ioctl */
+	fd = open_file_or_dir(path, &dirstream);
+	if (fd < 0) {
+		fprintf(stderr, "failed to open %s for defrag\n", path);
+		perror("open:");
+		return 1;
+	}
+
+	if (!fancy_ioctl) {
+		ret = ioctl(fd, BTRFS_IOC_DEFRAG, NULL);
+		e=errno;
+	} else {
+		ret = ioctl(fd, BTRFS_IOC_DEFRAG_RANGE, &range);
+		e=errno;
+		if (ret && e == ENOTTY) {
+			fprintf(stderr, "ERROR: defrag range ioctl not supported "
+				"in this kernel, please amend code to avoid flushing.\n");
+			close(fd);
+			return 1;
+		}
+	}
+
+	if (ret) {
+		fprintf(stderr, "ERROR: defrag failed on %s - %s\n", path, strerror(e));
+		ret = 1;
+	}
+	close_file_or_dir(fd, dirstream);
+
+	return ret;
+}
+
+int frag_file(char *path, u64 frag_blocks)
+{
+	int fd, nread, ret = 0;
+	char buf[4096];
+	off_t offset;
+
+	/* Open file, then read and overwrite blocks starting from block #last-1,
+	   until fragmented enough */
+	fd = open(path, O_RDWR | O_SYNC);
+	offset = lseek(fd, (off_t)0, SEEK_END);
+	offset -= (offset % sizeof(buf)) + sizeof(buf);
+
+	while (frag_blocks) {
+		ret = lseek(fd, offset, SEEK_SET);
+		if (ret == (off_t)-1) {
+			fprintf(stderr, "Error while fragmenting: couldn't lseek to file block %llu\n",
+				(unsigned long long)offset);
+			break;
+		}
+
+		nread = read(fd, buf, sizeof(buf));
+		if (nread == -1) {
+			ret = nread;
+			fprintf(stderr, "Error while fragmenting: couldn't read file block %llu\n",
+				(unsigned long long)offset);
+			break;
+		}
+
+		ret = lseek(fd, offset, SEEK_SET);
+		if (ret == (off_t)-1) {
+			fprintf(stderr, "Error while fragmenting: couldn't lseek to file block %llu\n",
+				(unsigned long long)offset);
+			break;
+		}
+
+		ret = write(fd, buf, nread);
+		if (ret != nread || ret == -1) {
+			fprintf(stderr, "Error while fragmenting: couldn't write file block %llu\n",
+				(unsigned long long)offset);
+			break;
+		}
+
+		offset -= sizeof(buf);
+		frag_blocks--;
+	}
+	close(fd);
+
+	return 0;
+}
+
+static void free_fpath(struct filepath **fpath)
+{
+	struct filepath *tmp;
+
+	while (*fpath != NULL) {
+		tmp = *fpath;
+		*fpath = (*fpath)->next;
+		free(tmp);
+	}
+}
+
+/* Function handling inode ref items. ext refs are not supported, and we only take
+ * into account the first hard link to the file (which should be ok for defrag
+ * purposes).
+ */
+static int find_full_path(struct btrfs_root *root, struct btrfs_path *path, char **res)
+{
+	int idx, ret = 0;
+	u32 len, name_len;
+	u64 cur_offset;
+	struct btrfs_key search_key;
+	struct btrfs_disk_key dkey;
+	struct btrfs_path rpath;
+	struct btrfs_inode_ref *ref;
+	struct filepath *cur, *fpath = NULL;
+
+	btrfs_item_key(path->nodes[0], &dkey, path->slots[0]);
+	cur_offset = btrfs_disk_key_objectid(&dkey);
+
+	while (cur_offset > 256ULL /* objectID of root inode_ref */) {
+		/* Find next BTRFS_INODE_REF_KEY */
+		search_key.objectid = cur_offset;
+		btrfs_set_key_type(&search_key, BTRFS_INODE_REF_KEY);
+		search_key.offset = (u64)-1;
+		btrfs_init_path(&rpath);
+
+		/* Search key */
+		ret = btrfs_search_slot(NULL, root, &search_key, &rpath, 0, 0);
+		BUG_ON(ret <= 0);
+		ret = btrfs_previous_item(root, &rpath, 0, search_key.type);
+		btrfs_item_key(rpath.nodes[0], &dkey, rpath.slots[0]);
+
+		if (args.verbose >= 3) {
+			btrfs_print_leaf(root, rpath.nodes[0]);
+			btrfs_print_key(&dkey);
+			printf(" (offset = %llu)\n", cur_offset);
+		}
+
+		/* Check that what we found is actually an inode ref item */
+		if (btrfs_disk_key_type(&dkey) != BTRFS_INODE_REF_KEY) {
+			fprintf(stderr, "Error: failed to track ref item\n");
+			ret = 1;
+			goto out;
+		}
+
+		/* Grab name and add that to the name-component list */
+		cur = (struct filepath *)malloc(sizeof(struct filepath));
+		BUG_ON(!cur);
+		cur->next = fpath;
+		fpath = cur;
+
+		ref = btrfs_item_ptr(rpath.nodes[0], rpath.slots[0], struct btrfs_inode_ref);
+		name_len = btrfs_inode_ref_name_len(rpath.nodes[0], ref);
+		len = (name_len <= sizeof(cur->comp)) ? name_len : sizeof(cur->comp);
+		read_extent_buffer(rpath.nodes[0], cur->comp, (unsigned long)(ref + 1), len);
+		cur->comp[len] = '\0';
+
+		cur_offset = btrfs_disk_key_offset(&dkey);
+	}
+
+	/* Concatenate the list/path components in a string reflecting the full path
+	 * to the file
+	 */
+	ret = idx = 0;
+	*res = (char *)malloc(PATH_MAX * sizeof(char));
+	if (*res == NULL) {
+		fprintf(stderr, "Error: couldn't allocate space for filename\n");
+		ret = 1;
+		goto out;
+	}
+
+	/* First, append the mntpath */
+	strcpy(*res, stats.mntpath);
+	idx = strlen(*res);
+
+	/* Append to res until PATH_MAX is reached */
+	cur = fpath;
+	while (cur != NULL && idx + strlen(cur->comp) < PATH_MAX) {
+		(*res)[idx++] = '/';
+		(*res)[idx++] = '\0';
+		strcat(*res, cur->comp);
+		idx += strlen(cur->comp) - 1;
+		cur = cur->next;
+	}
+
+out:
+	free_fpath(&fpath);
+	return ret;
+}
+
+static int find_inode_frag(struct btrfs_root *root, struct btrfs_path *path,
+	double *fragidx, u64 *size, u64 *blocks, u64 *extents)
+{
+	int s, ret;
+	int extent_type;
+	u64 remsize, lastbyte, firstbyte;
+	struct btrfs_key search_key;
+	struct btrfs_disk_key dkey;
+	struct btrfs_inode_item *ii;
+	struct btrfs_file_extent_item *fi;
+	struct extent_buffer *l;
+	struct btrfs_path epath;
+
+	/* To estimate file fragmentation, We need: the number of extents that
+	 * the file is broken into, and its size. We get that by looking into
+	 * inode and extent data items.
+	 */
+
+	/* First, we assume that path is pointing to an inode item. process_tree
+	 * should take care of that. We need to grab the file size from it.
+	 */
+	l = path->nodes[0];
+	s = path->slots[0];
+	ii = btrfs_item_ptr(l, s, struct btrfs_inode_item);
+	/* Check this is not a directory */
+	*extents = 1;
+	if (btrfs_inode_mode(l, ii) / 01000 != 040) {
+		*size = btrfs_inode_size(l, ii);
+		if (*size > 0) {
+			*blocks = *size / stats.leafsize;
+			if (*blocks * stats.leafsize < *size)
+				(*blocks)++;
+		} else
+			*blocks = 1;
+	} else
+		return 1;
+
+	/* If file is empty, there are not extents for it */
+	if (*size == 0) {
+		*fragidx = 0.0;
+		goto done;
+	}
+
+	/* Now we need to find all the extents for the file. Keep searching until
+	   we have found enough to cover the known file size */
+	remsize = *blocks * stats.leafsize;
+
+	/* Find the first extent data item */
+	btrfs_item_key(path->nodes[0], &dkey, path->slots[0]);
+	search_key.objectid = btrfs_disk_key_objectid(&dkey);
+	btrfs_set_key_type(&search_key, BTRFS_EXTENT_DATA_KEY);
+	search_key.offset = 0;
+	btrfs_init_path(&epath);
+	ret = btrfs_search_slot(NULL, root, &search_key, &epath, 0, 0);
+	BUG_ON(ret != 0);
+
+	l = epath.nodes[0];
+	s = epath.slots[0];
+	fi = btrfs_item_ptr(l, s, struct btrfs_file_extent_item);
+	extent_type = btrfs_file_extent_type(l, fi);
+
+	/* If the data is inlined, then stop here */
+	if (extent_type == BTRFS_FILE_EXTENT_INLINE) {
+		*fragidx = 0.0;
+		goto done;
+	}
+
+	lastbyte = btrfs_file_extent_disk_bytenr(l, fi) +
+		btrfs_file_extent_offset(l, fi) +
+		btrfs_file_extent_num_bytes(l, fi) - 1;
+	remsize -= btrfs_file_extent_num_bytes(l, fi);
+
+	/* Get the rest of the extent data items */
+	while (remsize > 0) {
+		/* Just grab the next item in the tree */
+		if (btrfs_next_item(root, &epath, BTRFS_EXTENT_DATA_KEY))
+			break;
+		l = epath.nodes[0];
+		s = epath.slots[0];
+		fi = btrfs_item_ptr(l, s, struct btrfs_file_extent_item);
+		extent_type = btrfs_file_extent_type(l,fi);
+		if (extent_type != BTRFS_FILE_EXTENT_REG &&
+		    extent_type != BTRFS_FILE_EXTENT_PREALLOC) {
+			fprintf(stderr, "Warning: found fewer extents than expected (%llu "
+				"bytes left)\n", (unsigned long long)remsize);
+			break;
+		}
+
+		/* Find the first valid byte for this extent */
+		firstbyte = btrfs_file_extent_disk_bytenr(l, fi) +
+			btrfs_file_extent_offset(l, fi);
+
+		/* Two blocks are close, if they're less than 8*block_size
+		   bytes apart */
+		if (lastbyte > firstbyte || firstbyte > lastbyte + 8*stats.leafsize)
+			(*extents)++;
+
+		if (remsize >= btrfs_file_extent_num_bytes(l, fi))
+			remsize -= btrfs_file_extent_num_bytes(l, fi);
+		else {
+			fprintf(stderr, "Warning: we exceeded file size while looking "
+				"for extents!\n");
+			remsize = 0;
+		}
+
+		/* Update last valid byte */
+		lastbyte = btrfs_file_extent_disk_bytenr(l, fi) +
+			btrfs_file_extent_offset(l, fi) +
+			btrfs_file_extent_num_bytes(l, fi) - 1;
+	}
+
+	if (*blocks == 1) *fragidx = 0.0;
+	else *fragidx = 1.0 - (double) (*blocks - *extents) / (*blocks - 1);
+
+done:
+	return 0;
+}
+
+#define ceil(x) ( x > (u64)x ? (u64)(x+1) : (u64)x )
+static void process_inode(struct btrfs_path *path)
+{
+	int ret;
+	double fragidx, f_a;
+	u64 size, blocks, extents, e_a;
+	char *fullpath = NULL;
+	struct btrfs_key search_key;
+	struct btrfs_root *root = stats.info->fs_root;
+	struct btrfs_disk_key key;
+
+	if (args.verbose >= 2) {
+		btrfs_item_key(path->nodes[0], &key, path->slots[0]);
+		printf("Found: ");
+		btrfs_print_key(&key);
+		printf("\n");
+	}
+
+	/* First, find how fragmented this inode is */
+	if (find_inode_frag(root, path, &fragidx, &size, &blocks, &extents)) {
+		/* This inode did not correspond to a file */
+		return;
+	}
+
+	if (args.fragment) {
+		/* Estimate attainable fragmentation goal for this file */
+		/* First, find out the full path of the file */
+		if (find_full_path(root, path, &fullpath)) {
+			fprintf(stderr, "Error: couldn't get inode path\n");
+			return;
+		}
+
+		/* Now, calculate how many blocks (e_a) we need relocate (we want
+		 * fs to be f_a% fragmented, where f_a is the minimum attainable
+		 * fragmentation goal for this file, s.t. f_a >= f. f is the
+		 * requested fragmentation goal, f = F / 100.0 */
+		if (blocks > 1) {
+			f_a = 1.0;
+			while (f_a - (1.0 / (blocks-1)) >= args.f)
+				f_a -= 1.0 / (blocks-1);
+			e_a = blocks - ceil((1.0 - f_a) * (blocks - 1.0));
+
+			/* If fragidx != f_a, then defrag first, then fragment as needed */
+			if (fragidx != f_a) {
+				if (args.verbose >= 2)
+					printf("- Before: %9llu bytes (%5lu blocks), "
+						"\t%5.2f%% fragmented (%2lu extents)\n",
+						(unsigned long long)size, (unsigned long)blocks,
+						(double)fragidx * 100.0, (unsigned long)extents);
+
+				if (fragidx) defrag_file(fullpath, 1);
+
+				if (args.verbose >= 2)
+					printf("- Fragmenting: Need to write %lu blocks "
+						"to fragment adequately (%5.2f%%).\n",
+						(unsigned long)e_a, (double)f_a * 100.0);
+
+				if (f_a && frag_file(fullpath, e_a-1))
+					printf("Error: failed to fragment file '%s'\n", fullpath);
+
+				/* Sync changes to disk */
+				sync_btrfs(fullpath);
+
+				/* We've been switching things around; better update the root/path
+				 * (latch onto inode number to find the way) */
+				btrfs_item_key(path->nodes[0], &key, path->slots[0]);
+				search_key.objectid = btrfs_disk_key_objectid(&key);
+				btrfs_set_key_type(&search_key, BTRFS_INODE_ITEM_KEY);
+				search_key.offset = 0;
+				btrfs_init_path(path);
+
+				btrfs_free_fs_info(stats.info);
+				stats.info = open_ctree_fs_info(stats.devname, 0, 0, 1);
+				root = stats.info->fs_root;
+
+				ret = btrfs_search_slot(NULL, root, &search_key, path, 0, 0);
+				BUG_ON(ret != 0);
+
+				/* Now that our path is not stale, estimate the new fragmentation
+				 * index for the file */
+				if (find_inode_frag(root, path, &fragidx, &size, &blocks, &extents))
+					fprintf(stderr, "There was some issue updating file fragmentation info.\n");
+			}
+		}
+	}
+
+	/* Update global stats */
+	stats.tblocks += blocks;
+	stats.tfiles++;
+	stats.textents += extents;
+
+	if (args.stats) {
+		printf("File: %10llu bytes (%5lu blocks), \t%6.2f%% fragmented (%2lu extents)",
+			(unsigned long long)size, (unsigned long)blocks,
+			(double)fragidx * 100.0, (unsigned long)extents);
+
+		if (args.verbose >= 1) {
+			char *dbgpath;
+			find_full_path(root, path, &dbgpath);
+			printf(", path: %s", dbgpath);
+			free(dbgpath);
+		}
+		printf("\n");
+		if (args.verbose >= 2) {
+			if (!extent_buffer_uptodate(path->nodes[0]))
+				printf("- Warning: the provided info came from an out-of-date extent!\n");
+			if (stats.info->fs_root != root)
+				printf("- Warning: the fs tree root is out-of-date!\n");
+		}
+	}
+
+	if (fullpath) free(fullpath);
+}
+
+static void process_tree(void)
+{
+	int ret;
+	struct btrfs_path path;
+	struct btrfs_key search_key;
+	struct btrfs_disk_key disk_key;
+	struct btrfs_root *root = stats.info->fs_root;
+
+	/* Find the first inode in the fs tree */
+	search_key.objectid = 0;
+	btrfs_set_key_type(&search_key, BTRFS_INODE_ITEM_KEY);
+	search_key.offset = 0;
+	btrfs_init_path(&path);
+	ret = btrfs_search_slot(NULL, root, &search_key, &path, 0, 0);
+	BUG_ON(ret != 1);
+
+	/* Check that what we found is actually an inode item */
+	btrfs_item_key(path.nodes[0], &disk_key, path.slots[0]);
+	if (btrfs_disk_key_type(&disk_key) != BTRFS_INODE_ITEM_KEY) {
+		fprintf(stderr, "No inodes found!\n");
+		return;
+	}
+
+	while (1) {
+		/* Process this inode */
+		process_inode(&path);
+
+		/* Find next inode */
+		search_key.objectid = btrfs_disk_key_objectid(&disk_key) + 1;
+		btrfs_init_path(&path);
+		ret = btrfs_search_slot(NULL, root, &search_key, &path, 0, 0);
+		if (ret < 0)
+			break;
+
+		/* Check that what we found is actually an inode item */
+		if (args.verbose >= 3)
+			printf("Searched for objectid = %llu, got %d\n", search_key.objectid, ret);
+		btrfs_item_key(path.nodes[0], &disk_key, path.slots[0]);
+		if (btrfs_disk_key_type(&disk_key) != BTRFS_INODE_ITEM_KEY)
+			break;
+	}
+
+	if (args.fragment)
+		sync_btrfs(NULL);
+}
+
+int main(int ac, char **av)
+{
+	FILE *fp;
+	char uuidbuf[37];
+
+	/* Initialize globals and locals */
+	stats.mntpath[0] = '\0';
+	memset(&args, 0, sizeof(struct argflags));
+	memset(&stats, 0, sizeof(stats));
+
+	radix_tree_init();
+
+	/* If fs is mounted, find mount point */
+	fp = popen("cat /proc/mounts | grep /dev/loop0 | cut -f2 -d' '", "r");
+	if (fp) {
+		if (fscanf(fp, "%s", stats.mntpath) != 1)
+			stats.mntpath[0] = '\0';
+		pclose(fp);
+	}
+
+	/* Parse command line options */
+	while (1) {
+		int c = getopt(ac, av, "sf:v");
+
+		if (c < 0) break;
+		switch (c) {
+		case 's':
+			args.stats = 1;
+			break;
+		case 'f':
+			if (stats.mntpath[0] == '\0') {
+				fprintf(stderr, "Error: Couldn't find fs mount point. Have you\n"
+					"mounted the filesystem?\n");
+				print_usage();
+				return 1;
+			}
+			args.fragment = 1;
+			args.f = atof(optarg);
+			if (args.f < 0.0 || args.f > 1.0) {
+				fprintf(stderr, "Error: fragmentation goal should be between\n"
+					"0.0 and 1.0, inclusive.\n");
+				print_usage();
+				return 1;
+			}
+			break;
+		case 'v':
+			args.verbose++;
+			break;
+		default:
+			print_usage();
+		}
+	}
+
+	ac = ac - optind;
+	if (ac != 1)
+		print_usage();
+
+	/* Get fs info */
+	strncpy(stats.devname, av[optind], 256);
+	stats.info = open_ctree_fs_info(stats.devname, 0, 0, 1);
+	if (!stats.info) {
+		fprintf(stderr, "unable to open %s\n", stats.devname);
+		exit(1);
+	}
+
+	/* Print fs info header */
+	printf("Fragmentation tool for %s\n\n", BTRFS_BUILD_VERSION);
+	printf("Device: %s, ", av[optind]);
+	if (stats.mntpath[0] == '\0')
+		printf("unmounted.\n");
+	else
+		printf("mounted on: %s\n", stats.mntpath);
+	uuidbuf[36] = '\0';
+	uuid_unparse(stats.info->super_copy->fsid, uuidbuf);
+	printf("Filesystem UUID: %s\n", uuidbuf);
+	printf("Capacity: %llu bytes total, %llu bytes (%3.2f%%) used\n",
+		(unsigned long long)btrfs_super_total_bytes(stats.info->super_copy),
+		(unsigned long long)btrfs_super_bytes_used(stats.info->super_copy),
+		(double)btrfs_super_bytes_used(stats.info->super_copy)/
+		(double)btrfs_super_total_bytes(stats.info->super_copy));
+	stats.leafsize = (unsigned long)btrfs_super_leafsize(stats.info->super_copy);
+	printf("Node size: %lu bytes, leaf size: %lu bytes, stripe size: %lu bytes\n\n",
+		(unsigned long)btrfs_super_nodesize(stats.info->super_copy),
+		(unsigned long)btrfs_super_leafsize(stats.info->super_copy),
+		(unsigned long)btrfs_super_stripesize(stats.info->super_copy));
+
+	/* Go ahead and process the fs tree */
+	printf("Traversing filesystem tree...\n");
+	//process_tree();
+	printf("Filesystem %5.2f%% fragmented",
+		100.0 * (1.0 - (double) (stats.tblocks - stats.textents) /
+		(stats.tblocks - stats.tfiles)));
+	printf("\n");
+
+	btrfs_free_fs_info(stats.info);
+	return 0;
+}
+

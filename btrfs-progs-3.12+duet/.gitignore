@@ -8,6 +8,7 @@ man/*.gz
 btrfs
 btrfs.static
 btrfs-debug-tree
+btrfs-defrag-tool
 btrfs-map-logical
 btrfs-fragments
 btrfsck

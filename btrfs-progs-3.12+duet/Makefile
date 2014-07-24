@@ -44,7 +44,7 @@ endif
 
 MAKEOPTS = --no-print-directory Q=$(Q)
 
-progs = mkfs.btrfs btrfs-debug-tree btrfsck \
+progs = mkfs.btrfs btrfs-debug-tree btrfs-defrag-tool btrfsck \
 	btrfs btrfs-map-logical btrfs-image btrfs-zero-log btrfs-convert \
 	btrfs-find-root btrfstune btrfs-show-super
 

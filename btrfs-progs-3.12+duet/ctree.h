@@ -2217,6 +2217,8 @@ struct extent_buffer *read_node_slot(struct btrfs_root *root,
 int btrfs_previous_item(struct btrfs_root *root,
 			struct btrfs_path *path, u64 min_objectid,
 			int type);
+int btrfs_next_item(struct btrfs_root *root,
+		    struct btrfs_path *path, int type);
 int btrfs_cow_block(struct btrfs_trans_handle *trans,
 		    struct btrfs_root *root, struct extent_buffer *buf,
 		    struct extent_buffer *parent, int parent_slot,

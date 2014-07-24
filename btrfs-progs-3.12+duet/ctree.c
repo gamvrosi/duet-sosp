@@ -2788,3 +2788,27 @@ int btrfs_previous_item(struct btrfs_root *root,
 	return 1;
 }
 
+int btrfs_next_item(struct btrfs_root *root, struct btrfs_path *path, int type)
+{
+	struct btrfs_key found_key;
+	struct extent_buffer *leaf;
+	int ret;
+
+	while(1) {
+		if (path->slots[0] == btrfs_header_nritems(path->nodes[0]) - 1) {
+			ret = btrfs_next_leaf(root, path);
+			if (ret != 0)
+				return ret;
+		} else {
+			path->slots[0]++;
+		}
+
+		leaf = path->nodes[0];
+		btrfs_item_key_to_cpu(leaf, &found_key, path->slots[0]);
+		if (found_key.type == type)
+			return 0;
+	}
+
+	return 1;
+}
+
