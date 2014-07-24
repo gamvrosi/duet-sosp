@@ -37,7 +37,6 @@
 #include <sys/types.h>
 
 #include "kerncompat.h"
-#include "radix-tree.h"
 #include "ctree.h"
 #include "disk-io.h"
 #include "print-tree.h"
@@ -49,6 +48,8 @@
 /* Some global variables */
 struct argflags
 {
+	char progname[256];
+
 	short int verbose;
 	short int stats;
 	short int fragment;
@@ -61,7 +62,7 @@ struct fs_stats
 	unsigned long long textents;
 	unsigned long long tfiles;
 
-	u32 leafsize;
+	u32 blksize;
 	char mntpath[PATH_MAX];
 	char devname[256];
 	struct btrfs_fs_info *info;
@@ -75,7 +76,7 @@ struct filepath
 
 static int print_usage(void)
 {
-	fprintf(stderr, "usage: btrfs-defrag-tool [-s] device\n");
+	fprintf(stderr, "usage: %s [-sv] [-f F] device\n", args.progname);
 	fprintf(stderr, "\t-s   : prints per-file fragmentation statistics for device\n");
 	fprintf(stderr, "\t-f F : fragments the filesystem to at least F*100%% (0.0 <= F <= 1.0)\n");
 	fprintf(stderr, "\t-v   : be verbose! I want to know everything!\n");
@@ -333,8 +334,8 @@ static int find_inode_frag(struct btrfs_root *root, struct btrfs_path *path,
 	if (btrfs_inode_mode(l, ii) / 01000 != 040) {
 		*size = btrfs_inode_size(l, ii);
 		if (*size > 0) {
-			*blocks = *size / stats.leafsize;
-			if (*blocks * stats.leafsize < *size)
+			*blocks = *size / stats.blksize;
+			if (*blocks * stats.blksize < *size)
 				(*blocks)++;
 		} else
 			*blocks = 1;
@@ -349,7 +350,7 @@ static int find_inode_frag(struct btrfs_root *root, struct btrfs_path *path,
 
 	/* Now we need to find all the extents for the file. Keep searching until
 	   we have found enough to cover the known file size */
-	remsize = *blocks * stats.leafsize;
+	remsize = *blocks * stats.blksize;
 
 	/* Find the first extent data item */
 	btrfs_item_key(path->nodes[0], &dkey, path->slots[0]);
@@ -398,7 +399,7 @@ static int find_inode_frag(struct btrfs_root *root, struct btrfs_path *path,
 
 		/* Two blocks are close, if they're less than 8*block_size
 		   bytes apart */
-		if (lastbyte > firstbyte || firstbyte > lastbyte + 8*stats.leafsize)
+		if (lastbyte > firstbyte || firstbyte > lastbyte + 8*stats.blksize)
 			(*extents)++;
 
 		if (remsize >= btrfs_file_extent_num_bytes(l, fi))
@@ -460,6 +461,7 @@ static void process_inode(struct btrfs_path *path)
 		 * requested fragmentation goal, f = F / 100.0 */
 		if (blocks > 1) {
 			f_a = 1.0;
+			/* XXX: Surely we can avoid this loop */
 			while (f_a - (1.0 / (blocks-1)) >= args.f)
 				f_a -= 1.0 / (blocks-1);
 			e_a = blocks - ceil((1.0 - f_a) * (blocks - 1.0));
@@ -491,7 +493,7 @@ static void process_inode(struct btrfs_path *path)
 				search_key.objectid = btrfs_disk_key_objectid(&key);
 				btrfs_set_key_type(&search_key, BTRFS_INODE_ITEM_KEY);
 				search_key.offset = 0;
-				btrfs_init_path(path);
+				btrfs_release_path(path);
 
 				btrfs_free_fs_info(stats.info);
 				stats.info = open_ctree_fs_info(stats.devname, 0, 0, 1);
@@ -533,7 +535,8 @@ static void process_inode(struct btrfs_path *path)
 		}
 	}
 
-	if (fullpath) free(fullpath);
+	if (fullpath)
+		free(fullpath);
 }
 
 static void process_tree(void)
@@ -542,14 +545,16 @@ static void process_tree(void)
 	struct btrfs_path path;
 	struct btrfs_key search_key;
 	struct btrfs_disk_key disk_key;
-	struct btrfs_root *root = stats.info->fs_root;
+
+	btrfs_init_path(&path);
 
 	/* Find the first inode in the fs tree */
 	search_key.objectid = 0;
 	btrfs_set_key_type(&search_key, BTRFS_INODE_ITEM_KEY);
 	search_key.offset = 0;
-	btrfs_init_path(&path);
-	ret = btrfs_search_slot(NULL, root, &search_key, &path, 0, 0);
+
+	ret = btrfs_search_slot(NULL, stats.info->fs_root, &search_key, &path,
+									0, 0);
 	BUG_ON(ret != 1);
 
 	/* Check that what we found is actually an inode item */
@@ -564,15 +569,18 @@ static void process_tree(void)
 		process_inode(&path);
 
 		/* Find next inode */
+		btrfs_release_path(&path);
+
 		search_key.objectid = btrfs_disk_key_objectid(&disk_key) + 1;
-		btrfs_init_path(&path);
-		ret = btrfs_search_slot(NULL, root, &search_key, &path, 0, 0);
+		ret = btrfs_search_slot(NULL, stats.info->fs_root, &search_key,
+					&path, 0, 0);
 		if (ret < 0)
 			break;
 
 		/* Check that what we found is actually an inode item */
 		if (args.verbose >= 3)
-			printf("Searched for objectid = %llu, got %d\n", search_key.objectid, ret);
+			printf("Searched for objectid = %llu, got %d\n",
+				search_key.objectid, ret);
 		btrfs_item_key(path.nodes[0], &disk_key, path.slots[0]);
 		if (btrfs_disk_key_type(&disk_key) != BTRFS_INODE_ITEM_KEY)
 			break;
@@ -580,27 +588,22 @@ static void process_tree(void)
 
 	if (args.fragment)
 		sync_btrfs(NULL);
+
+	btrfs_release_path(&path);
 }
 
 int main(int ac, char **av)
 {
+	int ret = 0;
 	FILE *fp;
-	char uuidbuf[37];
+	char uuidbuf[37], cmd[128];
 
 	/* Initialize globals and locals */
-	stats.mntpath[0] = '\0';
 	memset(&args, 0, sizeof(struct argflags));
 	memset(&stats, 0, sizeof(stats));
 
-	radix_tree_init();
-
-	/* If fs is mounted, find mount point */
-	fp = popen("cat /proc/mounts | grep /dev/loop0 | cut -f2 -d' '", "r");
-	if (fp) {
-		if (fscanf(fp, "%s", stats.mntpath) != 1)
-			stats.mntpath[0] = '\0';
-		pclose(fp);
-	}
+	/* Get program name */
+	strncpy(args.progname, av[0], 256);
 
 	/* Parse command line options */
 	while (1) {
@@ -608,26 +611,19 @@ int main(int ac, char **av)
 
 		if (c < 0) break;
 		switch (c) {
-		case 's':
+		case 's': /* print stats */
 			args.stats = 1;
 			break;
-		case 'f':
-			if (stats.mntpath[0] == '\0') {
-				fprintf(stderr, "Error: Couldn't find fs mount point. Have you\n"
-					"mounted the filesystem?\n");
-				print_usage();
-				return 1;
-			}
+		case 'f': /* define fragmentation target */
 			args.fragment = 1;
 			args.f = atof(optarg);
 			if (args.f < 0.0 || args.f > 1.0) {
-				fprintf(stderr, "Error: fragmentation goal should be between\n"
-					"0.0 and 1.0, inclusive.\n");
+				fprintf(stderr, "Error: bad frag target.\n");
 				print_usage();
 				return 1;
 			}
 			break;
-		case 'v':
+		case 'v': /* be verbose */
 			args.verbose++;
 			break;
 		default:
@@ -647,6 +643,24 @@ int main(int ac, char **av)
 		exit(1);
 	}
 
+	/* If fs is mounted, find mount point */
+	sprintf(cmd, "cat /proc/mounts | grep %s | cut -f2 -d' '",
+		stats.devname);
+	fp = popen(cmd, "r");
+	if (fp) {
+		if (fscanf(fp, "%s", stats.mntpath) != 1)
+			stats.mntpath[0] = '\0';
+		pclose(fp);
+	}
+
+	if (stats.mntpath[0] == '\0') {
+		fprintf(stderr, "Error: Couldn't find fs mount point. Have you\n"
+			"mounted the filesystem?\n");
+		print_usage();
+		ret = 1;
+		goto done;
+	}
+
 	/* Print fs info header */
 	printf("Fragmentation tool for %s\n\n", BTRFS_BUILD_VERSION);
 	printf("Device: %s, ", av[optind]);
@@ -654,29 +668,32 @@ int main(int ac, char **av)
 		printf("unmounted.\n");
 	else
 		printf("mounted on: %s\n", stats.mntpath);
+
 	uuidbuf[36] = '\0';
 	uuid_unparse(stats.info->super_copy->fsid, uuidbuf);
 	printf("Filesystem UUID: %s\n", uuidbuf);
 	printf("Capacity: %llu bytes total, %llu bytes (%3.2f%%) used\n",
 		(unsigned long long)btrfs_super_total_bytes(stats.info->super_copy),
 		(unsigned long long)btrfs_super_bytes_used(stats.info->super_copy),
-		(double)btrfs_super_bytes_used(stats.info->super_copy)/
+		100.0 * (double)btrfs_super_bytes_used(stats.info->super_copy) /
 		(double)btrfs_super_total_bytes(stats.info->super_copy));
-	stats.leafsize = (unsigned long)btrfs_super_leafsize(stats.info->super_copy);
-	printf("Node size: %lu bytes, leaf size: %lu bytes, stripe size: %lu bytes\n\n",
+
+	stats.blksize = (unsigned long)btrfs_super_sectorsize(stats.info->super_copy);
+	printf("Sector: %lub, Node: %lub, Leaf: %lub, Stripe: %lub\n\n",
+		(unsigned long)btrfs_super_sectorsize(stats.info->super_copy),
 		(unsigned long)btrfs_super_nodesize(stats.info->super_copy),
 		(unsigned long)btrfs_super_leafsize(stats.info->super_copy),
 		(unsigned long)btrfs_super_stripesize(stats.info->super_copy));
 
 	/* Go ahead and process the fs tree */
 	printf("Traversing filesystem tree...\n");
-	//process_tree();
-	printf("Filesystem %5.2f%% fragmented",
+	process_tree();
+	printf("Filesystem %5.2f%% fragmented\n",
 		100.0 * (1.0 - (double) (stats.tblocks - stats.textents) /
 		(stats.tblocks - stats.tfiles)));
-	printf("\n");
 
+done:
 	btrfs_free_fs_info(stats.info);
-	return 0;
+	return ret;
 }
 
