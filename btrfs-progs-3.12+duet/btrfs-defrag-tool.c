@@ -112,6 +112,7 @@ static int sync_btrfs(char *path)
 	return 0;
 }
 
+/* Uses btrfs's defrag file ioctl to defrag a file */
 static int defrag_file(char *path, short int flush)
 {
 	int fd, ret = 0, e = 0;
@@ -455,16 +456,16 @@ static void process_inode(struct btrfs_path *path)
 			return;
 		}
 
-		/* Now, calculate how many blocks (e_a) we need relocate (we want
-		 * fs to be f_a% fragmented, where f_a is the minimum attainable
-		 * fragmentation goal for this file, s.t. f_a >= f. f is the
-		 * requested fragmentation goal, f = F / 100.0 */
+		/*
+		 * Calculate how many blocks we need relocate (e_a), for file
+		 * to be f_a% fragmented, where f_a is the min attainable frag
+		 * goal for this file, s.t. f_a >= f, where f is the requested
+		 * frag goal, f = F / 100.0. We have:
+		 *      f_a = ceil(f / (1 / (b-1))) * (1 / (b-1))
+		 */
 		if (blocks > 1) {
-			f_a = 1.0;
-			/* XXX: Surely we can avoid this loop */
-			while (f_a - (1.0 / (blocks-1)) >= args.f)
-				f_a -= 1.0 / (blocks-1);
-			e_a = blocks - ceil((1.0 - f_a) * (blocks - 1.0));
+			f_a = ceil(args.f * (blocks - 1.0)) / (blocks - 1.0);
+			e_a = (blocks - 1) - ceil((1.0 - f_a) * (blocks - 1.0));
 
 			/* If fragidx != f_a, then defrag first, then fragment as needed */
 			if (fragidx != f_a) {
@@ -481,7 +482,7 @@ static void process_inode(struct btrfs_path *path)
 						"to fragment adequately (%5.2f%%).\n",
 						(unsigned long)e_a, (double)f_a * 100.0);
 
-				if (f_a && frag_file(fullpath, e_a-1))
+				if (f_a && frag_file(fullpath, e_a))
 					printf("Error: failed to fragment file '%s'\n", fullpath);
 
 				/* Sync changes to disk */
