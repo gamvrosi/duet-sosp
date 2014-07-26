@@ -16,14 +16,11 @@
  * Boston, MA 021110-1307, USA.
  */
 
-/* Notes:
-   - Check efficiency of sync'ing and re-reading root tree, fs
-     root, path
-   - Incorporate in filebench
-   - Quick fragmentation fix: start writing from the (last-1) block
-     Right fragmentation fix: linked-list with (fname, cur_block,
-     rem_blocks), and switch through files for the writes
-   - Why not defrag slightly fragmented files?
+/*
+ * Notes:
+ * - Check efficiency of sync'ing and re-reading root tree, fs root, path
+ * - Why not defrag/fragment files as needed to reach target, instead of
+ *   applying defragmentation and fragmentation on each file?
  */
 
 #include <stdio.h>
@@ -56,6 +53,7 @@ struct argflags
 	double f;
 } args;
 
+#define BUF_BLOCKS 1024
 struct fs_stats
 {
 	unsigned long long tblocks;
@@ -66,6 +64,9 @@ struct fs_stats
 	char mntpath[PATH_MAX];
 	char devname[256];
 	struct btrfs_fs_info *info;
+
+	/* used during fragmentation */
+	char *fragbuf; /* BUF_BLOCKS wide */
 } stats;
 
 struct filepath
@@ -73,6 +74,8 @@ struct filepath
 	char comp[BTRFS_NAME_LEN];
 	struct filepath *next;
 };
+
+#define ceil(x) ( x > (u64)x ? (u64)(x+1) : (u64)x )
 
 static int print_usage(void)
 {
@@ -123,7 +126,9 @@ static int defrag_file(char *path, short int flush)
 	/* Initialization of defrag ioctl parameters */
 	memset(&range, 0, sizeof(range));
 	range.len = (u64)-1;
-	if (flush) range.flags |= BTRFS_DEFRAG_RANGE_START_IO;
+	range.extent_thresh = (u32)-1;
+	if (flush)
+		range.flags |= BTRFS_DEFRAG_RANGE_START_IO;
 
 	/* Open file for defrag ioctl */
 	fd = open_file_or_dir(path, &dirstream);
@@ -156,54 +161,113 @@ static int defrag_file(char *path, short int flush)
 	return ret;
 }
 
+/*
+ * Perhaps the most complicated function of them all, it fragments a file
+ * doing synchronous writes to its last frag_blocks blocks in reverse
+ * order (btrfs will create new extents for them)
+ */
 int frag_file(char *path, u64 frag_blocks)
 {
-	int fd, nread, ret = 0;
-	char buf[4096];
-	off_t offset;
+	int fd, ret = 0;
+	u64 read_blocks;
+	ssize_t processed, wrsize;
+	off_t fd_offt, buf_rem, buf_offt;
+
+	if (!frag_blocks)
+		return ret;
 
 	/* Open file, then read and overwrite blocks starting from block #last-1,
 	   until fragmented enough */
 	fd = open(path, O_RDWR | O_SYNC);
-	offset = lseek(fd, (off_t)0, SEEK_END);
-	offset -= (offset % sizeof(buf)) + sizeof(buf);
+	fd_offt = lseek(fd, (off_t)0, SEEK_END);
 
-	while (frag_blocks) {
-		ret = lseek(fd, offset, SEEK_SET);
-		if (ret == (off_t)-1) {
-			fprintf(stderr, "Error while fragmenting: couldn't lseek to file block %llu\n",
-				(unsigned long long)offset);
-			break;
-		}
+again:
+	/*
+	 * We try to buffer up to BUF_BLOCKS, unless that's too many. We also
+	 * make sure to buffer only as many bytes of the last block as we need
+	 * to avoid altering the file's size when we write out the data
+	 */
+	read_blocks = (BUF_BLOCKS > frag_blocks ? frag_blocks : BUF_BLOCKS);
+	buf_rem = read_blocks * stats.blksize;
+	if (fd_offt % stats.blksize)
+		buf_rem -= (stats.blksize - (fd_offt % stats.blksize));
 
-		nread = read(fd, buf, sizeof(buf));
-		if (nread == -1) {
-			ret = nread;
-			fprintf(stderr, "Error while fragmenting: couldn't read file block %llu\n",
-				(unsigned long long)offset);
-			break;
-		}
-
-		ret = lseek(fd, offset, SEEK_SET);
-		if (ret == (off_t)-1) {
-			fprintf(stderr, "Error while fragmenting: couldn't lseek to file block %llu\n",
-				(unsigned long long)offset);
-			break;
-		}
-
-		ret = write(fd, buf, nread);
-		if (ret != nread || ret == -1) {
-			fprintf(stderr, "Error while fragmenting: couldn't write file block %llu\n",
-				(unsigned long long)offset);
-			break;
-		}
-
-		offset -= sizeof(buf);
-		frag_blocks--;
+	if (fd_offt < buf_rem) {
+		buf_rem = fd_offt;
+		fd_offt = 0;
+	} else {
+		fd_offt -= buf_rem;
 	}
-	close(fd);
 
-	return 0;
+	/* Update remaining blocks. This is as good a time as any. */
+	frag_blocks -= read_blocks;
+
+	fprintf(stderr, "fd_offt: %zd, buf_rem: %zd, frag_blocks: %llu, "
+		"read_blocks: %llu\n", fd_offt, buf_rem, frag_blocks,
+		read_blocks);
+
+	/* Lather: populate the buffer */
+	ret = lseek(fd, fd_offt, SEEK_SET);
+	if (ret == (off_t)-1) {
+		fprintf(stderr, "Error: seek failed (%zd)\n", fd_offt);
+		ret = -1;
+		goto done;
+	}
+
+	buf_offt = 0;
+	while (buf_rem) {
+		processed = read(fd, stats.fragbuf + buf_offt, buf_rem);
+		if (processed == -1) {
+			fprintf(stderr, "Error: read failed "
+				"(offt: %zd, sz: %zd)\n", fd_offt, buf_rem);
+			ret = -1;
+			goto done;
+		}
+
+		buf_rem -= processed;
+		buf_offt += processed;
+	}
+
+	/*
+	 * Rinse: write until we run out of blocks or we're done.
+	 * We'll start writing from the last buffered block.
+	 */
+	buf_rem = buf_offt;
+	buf_offt = ceil((buf_rem - stats.blksize) / stats.blksize) *
+							stats.blksize;
+	while (buf_rem) {
+		ret = lseek(fd, fd_offt + buf_offt, SEEK_SET);
+		if (ret == (off_t)-1) {
+			fprintf(stderr, "Error: seek failed (%zd)\n",
+							fd_offt + buf_offt);
+			ret = -1;
+			goto done;
+		}
+
+		wrsize = (stats.blksize > (buf_rem - buf_offt) ?
+					(buf_rem - buf_offt) : stats.blksize);
+		processed = write(fd, stats.fragbuf + buf_offt, wrsize);
+		if (processed != wrsize || processed == -1) {
+			fprintf(stderr, "Error: write failed "
+				"(offt: %zd, sz: %zd)\n",
+				fd_offt + buf_offt, wrsize);
+			ret = -1;
+			goto done;
+		}
+
+		buf_offt -= wrsize;
+		buf_rem = buf_offt + stats.blksize;
+	}
+
+	/* Repeat to fragment further */
+	if (frag_blocks)
+		goto again;
+
+	/* We made it here? Then we succeeded */
+	ret = 0;
+done:
+	close(fd);
+	return ret;
 }
 
 static void free_fpath(struct filepath **fpath)
@@ -424,7 +488,6 @@ done:
 	return 0;
 }
 
-#define ceil(x) ( x > (u64)x ? (u64)(x+1) : (u64)x )
 static void process_inode(struct btrfs_path *path)
 {
 	int ret;
@@ -496,9 +559,9 @@ static void process_inode(struct btrfs_path *path)
 				search_key.offset = 0;
 				btrfs_release_path(path);
 
-				btrfs_free_fs_info(stats.info);
-				stats.info = open_ctree_fs_info(stats.devname, 0, 0, 1);
-				root = stats.info->fs_root;
+				//btrfs_free_fs_info(stats.info);
+				//stats.info = open_ctree_fs_info(stats.devname, 0, 0, 1);
+				//root = stats.info->fs_root;
 
 				ret = btrfs_search_slot(NULL, root, &search_key, path, 0, 0);
 				BUG_ON(ret != 0);
@@ -686,6 +749,16 @@ int main(int ac, char **av)
 		(unsigned long)btrfs_super_leafsize(stats.info->super_copy),
 		(unsigned long)btrfs_super_stripesize(stats.info->super_copy));
 
+	/* Allocate buffer used during fragmentation */
+	if (args.fragment) {
+		stats.fragbuf = (char *)malloc(BUF_BLOCKS * stats.blksize);
+		if (!stats.fragbuf) {
+			fprintf(stderr, "Error allocating frag buffer\n");
+			ret = 1;
+			goto done;
+		}
+	}
+
 	/* Go ahead and process the fs tree */
 	printf("Traversing filesystem tree...\n");
 	process_tree();
@@ -693,6 +766,8 @@ int main(int ac, char **av)
 		100.0 * (1.0 - (double) (stats.tblocks - stats.textents) /
 		(stats.tblocks - stats.tfiles)));
 
+	if (args.fragment)
+		free(stats.fragbuf);
 done:
 	btrfs_free_fs_info(stats.info);
 	return ret;
