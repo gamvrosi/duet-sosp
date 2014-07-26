@@ -233,8 +233,11 @@ again:
 	 * We'll start writing from the last buffered block.
 	 */
 	buf_rem = buf_offt;
-	buf_offt = ceil((buf_rem - stats.blksize) / stats.blksize) *
-							stats.blksize;
+	if (buf_rem < stats.blksize)
+		buf_offt = 0;
+	else
+		buf_offt = ceil((buf_rem - stats.blksize) / stats.blksize) *
+								stats.blksize;
 	while (buf_rem) {
 		ret = lseek(fd, fd_offt + buf_offt, SEEK_SET);
 		if (ret == (off_t)-1) {
@@ -255,8 +258,9 @@ again:
 			goto done;
 		}
 
-		buf_offt -= wrsize;
-		buf_rem = buf_offt + stats.blksize;
+		buf_rem = buf_offt;
+		if (buf_offt)
+			buf_offt -= stats.blksize;
 	}
 
 	/* Repeat to fragment further */
@@ -559,9 +563,9 @@ static void process_inode(struct btrfs_path *path)
 				search_key.offset = 0;
 				btrfs_release_path(path);
 
-				//btrfs_free_fs_info(stats.info);
-				//stats.info = open_ctree_fs_info(stats.devname, 0, 0, 1);
-				//root = stats.info->fs_root;
+				btrfs_free_fs_info(stats.info);
+				stats.info = open_ctree_fs_info(stats.devname, 0, 0, 1);
+				root = stats.info->fs_root;
 
 				ret = btrfs_search_slot(NULL, root, &search_key, path, 0, 0);
 				BUG_ON(ret != 0);
