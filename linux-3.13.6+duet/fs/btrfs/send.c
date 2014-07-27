@@ -147,6 +147,7 @@ struct send_synwork {
 	struct send_ctx *sctx;
 
 	/* State needed across callbacks */
+	unsigned short bvec_maxidx;
 	unsigned short bvec_idx;
 	unsigned int bvec_offt;
 
@@ -3741,7 +3742,8 @@ struct write_range_ctx {
 	int done;		/* will be set if end of range is reached */
 };
 
-static int find_unset_range(u64 start, u64 len, void *bdevp, void *privdata) {
+static int find_unset_range(u64 start, u64 len, void *bdevp, void *privdata)
+{
 	struct block_device *bdev = (struct block_device *)bdevp;
 	struct write_range_ctx *wrctx = (struct write_range_ctx *)privdata;
 	int ret = 0;
@@ -3757,7 +3759,7 @@ static int find_unset_range(u64 start, u64 len, void *bdevp, void *privdata) {
 		goto done;
 
 	/* Skip the first few blocks that have not been processed */
-	while (cur_lbn < (cur_lbn + cur_len)) {
+	while (cur_len) {
 #ifdef CONFIG_BTRFS_DUET_BACKUP_DEBUG
 		printk(KERN_DEBUG "find_unset_range: processing (set) cur_lbn "
 			"%llu cur_len %llu\n", cur_lbn, cur_len);
@@ -3776,7 +3778,7 @@ static int find_unset_range(u64 start, u64 len, void *bdevp, void *privdata) {
 	if (ret == -1)
 		goto chk_fail;
 
-	while (cur_lbn < (cur_lbn + cur_len)) {
+	while (cur_len) {
 #ifdef CONFIG_BTRFS_DUET_BACKUP_DEBUG
 		printk(KERN_DEBUG "find_unset_range: processing (unset) cur_lbn "
 			"%llu cur_len %llu\n", cur_lbn, cur_len);
@@ -3812,7 +3814,8 @@ chk_fail:
 }
 #endif /* CONFIG_BTRFS_DUET_BACKUP */
 
-static int send_write(struct send_ctx *sctx, u64 offset, u32 len) {
+static int send_write(struct send_ctx *sctx, u64 offset, u32 len)
+{
 #ifdef CONFIG_BTRFS_DUET_BACKUP
 	int ret, num;
 	u64 cur_offt = offset;
@@ -4924,8 +4927,8 @@ out:
 
 #ifdef CONFIG_BTRFS_DUET_BACKUP
 /* This only goes through valid segments in the bio, starting with bvec_idx */
-#define bio_for_each_valid_segment(bvec, bio, idx)	\
-	for (; bvec = bio_iovec_idx((bio), (idx)), idx < (bio)->bi_idx; idx++)
+#define bio_for_each_segment_range(bvec, bio, idx, maxidx)	\
+	for (; bvec = bio_iovec_idx((bio), (idx)), idx < maxidx; idx++)
 
 static int __begin_o3_cmd(void *send_buf, u32 *send_size, int cmd)
 {
@@ -4998,7 +5001,8 @@ static int __tlv_put_o3_data(void *send_buf, u32 *send_size, u16 attr,
 	*ilen -= len;
 
 	/* Copy the data into the send buffer */
-	bio_for_each_valid_segment(bvec, swork->bio, swork->bvec_idx) {
+	bio_for_each_segment_range(bvec, swork->bio, swork->bvec_idx,
+							swork->bvec_maxidx) {
 		unsigned int bvec_rem;
 		char *addr;
 
@@ -5143,7 +5147,8 @@ err:
 	return ret;
 }
 
-static int __refcount_bio_pages(struct bio *bio, int up_count)
+static int __refcount_bio_pages(struct bio *bio, unsigned short maxidx,
+				int up_count)
 {
 	int segno = 0;
 	struct bio_vec *bvec;
@@ -5153,7 +5158,7 @@ static int __refcount_bio_pages(struct bio *bio, int up_count)
 		up_count ? "get" : "put", bio->bi_idx, bio->bi_vcnt);
 #endif /* CONFIG_BTRFS_DUET_BACKUP_DEBUG */
 
-	bio_for_each_valid_segment(bvec, bio, segno) {
+	bio_for_each_segment_range(bvec, bio, segno, maxidx) {
 #ifdef CONFIG_BTRFS_DUET_BACKUP_DEBUG
 		printk(KERN_DEBUG "bio_pages: page #%u: bv_page %p, bv_len %u,"
 			" bv_offt %u\n", segno, bvec->bv_page, bvec->bv_len,
@@ -5168,12 +5173,14 @@ static int __refcount_bio_pages(struct bio *bio, int up_count)
 	return 0;
 }
 
-static inline int get_bio_pages(struct bio *bio) {
-	return __refcount_bio_pages(bio, 1);
+static inline int get_bio_pages(struct bio *bio, unsigned short maxidx)
+{
+	return __refcount_bio_pages(bio, maxidx, 1);
 }
 
-static inline int put_bio_pages(struct bio *bio) {
-	return __refcount_bio_pages(bio, 0);
+static inline int put_bio_pages(struct bio *bio, unsigned short maxidx)
+{
+	return __refcount_bio_pages(bio, maxidx, 0);
 }
 
 /*
@@ -5247,7 +5254,8 @@ static void __handle_read_event(struct work_struct *work)
 
 		/* Update bvec_idx and bvec_offt depending on how many bytes
 		 * we skipped because they were already marked */
-		bio_for_each_valid_segment(bvec, swork->bio, swork->bvec_idx) {
+		bio_for_each_segment_range(bvec, swork->bio, swork->bvec_idx,
+							swork->bvec_maxidx) {
 			unsigned int bvec_rem;
 
 			if (!wrctx.skipped_bytes)
@@ -5263,7 +5271,7 @@ static void __handle_read_event(struct work_struct *work)
 			/* Otherwise, move offset and break out of the loop. */
 			} else {
 				swork->bvec_offt += wrctx.skipped_bytes;
-				wrctx.skipped_bytes -= bvec_rem;
+				wrctx.skipped_bytes = 0;
 				break;
 			}
 		}
@@ -5271,7 +5279,8 @@ static void __handle_read_event(struct work_struct *work)
 		if (wrctx.skipped_bytes) {
 			printk(KERN_ERR "duet-read: somehow we skipped more "
 				"data than that available in the bio. This is "
-				"probably a bug.\n");
+				"probably a bug (left = %llu).\n",
+				wrctx.skipped_bytes);
 			goto out;
 		}
 
@@ -5291,7 +5300,7 @@ static void __handle_read_event(struct work_struct *work)
 				wrctx.unset_pofft, wrctx.unset_len);
 		}
 
-		cur_len -= (cur_lbn + cur_len) - (wrctx.unset_pofft +
+		cur_len = (cur_lbn + cur_len) - (wrctx.unset_pofft +
 							wrctx.unset_len);
 		cur_lbn = wrctx.unset_pofft + wrctx.unset_len;
 	}
@@ -5303,7 +5312,7 @@ out:
 	vfree(swork->send_buf);
 buf_err:
 	/* Let the bio go */
-	put_bio_pages(swork->bio);
+	put_bio_pages(swork->bio, swork->bvec_maxidx);
 	bio_put(swork->bio);
 	kfree((void *)work);
 	return;
@@ -5338,20 +5347,21 @@ static void btrfs_send_duet_handler(__u8 taskid, __u8 event_code, void *owner,
 
 		INIT_WORK((struct work_struct *)swork, __handle_read_event);
 
-		/*
-		 * Get a hold on that bio, so that it doesn't go away. Also
-		 * get a hold on all its pages. This is sufficient because
-		 * our snapshot is read-only, so the contents won't change.
-		 */
-		bio_get((struct bio *)data);
-		get_bio_pages((struct bio *)data);
-
 		/* Populate synergistic work struct */
 		swork->bdev = bdev;
 		swork->lbn = offt;
 		swork->len = len;
 		swork->sctx = sctx;
 		swork->bio = (struct bio *)data;
+		swork->bvec_maxidx = swork->bio->bi_idx;
+
+		/*
+		 * Get a hold on that bio, so that it doesn't go away. Also
+		 * get a hold on all its pages. This is sufficient because
+		 * our snapshot is read-only, so the contents won't change.
+		 */
+		bio_get(swork->bio);
+		get_bio_pages(swork->bio, swork->bvec_maxidx);
 
 		spin_lock(&sctx->wq_lock);
 		if (!sctx->syn_wq || queue_work(sctx->syn_wq,
