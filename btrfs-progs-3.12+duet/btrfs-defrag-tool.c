@@ -29,6 +29,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <uuid/uuid.h>
+#include <math.h>
 #include <limits.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>
@@ -74,8 +75,6 @@ struct filepath
 	char comp[BTRFS_NAME_LEN];
 	struct filepath *next;
 };
-
-#define ceil(x) ( x > (u64)x ? (u64)(x+1) : (u64)x )
 
 static int print_usage(void)
 {
@@ -486,7 +485,7 @@ static int find_inode_frag(struct btrfs_root *root, struct btrfs_path *path,
 	}
 
 	if (*blocks == 1) *fragidx = 0.0;
-	else *fragidx = 1.0 - (double) (*blocks - *extents) / (*blocks - 1);
+	else *fragidx = (double) (*extents - 1) / (*blocks - 1);
 
 done:
 	return 0;
@@ -531,8 +530,8 @@ static void process_inode(struct btrfs_path *path)
 		 *      f_a = ceil(f / (1 / (b-1))) * (1 / (b-1))
 		 */
 		if (blocks > 1) {
-			f_a = ceil(args.f * (blocks - 1.0)) / (blocks - 1.0);
-			e_a = (blocks - 1) - ceil((1.0 - f_a) * (blocks - 1.0));
+			e_a = ceil(args.f * (blocks - 1.0));
+			f_a = (double) e_a / (blocks - 1.0);
 
 			/* If fragidx != f_a, then defrag first, then fragment as needed */
 			if (fragidx != f_a) {
