@@ -1041,7 +1041,7 @@ static int cmd_send_status(int argc, char **argv)
 		sa.progress.elapsed_time, sa.progress.sent_best_effort,
 		sa.progress.elapsed_rtime, sa.progress.elapsed_wtime);
 
-	return 0;
+	ret = 0;
 out:
 	free(subvol);
 	if (send.mnt_fd >= 0)

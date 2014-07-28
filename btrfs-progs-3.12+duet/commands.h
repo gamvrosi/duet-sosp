@@ -92,6 +92,7 @@ extern const struct cmd_group qgroup_cmd_group;
 extern const struct cmd_group replace_cmd_group;
 extern const struct cmd_group rescue_cmd_group;
 extern const struct cmd_group send_cmd_group;
+extern const struct cmd_group defrag_cmd_group;
 
 extern const char * const cmd_receive_usage[];
 extern const char * const cmd_check_usage[];
@@ -110,6 +111,7 @@ int cmd_chunk_recover(int argc, char **argv);
 int cmd_super_recover(int argc, char **argv);
 int cmd_inspect(int argc, char **argv);
 int cmd_send(int argc, char **argv);
+int cmd_defrag(int argc, char **argv);
 int cmd_receive(int argc, char **argv);
 int cmd_quota(int argc, char **argv);
 int cmd_qgroup(int argc, char **argv);

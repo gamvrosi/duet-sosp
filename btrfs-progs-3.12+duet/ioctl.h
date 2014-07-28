@@ -433,6 +433,17 @@ struct btrfs_ioctl_send_args {
 #endif /* DUET_BACKUP */
 };
 
+struct btrfs_defrag_progress {
+	__u64 bytes_total;		/* out */
+	__u64 bytes_best_effort;	/* out */
+	__u32 elapsed_time;		/* out */
+	__u8 running;			/* out */
+};
+
+struct btrfs_ioctl_defrag_args {
+	struct btrfs_defrag_progress progress;	/* out */
+};
+
 enum btrfs_dev_stat_values {
 	/* disk I/O failure stats */
 	BTRFS_DEV_STAT_WRITE_ERRS, /* EIO or EREMOTEIO from lower layers */
@@ -634,6 +645,11 @@ struct btrfs_ioctl_clone_range_args {
 #define BTRFS_IOC_SEND_PROGRESS _IOWR(BTRFS_IOCTL_MAGIC, 56, \
 					struct btrfs_ioctl_send_args)
 #endif /* DUET_BACKUP */
+#define BTRFS_IOC_DEFRAG_START _IOW(BTRFS_IOCTL_MAGIC, 57, \
+					struct btrfs_ioctl_defrag_args)
+#define BTRFS_IOC_DEFRAG_CANCEL _IO(BTRFS_IOCTL_MAGIC, 58)
+#define BTRFS_IOC_DEFRAG_PROGRESS _IOWR(BTRFS_IOCTL_MAGIC, 59, \
+					struct btrfs_ioctl_defrag_args)
 #ifdef __cplusplus
 }
 #endif
