@@ -18,6 +18,7 @@
 
 /*
  * Notes:
+ * - Support different sector/leaf/node sizes
  * - Check efficiency of sync'ing and re-reading root tree, fs root, path
  * - Why not defrag/fragment files as needed to reach target, instead of
  *   applying defragmentation and fragmentation on each file?
@@ -401,11 +402,9 @@ static int find_inode_frag(struct btrfs_root *root, struct btrfs_path *path,
 	*extents = 1;
 	if (btrfs_inode_mode(l, ii) / 01000 != 040) {
 		*size = btrfs_inode_size(l, ii);
-		if (*size > 0) {
-			*blocks = *size / stats.blksize;
-			if (*blocks * stats.blksize < *size)
-				(*blocks)++;
-		} else
+		if (*size > 0)
+			*blocks = ceil((double) *size / stats.blksize);
+		else
 			*blocks = 1;
 	} else
 		return 1;
@@ -450,6 +449,7 @@ static int find_inode_frag(struct btrfs_root *root, struct btrfs_path *path,
 		/* Just grab the next item in the tree */
 		if (btrfs_next_item(root, &epath, BTRFS_EXTENT_DATA_KEY))
 			break;
+
 		l = epath.nodes[0];
 		s = epath.slots[0];
 		fi = btrfs_item_ptr(l, s, struct btrfs_file_extent_item);
@@ -465,9 +465,9 @@ static int find_inode_frag(struct btrfs_root *root, struct btrfs_path *path,
 		firstbyte = btrfs_file_extent_disk_bytenr(l, fi) +
 			btrfs_file_extent_offset(l, fi);
 
-		/* Two blocks are close, if they're less than 8*block_size
+		/* Two blocks are close, if they're less than 4*block_size
 		   bytes apart */
-		if (lastbyte > firstbyte || firstbyte > lastbyte + 8*stats.blksize)
+		if (lastbyte > firstbyte || firstbyte > lastbyte + 4*stats.blksize)
 			(*extents)++;
 
 		if (remsize >= btrfs_file_extent_num_bytes(l, fi))
@@ -616,41 +616,32 @@ static void process_tree(void)
 	btrfs_init_path(&path);
 
 	/* Find the first inode in the fs tree */
-	search_key.objectid = 0;
+	search_key.objectid = BTRFS_FIRST_FREE_OBJECTID;
 	btrfs_set_key_type(&search_key, BTRFS_INODE_ITEM_KEY);
 	search_key.offset = 0;
 
 	ret = btrfs_search_slot(NULL, stats.info->fs_root, &search_key, &path,
 									0, 0);
-	BUG_ON(ret != 1);
-
-	/* Check that what we found is actually an inode item */
-	btrfs_item_key(path.nodes[0], &disk_key, path.slots[0]);
-	if (btrfs_disk_key_type(&disk_key) != BTRFS_INODE_ITEM_KEY) {
-		fprintf(stderr, "No inodes found!\n");
-		return;
-	}
+	BUG_ON(ret);
 
 	while (1) {
-		/* Process this inode */
-		process_inode(&path);
-
-		/* Find next inode */
-		btrfs_release_path(&path);
-
-		search_key.objectid = btrfs_disk_key_objectid(&disk_key) + 1;
-		ret = btrfs_search_slot(NULL, stats.info->fs_root, &search_key,
-					&path, 0, 0);
-		if (ret < 0)
-			break;
-
 		/* Check that what we found is actually an inode item */
-		if (args.verbose >= 3)
-			printf("Searched for objectid = %llu, got %d\n",
-				search_key.objectid, ret);
 		btrfs_item_key(path.nodes[0], &disk_key, path.slots[0]);
 		if (btrfs_disk_key_type(&disk_key) != BTRFS_INODE_ITEM_KEY)
+			goto next;
+
+		/* Process this inode */
+		process_inode(&path);
+		printf("  Processed inode #%llu\n", btrfs_disk_key_objectid(&disk_key));
+
+next:
+		/* Find next item */
+		ret = btrfs_next_item(stats.info->fs_root, &path, BTRFS_INODE_ITEM_KEY);
+		if (ret) {
+			if (ret < 0)
+				fprintf(stderr, "Error getting next inode\n");
 			break;
+		}
 	}
 
 	if (args.fragment)
@@ -745,7 +736,7 @@ int main(int ac, char **av)
 		100.0 * (double)btrfs_super_bytes_used(stats.info->super_copy) /
 		(double)btrfs_super_total_bytes(stats.info->super_copy));
 
-	stats.blksize = (unsigned long)btrfs_super_sectorsize(stats.info->super_copy);
+	stats.blksize = (unsigned long)btrfs_super_leafsize(stats.info->super_copy);
 	printf("Sector: %lub, Node: %lub, Leaf: %lub, Stripe: %lub\n\n",
 		(unsigned long)btrfs_super_sectorsize(stats.info->super_copy),
 		(unsigned long)btrfs_super_nodesize(stats.info->super_copy),
