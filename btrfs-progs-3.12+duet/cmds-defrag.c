@@ -18,15 +18,14 @@
 
 #define _GNU_SOURCE
 #include <unistd.h>
-#include <fcntl.h>
 #include <signal.h>
-#include <sys/syscall.h>
 #include <sys/ioctl.h>
+#include <sys/syscall.h>
 
-#include "kerncompat.h"
 #include "commands.h"
+#include "kerncompat.h"
+#include "utils.h"
 #include "ioctl.h"
-#include "send-utils.h" /* needed for subvol_search */
 
 /* TBD: replace with #include "linux/ioprio.h" in some years */
 #if !defined (IOPRIO_H)
@@ -37,152 +36,42 @@
 #define IOPRIO_CLASS_IDLE 3
 #endif
 
-#define MAX_SUBV_LEN 1024
-static struct btrfs_defrag cancel_defrag;
-static char cancel_subvol[MAX_SUBV_LEN];
 static int cancel_in_progress = 0;
+static struct btrfs_defrag cancel_defrag;
 static int g_verbose = 0;
 
 static const char * const defrag_cmd_group_usage[] = {
-	"btrfs defrag <command> [options] <subvol>",
+	"btrfs defrag <command> [options] <path|device>",
 	NULL
 };
 
 struct btrfs_defrag {
-	int mnt_fd;
-	char *root_path;
-	struct subvol_uuid_search sus;
-
-	/* Defrag priority state */
-	int ioprio_class;
-	int ioprio_classdata;
+	int fdmnt;
+	char *path;
 };
 
-static int init_root_path(struct btrfs_defrag *d, const char *subvol)
+static int do_cancel(struct btrfs_defrag *defrag)
 {
 	int ret = 0;
 
-	if (d->root_path)
-		goto out;
-
-	ret = find_mount_root(subvol, &d->root_path);
-	if (ret < 0) {
-		ret = -EINVAL;
-		fprintf(stderr, "ERROR: failed to determine mount point "
-				"for %s\n", subvol);
-		goto out;
-	}
-
-	d->mnt_fd = open(d->root_path, O_RDONLY | O_NOATIME);
-	if (d->mnt_fd < 0) {
-		ret = -errno;
-		fprintf(stderr, "ERROR: can't open '%s': %s\n", d->root_path,
-			strerror(-ret));
-		goto out;
-	}
-
-	ret = subvol_uuid_search_init(d->mnt_fd, &d->sus);
-	if (ret < 0) {
-		fprintf(stderr, "ERROR: failed to initialize subvol search. "
-				"%s\n", strerror(-ret));
-		goto out;
-	}
-
-out:
-	return ret;
-}
-
-static int get_root_id(struct btrfs_defrag *d, const char *path, u64 *root_id)
-{
-	struct subvol_info *si;
-
-	si = subvol_uuid_search(&d->sus, 0, NULL, 0, path,
-			subvol_search_by_path);
-	if (!si)
-		return -ENOENT;
-	*root_id = si->root_id;
-	free(si->path);
-	free(si);
-	return 0;
-}
-
-static int do_cancel(struct btrfs_defrag *defrag, char *subvol)
-{
-	int ret = 0;
-	u64 root_id;
-	int subvol_fd = -1;
-	struct subvol_info *si;
-
-	ret = get_root_id(defrag, get_subvol_name(defrag->root_path, subvol),
-			&root_id);
-	if (ret < 0) {
-		fprintf(stderr, "ERROR: could not resolve "
-				"root_id for %s\n", subvol);
-		return ret;
-	}
-
-	si = subvol_uuid_search(&defrag->sus, root_id, NULL, 0, NULL,
-				subvol_search_by_root_id);
-	if (!si) {
-		ret = -ENOENT;
-		fprintf(stderr, "ERROR: could not find subvol info for %llu",
-				root_id);
-		return ret;
-	}
-
-	subvol_fd = openat(defrag->mnt_fd, si->path, O_RDONLY | O_NOATIME);
-	if (subvol_fd < 0) {
-		ret = -errno;
-		fprintf(stderr, "ERROR: open %s failed. %s\n", si->path,
-				strerror(-ret));
-		return ret;
-	}
-
-	ret = ioctl(subvol_fd, BTRFS_IOC_DEFRAG_CANCEL, NULL);
+	ret = ioctl(defrag->fdmnt, BTRFS_IOC_DEFRAG_CANCEL, NULL);
 	if (ret < 0) {
 		fprintf(stderr, "ERROR: defrag cancel failed on %s: %s\n",
-			subvol,
+			defrag->path,
 			errno == ENOTCONN ? "not running" : strerror(errno));
-		return ret;
 	}
 
 	return ret;
 }
 
-static int do_send(struct btrfs_defrag *defrag, u64 root_id)
+static int do_defrag(struct btrfs_defrag *defrag)
 {
 	int ret;
-	struct subvol_info *si;
-	int subvol_fd = -1;
 	struct btrfs_ioctl_defrag_args io_defrag;
-
-	si = subvol_uuid_search(&defrag->sus, root_id, NULL, 0, NULL,
-			subvol_search_by_root_id);
-	if (!si) {
-		ret = -ENOENT;
-		fprintf(stderr, "ERROR: could not find subvol info for %llu",
-				root_id);
-		goto out;
-	}
-
-	subvol_fd = openat(defrag->mnt_fd, si->path, O_RDONLY | O_NOATIME);
-	if (subvol_fd < 0) {
-		ret = -errno;
-		fprintf(stderr, "ERROR: open %s failed. %s\n", si->path,
-				strerror(-ret));
-		goto out;
-	}
-
-	/* before moving on, set the ioprio */
-	ret = syscall(SYS_ioprio_set, IOPRIO_WHO_PROCESS, 0,
-		IOPRIO_PRIO_VALUE(defrag->ioprio_class, defrag->ioprio_classdata));
-	if (ret)
-		fprintf(stderr, "WARNING: setting ioprio failed: %s (ignored).\n",
-			strerror(errno));
 
 	memset(&io_defrag, 0, sizeof(io_defrag));
 
-	ret = ioctl(subvol_fd, BTRFS_IOC_DEFRAG_START, &io_defrag);
+	ret = ioctl(defrag->fdmnt, BTRFS_IOC_DEFRAG_START, &io_defrag);
 
 	if (cancel_in_progress) {
 		fprintf(stderr, "defrag ioctl terminated\n");
@@ -203,48 +92,37 @@ static int do_send(struct btrfs_defrag *defrag, u64 root_id)
 
 	ret = 0;
 out:
-	if (subvol_fd != -1)
-		close(subvol_fd);
-	if (si) {
-		free(si->path);
-		free(si);
-	}
 	return ret;
 }
 
-static void send_sigint_terminate(int signal)
+static void defrag_sigint_terminate(int signal)
 {
 	int ret;
 
 	fprintf(stderr, "Received SIGINT. Terminating...\n");
 	cancel_in_progress = 1;
-	ret = do_cancel(&cancel_defrag, cancel_subvol);
+	ret = do_cancel(&cancel_defrag);
 	if (ret < 0)
 		perror("Defrag cancel failed");
 }
 
-static int send_handle_sigint(struct btrfs_defrag *defrag, char *subvol) {
+static int defrag_handle_sigint(struct btrfs_defrag *defrag) {
 	struct sigaction sa = {
-		.sa_handler = defrag == NULL ? SIG_DFL : send_sigint_terminate,
+		.sa_handler = defrag == NULL ? SIG_DFL :
+				defrag_sigint_terminate,
 	};
-
-	memset(cancel_subvol, 0, MAX_SUBV_LEN);
 
 	if (defrag)
 		memcpy(&cancel_defrag, defrag, sizeof(*defrag));
-
-	if (subvol)
-		memcpy(cancel_subvol, subvol, strlen(subvol) < MAX_SUBV_LEN ?
-			strlen(cancel_subvol) : MAX_SUBV_LEN - 1);
 
 	return sigaction(SIGINT, &sa, NULL);
 }
 
 const char * const cmd_defrag_start_usage[] = {
-	"btrfs defrag start [-Bv] [-C <class> -N <classdata>] <subvol>",
-	"Run defrag on the given subvolume.",
+	"btrfs defrag start [-Bv] [-C <class> -N <classdata>] <path|device>",
+	"Run defrag on the given file system.",
 	"This will call defrag on the whole subvolume. On the kernel side,",
-	"defrag is invoked on each inode tied to the subvolume",
+	"defrag is invoked on each inode tied to the file system",
 	"\n",
 	"-B               run send in the background",
 	"-v               Enable verbose debug output. Each occurrence of",
@@ -257,12 +135,13 @@ const char * const cmd_defrag_start_usage[] = {
 int cmd_defrag_start(int argc, char **argv)
 {
 	int c, pid, ret = 0;
+	char *path;
+	int fdmnt = -1;
+	DIR *dirstream = NULL;
 	int do_background = 0;
-	struct btrfs_defrag defrag;
 	int ioprio_class = IOPRIO_CLASS_IDLE;
 	int ioprio_classdata = 0;
-	char *subvol = NULL;
-	u64 root_id;
+	struct btrfs_defrag defrag;
 
 	memset(&defrag, 0, sizeof(defrag));
 
@@ -291,24 +170,15 @@ int cmd_defrag_start(int argc, char **argv)
 	if (check_argc_exact(argc - optind, 1))
 		usage(cmd_defrag_start_usage);
 
-	/* Set the IO priorities */
-	defrag.ioprio_class = ioprio_class;
-	defrag.ioprio_classdata = ioprio_classdata;
+	path = argv[optind];
 
-	/* use first send subvol to determine mount_root */
-	subvol = argv[optind];
-
-	subvol = realpath(argv[optind], NULL);
-	if (!subvol) {
-		ret = -errno;
-		fprintf(stderr, "ERROR: unable to resolve %s - %s\n",
-			argv[optind], strerror(errno));
+	fdmnt = open_path_or_dev_mnt(path, &dirstream);
+	if (fdmnt < 0) {
+		fprintf(stderr, "ERROR: could not open %s: %s\n",
+			path, strerror(errno));
+		ret = 1;
 		goto out;
 	}
-
-	ret = init_root_path(&defrag, subvol);
-	if (ret < 0)
-		goto out;
 
 	if (do_background) {
 		pid = fork();
@@ -320,144 +190,112 @@ int cmd_defrag_start(int argc, char **argv)
 		}
 
 		if (pid) {
-			printf("defrag started at %s\n", subvol);
+			printf("defrag started at %s\n", path);
 			ret = 0;
 			goto out;
 		}
 	}
 
-	send_handle_sigint(&defrag, subvol);
+	/* Populate defrag structure */
+	defrag.fdmnt = fdmnt;
+	defrag.path = path;
 
-	ret = get_root_id(&defrag, get_subvol_name(defrag.root_path, subvol),
-			&root_id);
-	if (ret < 0) {
-		fprintf(stderr, "ERROR: could not resolve root_id "
-			"for %s\n", subvol);
-		goto out;
-	}
+	defrag_handle_sigint(&defrag);
 
-	ret = do_send(&defrag, root_id);
+	/* Set the IO priorities before moving on */
+	ret = syscall(SYS_ioprio_set, IOPRIO_WHO_PROCESS, 0,
+		IOPRIO_PRIO_VALUE(ioprio_class, ioprio_classdata));
+	if (ret)
+		fprintf(stderr, "WARNING: setting ioprio failed: %s (ignored).\n",
+			strerror(errno));
+
+	ret = do_defrag(&defrag);
 	if (ret < 0)
 		goto out;
 
-	send_handle_sigint(NULL, NULL);
+	defrag_handle_sigint(NULL);
 
 	ret = 0;
 out:
-	free(subvol);
-	if (defrag.mnt_fd >= 0)
-		close(defrag.mnt_fd);
-	free(defrag.root_path);
-	subvol_uuid_search_finit(&defrag.sus);
-	return !!ret;
+	close_file_or_dir(fdmnt, dirstream);
+	return ret;
 }
 
 static const char * const cmd_defrag_cancel_usage[] = {
-	"btrfs defrag cancel <subvol>",
+	"btrfs defrag cancel <path|device>",
 	"Cancel a running defrag",
 	NULL
 };
 
 static int cmd_defrag_cancel(int argc, char **argv)
 {
-	int ret;
-	char *subvol;
+	char *path;
+	int ret = 0;
+	int fdmnt = -1;
+	DIR *dirstream = NULL;
 	struct btrfs_defrag defrag;
-
-	memset(&defrag, 0, sizeof(defrag));
 
 	if (check_argc_exact(argc, 2))
 		usage(cmd_defrag_cancel_usage);
 
-	/* use first send subvol to determine mount_root */
-	subvol = realpath(argv[1], NULL);
-	if (!subvol) {
-		ret = -errno;
-		fprintf(stderr, "ERROR: unable to resolve %s\n", argv[optind]);
+	path = argv[1];
+
+	fdmnt = open_path_or_dev_mnt(path, &dirstream);
+	if (fdmnt < 0) {
+		fprintf(stderr, "ERROR: could not open %s: %s\n",
+			path, strerror(errno));
+		ret = 1;
 		goto out;
 	}
 
-	ret = init_root_path(&defrag, subvol);
-	if (ret < 0)
-		goto out;
+	/* Populate defrag structure */
+	defrag.fdmnt = fdmnt;
+	defrag.path = path;
 
-	ret = do_cancel(&defrag, subvol);
-	if (ret < 0)
+	ret = do_cancel(&defrag);
+	if (ret)
 		goto out;
 
 	printf("defrag cancelled\n");
-
+	ret = 0;
 out:
-	free(subvol);
-	if (defrag.mnt_fd >= 0)
-		close(defrag.mnt_fd);
-	free(defrag.root_path);
-	subvol_uuid_search_finit(&defrag.sus);
+	close_file_or_dir(fdmnt, dirstream);
 	return ret;
 }
 
 static const char * const cmd_defrag_status_usage[] = {
-	"btrfs defrag status <subvol>",
+	"btrfs defrag status <path|device>",
 	"Show status of running or finished filesystem defrag",
 	NULL
 };
 
 static int cmd_defrag_status(int argc, char **argv)
 {
+	char *path;
 	int ret = 0;
-	char *subvol;
-	int subvol_fd = -1;
-	struct btrfs_defrag defrag;
-	struct subvol_info *si;
+	int fdmnt = -1;
+	DIR *dirstream = NULL;
 	struct btrfs_ioctl_defrag_args da;
-	u64 root_id;
 
-	memset(&defrag, 0, sizeof(defrag));
+	memset(&da, 0, sizeof(da));
 
 	if (check_argc_exact(argc, 2))
 		usage(cmd_defrag_status_usage);
 
-	/* use first send subvol to determine mount_root */
-	subvol = realpath(argv[1], NULL);
-	if (!subvol) {
-		ret = -errno;
-		fprintf(stderr, "ERROR: unable to resolve %s\n", argv[optind]);
+	path = argv[1];
+
+	fdmnt = open_path_or_dev_mnt(path, &dirstream);
+	if (fdmnt < 0) {
+		fprintf(stderr, "ERROR: could not open %s: %s\n",
+			path, strerror(errno));
+		ret = 1;
 		goto out;
 	}
 
-	ret = init_root_path(&defrag, subvol);
-	if (ret < 0)
-		goto out;
-
-	ret = get_root_id(&defrag, get_subvol_name(defrag.root_path, subvol),
-			&root_id);
+	ret = ioctl(fdmnt, BTRFS_IOC_DEFRAG_PROGRESS, &da);
 	if (ret < 0) {
-		fprintf(stderr, "ERROR: could not resolve root_id for %s\n",
-			subvol);
-		goto out;
-	}
-
-	si = subvol_uuid_search(&defrag.sus, root_id, NULL, 0, NULL,
-				subvol_search_by_root_id);
-	if (!si) {
-		ret = -ENOENT;
-		fprintf(stderr, "ERROR: could not find subvol info for %llu",
-				root_id);
-		goto out;
-	}
-
-	subvol_fd = openat(defrag.mnt_fd, si->path, O_RDONLY | O_NOATIME);
-	if (subvol_fd < 0) {
-		ret = -errno;
-		fprintf(stderr, "ERROR: open %s failed. %s\n", si->path,
-				strerror(-ret));
-		goto out;
-	}
-
-	ret = ioctl(subvol_fd, BTRFS_IOC_DEFRAG_PROGRESS, &da);
-	if (ret < 0) {
-		fprintf(stderr, "ERROR: defrag status failed on %s: %s\n", subvol,
-			strerror(errno));
+		fprintf(stderr, "ERROR: defrag status failed on %s: %s\n",
+			path, strerror(errno));
 		ret = 1;
 		goto out;
 	}
@@ -470,11 +308,7 @@ static int cmd_defrag_status(int argc, char **argv)
 
 	ret = 0;
 out:
-	free(subvol);
-	if (defrag.mnt_fd >= 0)
-		close(defrag.mnt_fd);
-	free(defrag.root_path);
-	subvol_uuid_search_finit(&defrag.sus);
+	close_file_or_dir(fdmnt, dirstream);
 	return ret;
 }
 
