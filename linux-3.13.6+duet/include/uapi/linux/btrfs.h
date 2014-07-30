@@ -509,6 +509,19 @@ struct btrfs_ioctl_send_args {
 
 };
 
+#ifdef CONFIG_BTRFS_DEFRAG
+struct btrfs_defrag_progress {
+	__u64 bytes_total;		/* out */
+	__u64 bytes_best_effort;	/* out */
+	__u32 elapsed_time;		/* out */
+	__u8 running;			/* out */
+};
+
+struct btrfs_ioctl_defrag_args {
+	struct btrfs_defrag_progress progress;	/* out */
+};
+#endif /* CONFIG_BTRFS_DEFRAG */
+
 /* Error codes as returned by the kernel */
 enum btrfs_err_code {
 	notused,
@@ -648,5 +661,13 @@ static inline char *btrfs_err_str(enum btrfs_err_code err_code)
 #define BTRFS_IOC_SEND_PROGRESS _IOWR(BTRFS_IOCTL_MAGIC, 56, \
 					struct btrfs_ioctl_send_args)
 #endif /* CONFIG_BTRFS_DUET_BACKUP */
+#ifdef CONFIG_BTRFS_DEFRAG
+#define BTRFS_IOC_DEFRAG_START _IOW(BTRFS_IOCTL_MAGIC, 57, \
+					struct btrfs_ioctl_defrag_args)
+#define BTRFS_IOC_DEFRAG_CANCEL _IO(BTRFS_IOCTL_MAGIC, 58)
+#define BTRFS_IOC_DEFRAG_PROGRESS _IOWR(BTRFS_IOCTL_MAGIC, 59, \
+					struct btrfs_ioctl_defrag_args)
+#endif /* CONFIG_BTRFS_DEFRAG */
+
 
 #endif /* _UAPI_LINUX_BTRFS_H */

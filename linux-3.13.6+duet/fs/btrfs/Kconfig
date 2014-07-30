@@ -159,6 +159,31 @@ config BTRFS_DUET_BACKUP_DEBUG
 
 	  If unsure/not a developer, say N here.
 
+config BTRFS_DEFRAG
+	bool "Btrfs filesystem-wide defrag support"
+	depends on BTRFS_FS
+	help
+	  Adds support for a filesystem-wide defrag
+
+config BTRFS_DUET_DEFRAG
+	bool "Duet framework support for the btrfs defrag"
+	depends on BTRFS_FS
+	select DUET
+	select DUET_CACHE
+	select BTRFS_FS_MAPPING
+	help
+	  Adds support for the btrfs defrag to collaborate with other tasks
+	  through the duet framework
+
+config BTRFS_DUET_DEFRAG_DEBUG
+	bool "Debug messages for the synergistic btrfs defrag"
+	depends on BTRFS_FS
+	depends on BTRFS_DUET_DEFRAG
+	help
+	  Adds debug messages for the synergistic btrfs defrag.
+
+	  If unsure/not a developer, say N here.
+
 endmenu
 
 config BTRFS_FS_RUN_SANITY_TESTS

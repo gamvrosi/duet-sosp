@@ -1671,6 +1671,19 @@ struct btrfs_fs_info {
 	atomic64_t send_best_effort;
 	atomic64_t send_start_jiffies;
 #endif /* CONFIG_BTRFS_DUET_BACKUP */
+
+#ifdef CONFIG_BTRFS_DEFRAG
+	struct defrag_ctx *cur_defrag;
+	struct mutex defrag_lock;
+	atomic_t defrag_cancel_req;
+	atomic_t defrag_fs_running;
+	wait_queue_head_t defrag_cancel_wait;
+
+	/* progress-related state for defrag */
+	atomic64_t defrag_bytes_total;
+	atomic64_t defrag_bytes_best_effort;
+	atomic64_t defrag_start_jiffies;
+#endif /* CONFIG_BTRFS_DEFRAG */
 };
 
 /*

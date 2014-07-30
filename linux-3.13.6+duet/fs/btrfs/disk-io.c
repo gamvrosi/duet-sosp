@@ -2234,6 +2234,18 @@ int open_ctree(struct super_block *sb,
 	atomic64_set(&fs_info->send_start_jiffies, 0);
 #endif /* CONFIG_BTRFS_DUET_BACKUP */
 
+#ifdef CONFIG_BTRFS_DEFRAG
+	fs_info->cur_defrag = NULL;
+	mutex_init(&fs_info->defrag_lock);
+	atomic_set(&fs_info->defrag_cancel_req, 0);
+	atomic_set(&fs_info->defrag_fs_running, 0);
+	init_waitqueue_head(&fs_info->defrag_cancel_wait);
+
+	atomic64_set(&fs_info->defrag_bytes_total, 0);
+	atomic64_set(&fs_info->defrag_bytes_best_effort, 0);
+	atomic64_set(&fs_info->defrag_start_jiffies, 0);
+#endif /* CONFIG_BTRFS_DEFRAG */
+
 	atomic_set(&fs_info->scrubs_running, 0);
 	atomic_set(&fs_info->scrub_pause_req, 0);
 	atomic_set(&fs_info->scrubs_paused, 0);

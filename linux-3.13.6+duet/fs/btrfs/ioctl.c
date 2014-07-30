@@ -55,6 +55,9 @@
 #include "backref.h"
 #include "rcu-string.h"
 #include "send.h"
+#ifdef CONFIG_BTRFS_DEFRAG
+#include "defrag.h"
+#endif /* CONFIG_BTRFS_DEFRAG */
 #include "dev-replace.h"
 
 static int btrfs_clone(struct inode *src, struct inode *inode,
@@ -4618,6 +4621,14 @@ long btrfs_ioctl(struct file *file, unsigned int
 	case BTRFS_IOC_SEND_PROGRESS:
 		return btrfs_ioctl_send_progress(root, argp);
 #endif /* CONFIG_BTRFS_DUET_BACKUP */
+#ifdef CONFIG_BTRFS_DEFRAG
+	case BTRFS_IOC_DEFRAG_START:
+		return btrfs_ioctl_defrag_start(file, argp);
+	case BTRFS_IOC_DEFRAG_CANCEL:
+		return btrfs_ioctl_defrag_cancel(root, argp);
+	case BTRFS_IOC_DEFRAG_PROGRESS:
+		return btrfs_ioctl_defrag_progress(root, argp);
+#endif /* CONFIG_BTRFS_DEFRAG */
 	}
 
 	return -ENOTTY;
