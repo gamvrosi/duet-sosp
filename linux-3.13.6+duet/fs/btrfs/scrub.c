@@ -691,6 +691,8 @@ static void __handle_event(struct work_struct *work)
 			"(%d). This is a bug.\n", swork->code);
 		break;
 	}
+
+	kfree((void *)work);
 }
 
 static void btrfs_scrub_duet_handler(__u8 taskid, __u8 event_code, void *owner,
