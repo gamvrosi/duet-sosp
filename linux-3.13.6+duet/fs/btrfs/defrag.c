@@ -22,7 +22,6 @@
 //#include "ctree.h"
 //#include "volumes.h"
 //#include "mapping.h"
-//#include "raid56.h"
 #ifdef CONFIG_BTRFS_DUET_DEFRAG
 #include <linux/workqueue.h>
 #include <linux/duet.h>
@@ -30,13 +29,7 @@
 
 struct defrag_ctx {
 	struct btrfs_root *defrag_root;
-#if 0
-	/* current state of the compare_tree call */
-	struct btrfs_path *left_path;
-	struct btrfs_path *right_path;
-	struct btrfs_key *cmp_key;
-#endif
-	u64 send_progress;
+	u64 defrag_progress;
 
 #ifdef CONFIG_BTRFS_DUET_DEFRAG
 	spinlock_t wq_lock;
@@ -56,10 +49,257 @@ struct defrag_synwork {
 #endif /* CONFIG_BTRFS_DUET_DEFRAG */
 };
 
-static int process_inode(struct defrag_ctx *dctx)
+#if 0
+int btrfs_defrag_file(struct inode *inode, struct file *file,
+		      struct btrfs_ioctl_defrag_range_args *range,
+		      u64 newer_than, unsigned long max_to_defrag)
 {
-	// TODO: Implement
-	return 0;
+	struct btrfs_root *root = BTRFS_I(inode)->root;
+	struct file_ra_state *ra = NULL;
+	unsigned long last_index;
+	u64 isize = i_size_read(inode);
+	u64 last_len = 0;
+	u64 skip = 0;
+	u64 defrag_end = 0;
+	u64 newer_off = range->start;
+	unsigned long i;
+	unsigned long ra_index = 0;
+        int ret;
+        int defrag_count = 0;
+        int compress_type = BTRFS_COMPRESS_ZLIB;
+        int extent_thresh = range->extent_thresh;
+        int max_cluster = (256 * 1024) >> PAGE_CACHE_SHIFT;
+        int cluster = max_cluster;
+        u64 new_align = ~((u64)128 * 1024 - 1);
+        struct page **pages = NULL;
+
+        if (isize == 0)
+                return 0;
+
+        if (range->start >= isize)
+                return -EINVAL;
+
+        if (range->flags & BTRFS_DEFRAG_RANGE_COMPRESS) {
+                if (range->compress_type > BTRFS_COMPRESS_TYPES)
+                        return -EINVAL;
+                if (range->compress_type)
+                        compress_type = range->compress_type;
+        }
+
+        if (extent_thresh == 0)
+                extent_thresh = 256 * 1024;
+
+        /*
+         * if we were not given a file, allocate a readahead
+         * context
+         */
+        if (!file) {
+                ra = kzalloc(sizeof(*ra), GFP_NOFS);
+                if (!ra)
+                        return -ENOMEM;
+                file_ra_state_init(ra, inode->i_mapping);
+        } else {
+                ra = &file->f_ra;
+        }
+
+        pages = kmalloc_array(max_cluster, sizeof(struct page *),
+                        GFP_NOFS);
+        if (!pages) {
+                ret = -ENOMEM;
+                goto out_ra;
+        }
+
+        /* find the last page to defrag */
+        if (range->start + range->len > range->start) {
+                last_index = min_t(u64, isize - 1,
+                         range->start + range->len - 1) >> PAGE_CACHE_SHIFT;
+        } else {
+                last_index = (isize - 1) >> PAGE_CACHE_SHIFT;
+        }
+
+        if (newer_than) {
+                ret = find_new_extents(root, inode, newer_than,
+                                       &newer_off, 64 * 1024);
+                if (!ret) {
+                        range->start = newer_off;
+                        /*
+                         * we always align our defrag to help keep
+                         * the extents in the file evenly spaced
+                         */
+                        i = (newer_off & new_align) >> PAGE_CACHE_SHIFT;
+                } else
+                        goto out_ra;
+        } else {
+                i = range->start >> PAGE_CACHE_SHIFT;
+        }
+        if (!max_to_defrag)
+                max_to_defrag = last_index + 1;
+
+        /*
+         * make writeback starts from i, so the defrag range can be
+         * written sequentially.
+         */
+        if (i < inode->i_mapping->writeback_index)
+                inode->i_mapping->writeback_index = i;
+
+        while (i <= last_index && defrag_count < max_to_defrag &&
+               (i < (i_size_read(inode) + PAGE_CACHE_SIZE - 1) >>
+                PAGE_CACHE_SHIFT)) {
+                /*
+                 * make sure we stop running if someone unmounts
+                 * the FS
+                 */
+                if (!(inode->i_sb->s_flags & MS_ACTIVE))
+                        break;
+
+                if (btrfs_defrag_cancelled(root->fs_info)) {
+                        printk(KERN_DEBUG "btrfs: defrag_file cancelled\n");
+                        ret = -EAGAIN;
+                        break;
+                }
+
+                if (!should_defrag_range(inode, (u64)i << PAGE_CACHE_SHIFT,
+                                         extent_thresh, &last_len, &skip,
+                                         &defrag_end, range->flags &
+                                         BTRFS_DEFRAG_RANGE_COMPRESS)) {
+                        unsigned long next;
+                        /*
+                         * the should_defrag function tells us how much to skip
+                         * bump our counter by the suggested amount
+                         */
+                        next = (skip + PAGE_CACHE_SIZE - 1) >> PAGE_CACHE_SHIFT;
+                        i = max(i + 1, next);
+                        continue;
+                }
+
+                if (!newer_than) {
+                        cluster = (PAGE_CACHE_ALIGN(defrag_end) >>
+                                   PAGE_CACHE_SHIFT) - i;
+                        cluster = min(cluster, max_cluster);
+                } else {
+                        cluster = max_cluster;
+                }
+
+                if (i + cluster > ra_index) {
+                        ra_index = max(i, ra_index);
+                        btrfs_force_ra(inode->i_mapping, ra, file, ra_index,
+                                       cluster);
+                        ra_index += max_cluster;
+                }
+
+                mutex_lock(&inode->i_mutex);
+                if (range->flags & BTRFS_DEFRAG_RANGE_COMPRESS)
+                        BTRFS_I(inode)->force_compress = compress_type;
+                ret = cluster_pages_for_defrag(inode, pages, i, cluster);
+                if (ret < 0) {
+                        mutex_unlock(&inode->i_mutex);
+                        goto out_ra;
+                }
+
+                defrag_count += ret;
+                balance_dirty_pages_ratelimited(inode->i_mapping);
+                mutex_unlock(&inode->i_mutex);
+
+                if (newer_than) {
+                        if (newer_off == (u64)-1)
+                                break;
+
+                        if (ret > 0)
+                                i += ret;
+
+                        newer_off = max(newer_off + 1,
+                                        (u64)i << PAGE_CACHE_SHIFT);
+
+                        ret = find_new_extents(root, inode,
+                                               newer_than, &newer_off,
+                                               64 * 1024);
+                        if (!ret) {
+                                range->start = newer_off;
+                                i = (newer_off & new_align) >> PAGE_CACHE_SHIFT;
+                        } else {
+                                break;
+                        }
+                } else {
+                        if (ret > 0) {
+                                i += ret;
+                                last_len += ret << PAGE_CACHE_SHIFT;
+                        } else {
+                                i++;
+                                last_len = 0;
+                        }
+                }
+        }
+
+        if ((range->flags & BTRFS_DEFRAG_RANGE_START_IO))
+                filemap_flush(inode->i_mapping);
+
+        if ((range->flags & BTRFS_DEFRAG_RANGE_COMPRESS)) {
+                /* the filemap_flush will queue IO into the worker threads, but
+                 * we have to make sure the IO is actually started and that
+                 * ordered extents get created before we return
+                 */
+                atomic_inc(&root->fs_info->async_submit_draining);
+                while (atomic_read(&root->fs_info->nr_async_submits) ||
+                      atomic_read(&root->fs_info->async_delalloc_pages)) {
+                        wait_event(root->fs_info->async_submit_wait,
+                           (atomic_read(&root->fs_info->nr_async_submits) == 0 &&
+                            atomic_read(&root->fs_info->async_delalloc_pages) == 0));
+                }
+                atomic_dec(&root->fs_info->async_submit_draining);
+        }
+
+        if (range->compress_type == BTRFS_COMPRESS_LZO) {
+                btrfs_set_fs_incompat(root->fs_info, COMPRESS_LZO);
+        }
+
+        ret = defrag_count;
+
+out_ra:
+        if (range->flags & BTRFS_DEFRAG_RANGE_COMPRESS) {
+                mutex_lock(&inode->i_mutex);
+                BTRFS_I(inode)->force_compress = BTRFS_COMPRESS_NONE;
+                mutex_unlock(&inode->i_mutex);
+        }
+        if (!file)
+                kfree(ra);
+        kfree(pages);
+        return ret;
+}
+#endif /* 0 */
+
+static int process_inode(struct defrag_ctx *dctx, struct btrfs_path *path)
+{
+	int s, ret = 0;
+	struct extent_buffer *l;
+	struct btrfs_inode_item *ii;
+#if 0
+	struct btrfs_ioctl_defrag_range_args *range;
+
+	range = kzalloc
+	range->len = (u64)-1;
+#endif
+
+	/* Grab the inode item */
+	l = path->nodes[0];
+	s = path->slots[0];
+	ii = btrfs_item_ptr(l, s, struct btrfs_inode_item);
+
+	/* We will only process regular files */
+	switch (btrfs_inode_mode(l, ii) & S_IFMT) {
+	case S_IFREG:
+		/* TODO: Get the file's inode to call file_defrag() */
+#if 0
+		ret = btrfs_defrag_file(file_inode(file), file, range, 0, 0);
+#endif
+		break;
+	case S_IFDIR:
+	case S_IFLNK:
+	default:
+		ret = 1;
+		break;
+	}
+
+	return ret;
 }
 
 static struct btrfs_path *alloc_path_for_defrag(void)
@@ -82,13 +322,28 @@ static int defrag_subvol(struct defrag_ctx *dctx)
 	struct btrfs_fs_info *fs_info = defrag_root->fs_info;
 	struct btrfs_key found_key;
 	struct extent_buffer *eb;
-	struct btrfs_key key;
+	struct btrfs_key key, key_start, key_end;
+	struct reada_control *reada;
 	struct btrfs_trans_handle *trans = NULL;
 	u64 start_ctransid, ctransid;
 
 	path = alloc_path_for_defrag();
 	if (!path)
 		return -ENOMEM;
+
+	/* Start a readahead on defrag_root, to get things rolling faster */
+	printk(KERN_INFO "btrfs defrag: readahead started at %lu.\n", jiffies);
+	key_start.objectid = BTRFS_FIRST_FREE_OBJECTID;
+	key_start.type = BTRFS_INODE_ITEM_KEY;
+	key_start.offset = (u64)0;
+	key_end.objectid = (u64)-1;
+	key_end.type = BTRFS_INODE_ITEM_KEY;
+	key_end.offset = (u64)-1;
+	reada = btrfs_reada_add(defrag_root, &key_start, &key_end);
+
+	if (!IS_ERR(reada))
+		btrfs_reada_wait(reada);
+	printk(KERN_INFO "btrfs defrag: readahead ended at %lu.\n", jiffies);
 
 	spin_lock(&defrag_root->root_item_lock);
 	start_ctransid = btrfs_root_ctransid(&defrag_root->root_item);
@@ -150,15 +405,18 @@ join_trans:
 
 		/* Check if we've been asked to cancel */
 		if (atomic_read(&fs_info->defrag_cancel_req))
-			return -1;
+			goto out;
 
 		/* If we couldn't find an inode, we're done */
 		if (found_key.type != BTRFS_INODE_ITEM_KEY)
 			goto next;
 
-		ret = process_inode(dctx);
+		ret = process_inode(dctx, path);
 		if (ret < 0)
 			goto out;
+
+		/* Mark our progress */
+		dctx->defrag_progress = found_key.objectid;
 
 next:
 		key.objectid = found_key.objectid;
@@ -202,11 +460,17 @@ long btrfs_ioctl_defrag_start(struct file *file, void __user *arg_)
 	defrag_root = BTRFS_I(file_inode(file))->root;
 	fs_info = defrag_root->fs_info;
 
+	if (btrfs_root_readonly(defrag_root)) {
+		ret = -EROFS;
+		goto out;
+	}
+
 	/* Check if a defrag is already running, and terminate if so */
 	mutex_lock(&fs_info->defrag_lock);
 	if (atomic_read(&fs_info->defrag_fs_running)) {
 		mutex_unlock(&fs_info->defrag_lock);
-		return -EINPROGRESS;
+		ret = -EINPROGRESS;
+		goto out;
 	}
 	atomic_inc(&fs_info->defrag_fs_running);
 	mutex_unlock(&fs_info->defrag_lock);
