@@ -111,7 +111,7 @@ int cmd_chunk_recover(int argc, char **argv);
 int cmd_super_recover(int argc, char **argv);
 int cmd_inspect(int argc, char **argv);
 int cmd_send(int argc, char **argv);
-int cmd_defrag(int argc, char **argv);
+int cmd_fs_defrag(int argc, char **argv);
 int cmd_receive(int argc, char **argv);
 int cmd_quota(int argc, char **argv);
 int cmd_qgroup(int argc, char **argv);

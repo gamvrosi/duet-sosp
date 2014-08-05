@@ -15,7 +15,6 @@
  * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
  * Boston, MA 021110-1307, USA.
  */
-
 #define _GNU_SOURCE
 #include <unistd.h>
 #include <signal.h>
@@ -48,6 +47,7 @@ static const char * const defrag_cmd_group_usage[] = {
 struct btrfs_defrag {
 	int fdmnt;
 	char *path;
+	struct btrfs_ioctl_defrag_range_args range;
 };
 
 static int do_cancel(struct btrfs_defrag *defrag)
@@ -67,11 +67,12 @@ static int do_cancel(struct btrfs_defrag *defrag)
 static int do_defrag(struct btrfs_defrag *defrag)
 {
 	int ret;
-	struct btrfs_ioctl_defrag_args io_defrag;
+	struct btrfs_ioctl_defrag_args da;
 
-	memset(&io_defrag, 0, sizeof(io_defrag));
+	memset(&da, 0, sizeof(da));
+	memcpy(&da.range, &defrag->range, sizeof(da.range));
 
-	ret = ioctl(defrag->fdmnt, BTRFS_IOC_DEFRAG_START, &io_defrag);
+	ret = ioctl(defrag->fdmnt, BTRFS_IOC_DEFRAG_START, &da);
 
 	if (cancel_in_progress) {
 		fprintf(stderr, "defrag ioctl terminated\n");
@@ -127,6 +128,11 @@ const char * const cmd_defrag_start_usage[] = {
 	"-B               run send in the background",
 	"-v               Enable verbose debug output. Each occurrence of",
 	"                 this option increases the verbose level more.",
+	"-c[zlib,lzo]     compress the file while defragmenting",
+	"-f               flush data to disk immediately after defragmenting",
+	"-s start         defragment only from byte 'start' onward",
+	"-l len           defragment only up to 'len' bytes",
+	"-t size          max size of file to be considered for defragmenting",
 	"-C <class>       set ioprio class (see ionice(1) manpage)",
 	"-N <classdata>   set ioprio classdata (see ionice(1) manpage)",
 	NULL
@@ -145,13 +151,46 @@ int cmd_defrag_start(int argc, char **argv)
 
 	memset(&defrag, 0, sizeof(defrag));
 
-	while ((c = getopt(argc, argv, "BvC:N:")) != -1) {
+	/* Fill in the default defrag parameters */
+	defrag.range.compress_type = BTRFS_COMPRESS_NONE;
+	defrag.range.len = (u64)-1;
+
+	while ((c = getopt(argc, argv, "Bvc:fs:l:t:C:N:")) != -1) {
 		switch (c) {
 		case 'B':
 			do_background = 1;
 			break;
 		case 'v':
 			g_verbose++;
+			break;
+		case 'c':
+			defrag.range.flags |= BTRFS_DEFRAG_RANGE_COMPRESS;
+			defrag.range.compress_type = BTRFS_COMPRESS_ZLIB;
+
+			if (!optarg)
+				break;
+
+			if (!strcmp(optarg, "zlib"))
+				defrag.range.compress_type = BTRFS_COMPRESS_ZLIB;
+			else if (!strcmp(optarg, "lzo"))
+				defrag.range.compress_type = BTRFS_COMPRESS_LZO;
+			else {
+				fprintf(stderr, "Unknown compress type %s\n",
+					optarg);
+				usage(cmd_defrag_start_usage);
+			}
+			break;
+		case 'f':
+			defrag.range.flags |= BTRFS_DEFRAG_RANGE_START_IO;
+			break;
+		case 's':
+			defrag.range.start = parse_size(optarg);
+			break;
+		case 'l':
+			defrag.range.len = parse_size(optarg);
+			break;
+		case 't':
+			defrag.range.extent_thresh = parse_size(optarg);
 			break;
 		case 'C':
 			ioprio_class = (int) strtol(optarg, NULL, 10);
@@ -162,8 +201,7 @@ int cmd_defrag_start(int argc, char **argv)
 		case '?':
 		default:
 			fprintf(stderr, "ERROR: defrag args invalid.\n");
-			ret = 1;
-			goto out;
+			usage(cmd_defrag_start_usage);
 		}
 	}
 
@@ -321,7 +359,7 @@ const struct cmd_group defrag_cmd_group = {
 	}
 };
 
-int cmd_defrag(int argc, char **argv)
+int cmd_fs_defrag(int argc, char **argv)
 {
 	return handle_command_group(&defrag_cmd_group, argc, argv);
 }

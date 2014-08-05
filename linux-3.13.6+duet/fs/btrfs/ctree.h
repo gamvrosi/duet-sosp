@@ -1826,6 +1826,7 @@ struct btrfs_root {
 	u64 nr_ordered_extents;
 };
 
+#ifndef CONFIG_BTRFS_DEFRAG
 struct btrfs_ioctl_defrag_range_args {
 	/* start of the defrag operation */
 	__u64 start;
@@ -1856,7 +1857,7 @@ struct btrfs_ioctl_defrag_range_args {
 	/* spare for later */
 	__u32 unused[4];
 };
-
+#endif /* CONFIG_BTRFS_DEFRAG */
 
 /*
  * inode items have the data typically returned from stat and store other

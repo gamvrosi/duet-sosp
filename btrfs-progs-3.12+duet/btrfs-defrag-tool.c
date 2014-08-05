@@ -632,7 +632,9 @@ static void process_tree(void)
 
 		/* Process this inode */
 		process_inode(&path);
-		printf("  Processed inode #%llu\n", btrfs_disk_key_objectid(&disk_key));
+		if (args.verbose)
+			printf("  Processed inode #%llu\n",
+				btrfs_disk_key_objectid(&disk_key));
 
 next:
 		/* Find next item */

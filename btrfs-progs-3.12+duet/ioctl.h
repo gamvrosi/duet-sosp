@@ -441,7 +441,8 @@ struct btrfs_defrag_progress {
 };
 
 struct btrfs_ioctl_defrag_args {
-	struct btrfs_defrag_progress progress;	/* out */
+	struct btrfs_ioctl_defrag_range_args range;	/* in */
+	struct btrfs_defrag_progress progress;		/* out */
 };
 
 enum btrfs_dev_stat_values {

@@ -510,6 +510,37 @@ struct btrfs_ioctl_send_args {
 };
 
 #ifdef CONFIG_BTRFS_DEFRAG
+struct btrfs_ioctl_defrag_range_args {
+	/* start of the defrag operation */
+	__u64 start;
+
+	/* number of bytes to defrag, use (u64)-1 to say all */
+	__u64 len;
+
+	/*
+	 * flags for the operation, which can include turning
+	 * on compression for this one defrag
+	 */
+	__u64 flags;
+
+	/*
+	 * any extent bigger than this will be considered
+	 * already defragged.  Use 0 to take the kernel default
+	 * Use 1 to say every single extent must be rewritten
+	 */
+	__u32 extent_thresh;
+
+	/*
+	 * which compression method to use if turning on compression
+	 * for this defrag operation.  If unspecified, zlib will
+	 * be used
+	 */
+	__u32 compress_type;
+
+	/* spare for later */
+	__u32 unused[4];
+};
+
 struct btrfs_defrag_progress {
 	__u64 bytes_total;		/* out */
 	__u64 bytes_best_effort;	/* out */
@@ -518,7 +549,8 @@ struct btrfs_defrag_progress {
 };
 
 struct btrfs_ioctl_defrag_args {
-	struct btrfs_defrag_progress progress;	/* out */
+	struct btrfs_ioctl_defrag_range_args range;	/* in */
+	struct btrfs_defrag_progress progress;		/* out */
 };
 #endif /* CONFIG_BTRFS_DEFRAG */
 
