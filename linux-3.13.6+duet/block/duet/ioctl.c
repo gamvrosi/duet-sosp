@@ -154,20 +154,20 @@ static int duet_task_sendlist(struct duet_ioctl_tasks_args *ta)
 
 static int duet_debug_addblk(struct duet_ioctl_debug_args *da)
 {
-	return duet_mark_done(da->taskid, NULL, da->offset, da->len);
+	return duet_mark_done(da->taskid, 0, da->offset, da->len);
 }
 
 static int duet_debug_rmblk(struct duet_ioctl_debug_args *da)
 {
-	return duet_mark_todo(da->taskid, NULL, da->offset, da->len);
+	return duet_mark_todo(da->taskid, 0, da->offset, da->len);
 }
 
 static int duet_debug_chkblk(struct duet_ioctl_debug_args *da)
 {
 	if (da->unset)
-		da->ret = duet_chk_todo(da->taskid, NULL, da->offset, da->len);
+		da->ret = duet_chk_todo(da->taskid, 0, da->offset, da->len);
 	else
-		da->ret = duet_chk_done(da->taskid, NULL, da->offset, da->len);
+		da->ret = duet_chk_done(da->taskid, 0, da->offset, da->len);
 
 	return 0;
 }

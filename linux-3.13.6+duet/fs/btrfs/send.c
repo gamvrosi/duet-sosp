@@ -33,6 +33,7 @@
 #include <linux/duet.h>
 #include <linux/bio.h>
 #include <linux/ktime.h>
+#include <linux/genhd.h>
 #include "mapping.h"
 #endif /* CONFIG_BTRFS_DUET_BACKUP */
 
@@ -3764,8 +3765,8 @@ static int find_unset_range(u64 start, u64 len, void *bdevp, void *privdata)
 		printk(KERN_DEBUG "find_unset_range: processing (set) cur_lbn "
 			"%llu cur_len %llu\n", cur_lbn, cur_len);
 #endif /* CONFIG_BTRFS_DUET_BACKUP_DEBUG */
-		ret = duet_chk_done(taskid, bdev, cur_lbn, min(blksize,
-								cur_len));
+		ret = duet_chk_done(taskid, bdev->bd_part->start_sect << 9,
+				    cur_lbn, min(blksize, cur_len));
 		if (ret == 1) {
 			wrctx->skipped_bytes += min(blksize, cur_len);
 			cur_lbn += min(blksize, cur_len);
@@ -3783,8 +3784,8 @@ static int find_unset_range(u64 start, u64 len, void *bdevp, void *privdata)
 		printk(KERN_DEBUG "find_unset_range: processing (unset) cur_lbn "
 			"%llu cur_len %llu\n", cur_lbn, cur_len);
 #endif /* CONFIG_BTRFS_DUET_BACKUP_DEBUG */
-		ret = duet_chk_done(taskid, bdev, cur_lbn, min(blksize,
-								cur_len));
+		ret = duet_chk_done(taskid, bdev->bd_part->start_sect << 9,
+				    cur_lbn, min(blksize, cur_len));
 		if (ret == 0) {
 			if (wrctx->unset_len == 0) {
 				wrctx->unset_pofft = cur_lbn;
@@ -3871,8 +3872,9 @@ again:
 
 		/* Mark the processed bytes first, to avoid counting these as
 		 * synergistic reads */
-		ret = duet_mark_done(sctx->taskid, wrctx.unset_bdev,
-					wrctx.unset_pofft, wrctx.unset_len);
+		ret = duet_mark_done(sctx->taskid,
+				(wrctx.unset_bdev)->bd_part->start_sect << 9,
+				wrctx.unset_pofft, wrctx.unset_len);
 		if (ret) {
 			printk(KERN_ERR "duet: failed to mark contiguous range"
 				" i%llu, p%llu, (%llub)\n", wrctx.unset_iofft,
@@ -5245,7 +5247,8 @@ static void __handle_read_event(struct work_struct *work)
 			break;
 
 		/* Mark first, to avoid coming back here */
-		if (duet_mark_done(swork->sctx->taskid, swork->bdev,
+		if (duet_mark_done(swork->sctx->taskid,
+				swork->bdev->bd_part->start_sect << 9,
 				wrctx.unset_pofft, wrctx.unset_len)) {
 			printk(KERN_ERR "duet-read: failed to mark range p%llu"
 				" %llub\n", wrctx.unset_pofft, wrctx.unset_len);

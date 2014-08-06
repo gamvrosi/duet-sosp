@@ -15,7 +15,6 @@
  * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
  * Boston, MA 021110-1307, USA.
  */
-#include <linux/genhd.h>
 #include "common.h"
 
 /*
@@ -86,8 +85,8 @@ static void dnode_dispose(struct duet_rbnode *dnode, struct rb_node *rbnode,
  * - a return value of 0 means all LBNs were marked properly
  * - a return value of -1 denotes the occurrence of an error
  */
-static int bmaptree_chkupd(struct duet_task *task, struct block_device *bdev,
-	__u64 lbn, __u32 len, __u8 set, __u8 chk)
+static int bmaptree_chkupd(struct duet_task *task, __u64 start, __u64 lbn,
+			__u32 len, __u8 set, __u8 chk)
 {
 	int ret, found;
 	__u64 cur_lbn, node_lbn, lbn_gran, cur_len, rlbn;
@@ -97,11 +96,11 @@ static int bmaptree_chkupd(struct duet_task *task, struct block_device *bdev,
 
 	/* The lbn given is relative to the beginning of the partition.
 	 * Make it absolute to the beginning of the block device. */
-	rlbn = lbn + (bdev->bd_part->start_sect << 9);
+	rlbn = lbn + start;
 
 #ifdef CONFIG_DUET_DEBUG
 	printk(KERN_INFO "duet: chkupd on task #%d for range [%llu, %llu] "
-		"(set=%u, chk=%u)\n", task->id, rlbn, rlbn+len, set, chk);
+		"(set=%u, chk=%u)\n", task->id, rlbn, rlbn+len-1, set, chk);
 #endif /* CONFIG_DUET_DEBUG */
 
 	cur_lbn = rlbn;
@@ -295,8 +294,8 @@ static int bmaptree_print(struct duet_task *task)
 	return 0;
 }
 
-static int duet_mark_chkupd(__u8 taskid, struct block_device *bdev, __u64 lbn,
-	__u32 len, __u8 set, __u8 chk)
+static int duet_mark_chkupd(__u8 taskid, __u64 start, __u64 lbn, __u32 len,
+			__u8 set, __u8 chk)
 {
 	int ret = 0;
 	struct duet_task *task;
@@ -305,7 +304,7 @@ static int duet_mark_chkupd(__u8 taskid, struct block_device *bdev, __u64 lbn,
 	if (!task)
 		return -ENOENT;
 
-	ret = bmaptree_chkupd(task, bdev, lbn, len, set, chk);
+	ret = bmaptree_chkupd(task, start, lbn, len, set, chk);
 
 	if (ret == -1) {
 		printk(KERN_ERR "duet: blocks were not %s as %s for task %d\n",
@@ -344,38 +343,38 @@ int duet_print_rbt(__u8 taskid)
 EXPORT_SYMBOL_GPL(duet_print_rbt);
 
 /* Checks the blocks in the range from lbn to lbn+len are done */
-int duet_chk_done(__u8 taskid, struct block_device *bdev, __u64 lbn, __u32 len)
+int duet_chk_done(__u8 taskid, __u64 start, __u64 lbn, __u32 len)
 {
 	if (!duet_is_online())
 		return -1;
-	return duet_mark_chkupd(taskid, bdev, lbn, len, 1, 1);
+	return duet_mark_chkupd(taskid, start, lbn, len, 1, 1);
 }
 EXPORT_SYMBOL_GPL(duet_chk_done);
 
 /* Checks the blocks in the range from lbn to lbn+len as todo */
-int duet_chk_todo(__u8 taskid, struct block_device *bdev, __u64 lbn, __u32 len)
+int duet_chk_todo(__u8 taskid, __u64 start, __u64 lbn, __u32 len)
 {
 	if (!duet_is_online())
 		return -1;
-	return duet_mark_chkupd(taskid, bdev, lbn, len, 0, 1);
+	return duet_mark_chkupd(taskid, start, lbn, len, 0, 1);
 }
 EXPORT_SYMBOL_GPL(duet_chk_todo);
 
 /* Marks the blocks in the range from lbn to lbn+len as done */
-int duet_mark_done(__u8 taskid, struct block_device *bdev, __u64 lbn, __u32 len)
+int duet_mark_done(__u8 taskid, __u64 start, __u64 lbn, __u32 len)
 {
 	if (!duet_is_online())
 		return -1;
-	return duet_mark_chkupd(taskid, bdev, lbn, len, 1, 0);
+	return duet_mark_chkupd(taskid, start, lbn, len, 1, 0);
 }
 EXPORT_SYMBOL_GPL(duet_mark_done);
 
 /* Unmarks the blocks in the range from lbn to lbn+len as done */
-int duet_mark_todo(__u8 taskid, struct block_device *bdev, __u64 lbn, __u32 len)
+int duet_mark_todo(__u8 taskid, __u64 start, __u64 lbn, __u32 len)
 {
 	if (!duet_is_online())
 		return -1;
-	return duet_mark_chkupd(taskid, bdev, lbn, len, 0, 0);
+	return duet_mark_chkupd(taskid, start, lbn, len, 0, 0);
 }
 EXPORT_SYMBOL_GPL(duet_mark_todo);
 

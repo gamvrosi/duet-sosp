@@ -53,7 +53,7 @@ struct defrag_synwork {
 
 struct itree_rbnode {
 	struct rb_node node;
-	__u64 ino;
+	__u64 btrfs_ino;
 	__u64 inmem_pages;
 	__u64 total_pages;
 	__u8 inmem_ratio;	/* pages (out of 100) currently in memory */
@@ -61,6 +61,8 @@ struct itree_rbnode {
 };
 
 #ifdef CONFIG_BTRFS_DUET_DEFRAG
+#define get_ratio(inmem, total)	((inmem) * 100) / (total)
+
 static struct itree_rbnode *itnode_init(struct defrag_synwork *dwork)
 {
 	struct itree_rbnode *itnode = NULL;
@@ -70,18 +72,11 @@ static struct itree_rbnode *itnode_init(struct defrag_synwork *dwork)
 		return NULL;
 
 	RB_CLEAR_NODE(&itnode->node);
-	itnode->ino = dwork->btrfs_ino;
+	itnode->btrfs_ino = dwork->btrfs_ino;
 	itnode->inmem_pages = dwork->inmem_pages;
 	itnode->total_pages = dwork->total_pages;
 	itnode->inmem_ratio = (dwork->inmem_pages * 100) / dwork->total_pages;
 	return itnode;
-}
-
-static void itnode_dispose(struct itree_rbnode *itnode, struct rb_node *rbnode,
-			   struct rb_root *root)
-{
-	rb_erase(rbnode, root);
-	kfree(itnode);
 }
 
 static void itree_dispose(struct rb_root *root)
@@ -92,7 +87,8 @@ static void itree_dispose(struct rb_root *root)
 	while (!RB_EMPTY_ROOT(root)) {
 		rbnode = rb_first(root);
 		itnode = rb_entry(rbnode, struct itree_rbnode, node);
-		itnode_dispose(itnode, rbnode, root);
+		rb_erase(rbnode, root);
+		kfree(itnode);
 	}
 
 	return;
@@ -164,17 +160,86 @@ out:
 	return ret;
 }
 
-static struct btrfs_path *alloc_path_for_defrag(void)
+#ifdef CONFIG_BTRFS_DUET_DEFRAG
+/*
+ * Picks an inode from the inode tree, and processes it, if it has not been
+ * processed already.
+ * Returns 1 if it processed an inode out of order, or 0 if it didn't.
+ */
+static int pick_inmem_inode(struct defrag_ctx *dctx)
 {
+	int ret;
+	struct rb_node *node;
+	struct itree_rbnode *itnode;
 	struct btrfs_path *path;
+	struct btrfs_key key;
 
+	/* Pick an inode from the inode rbtree and remove it */
+	mutex_lock(&dctx->itree_mutex);
+	if (RB_EMPTY_ROOT(&dctx->itree)) {
+		mutex_unlock(&dctx->itree_mutex);
+		return 0;
+	}
+
+	/* We order from smallest to largest key so pick the largest */
+	node = rb_last(&dctx->itree);
+	if (!node) {
+		mutex_unlock(&dctx->itree_mutex);
+		return 0;
+	}
+
+	rb_erase(node, &dctx->itree);
+	mutex_unlock(&dctx->itree_mutex);
+
+	/* Check if it's been processed before */
+	itnode = rb_entry(node, struct itree_rbnode, node);
+	ret = duet_chk_done(dctx->taskid, 0, itnode->btrfs_ino, 1);
+	if (ret == 1) {
+		kfree(itnode);
+		return 1;
+	}
+
+	/* Search for the inode in the defrag root */
 	path = btrfs_alloc_path();
-	if (!path)
-		return NULL;
+	if (!path) {
+		kfree(itnode);
+		return 0;
+	}
 	path->search_commit_root = 1;
 	path->skip_locking = 1;
-	return path;
+
+	key.objectid = itnode->btrfs_ino;
+	key.type = BTRFS_INODE_ITEM_KEY;
+	key.offset = 0;
+
+	ret = btrfs_search_slot(NULL, dctx->defrag_root, &key, path, 0, 0);
+	if (ret) {
+		ret = 0;
+		goto out;
+	}
+
+	/* Mark, then process inode */
+	ret = duet_mark_done(dctx->taskid, 0, key.objectid, 1);
+	if (ret) {
+		printk(KERN_ERR "duet: failed to mark inode %llu as "
+			"defragged\n", key.objectid);
+		ret = 0;
+		goto out;
+	}
+
+	ret = process_inode(dctx, path, &key);
+	if (ret < 0) {
+		ret = 0;
+		goto out;
+	}
+
+	ret = 1;
+out:
+	btrfs_free_path(path);
+	kfree(itnode);
+	return ret;
 }
+#endif /* CONFIG_BTRFS_DUET_DEFRAG */
 
 static int defrag_subvol(struct defrag_ctx *dctx)
 {
@@ -186,12 +251,12 @@ static int defrag_subvol(struct defrag_ctx *dctx)
 	struct extent_buffer *eb;
 	struct btrfs_key key, key_start, key_end;
 	struct reada_control *reada;
-	struct btrfs_trans_handle *trans = NULL;
-	u64 start_ctransid, ctransid;
 
-	path = alloc_path_for_defrag();
+	path = btrfs_alloc_path();
 	if (!path)
 		return -ENOMEM;
+	path->search_commit_root = 1;
+	path->skip_locking = 1;
 
 	/* Start a readahead on defrag_root, to get things rolling faster */
 	printk(KERN_INFO "btrfs defrag: readahead started at %lu.\n", jiffies);
@@ -207,73 +272,28 @@ static int defrag_subvol(struct defrag_ctx *dctx)
 		btrfs_reada_wait(reada);
 	printk(KERN_INFO "btrfs defrag: readahead ended at %lu.\n", jiffies);
 
-	spin_lock(&defrag_root->root_item_lock);
-	start_ctransid = btrfs_root_ctransid(&defrag_root->root_item);
-	spin_unlock(&defrag_root->root_item_lock);
-
 	key.objectid = BTRFS_FIRST_FREE_OBJECTID;
 	key.type = BTRFS_INODE_ITEM_KEY;
 	key.offset = 0;
-
-join_trans:
-	/*
-	 * We need to make sure the transaction does not get committed while
-	 * we do anything on commit roots. Join a transaction to prevent this.
-	 */
-	trans = btrfs_join_transaction(defrag_root);
-	if (IS_ERR(trans)) {
-		ret = PTR_ERR(trans);
-		trans = NULL;
-		goto out;
-	}
-
-	/*
-	 * Make sure the tree has not changed after re-joining. We detect this
-	 * by comparing start_ctransid and ctransid. They should always match.
-	 */
-	spin_lock(&defrag_root->root_item_lock);
-	ctransid = btrfs_root_ctransid(&defrag_root->root_item);
-	spin_unlock(&defrag_root->root_item_lock);
-
-	if (ctransid != start_ctransid) {
-		WARN(1, KERN_WARNING "btrfs: the root that you're trying to "
-				     "defrag was modified in between. This "
-				     "is probably a bug.\n");
-		ret = -EIO;
-		goto out;
-	}
 
 	ret = btrfs_search_slot_for_read(defrag_root, &key, path, 1, 0);
 	if (ret)
 		goto out;
 
 	while (1) {
-		/*
-		 * When someone want to commit while we iterate, end the
-		 * joined transaction and rejoin.
-		 */
-		if (btrfs_should_end_transaction(trans, defrag_root)) {
-			ret = btrfs_end_transaction(trans, defrag_root);
-			trans = NULL;
-			if (ret < 0)
-				goto out;
-			btrfs_release_path(path);
-			goto join_trans;
-		}
+		/* Check if we've been asked to cancel */
+		if (atomic_read(&fs_info->defrag_cancel_req))
+			goto out;
 
 #ifdef CONFIG_BTRFS_DUET_DEFRAG
-		/* Pick an inode from the inode rbtree if it's not empty */
-		/* TODO: Check tree, pick inode, check if it's been processed,
-		 * process, mark as processed. continue to next iteration */
+		ret = pick_inmem_inode(dctx);
+		if (ret)
+			continue;
 #endif /* CONFIG_BTRFS_DUET_DEFRAG */
 
 		eb = path->nodes[0];
 		slot = path->slots[0];
 		btrfs_item_key_to_cpu(eb, &found_key, slot);
-
-		/* Check if we've been asked to cancel */
-		if (atomic_read(&fs_info->defrag_cancel_req))
-			goto out;
 
 		/* If we couldn't find an inode, we're done */
 		if (found_key.type != BTRFS_INODE_ITEM_KEY)
@@ -284,8 +304,18 @@ join_trans:
 		dctx->defrag_progress = found_key.objectid;
 
 #ifdef CONFIG_BTRFS_DUET_DEFRAG
-		/* TODO: Check if we've already processed this inode out of
-		 * order. If so, goto next one */
+		/* Check if we've already processed this inode out of order */
+		ret = duet_chk_done(dctx->taskid, 0, found_key.objectid, 1);
+		if (ret == 1)
+			goto next;
+
+		/* We have not, so mark it as done before we process it */
+		ret = duet_mark_done(dctx->taskid, 0, found_key.objectid, 1);
+		if (ret) {
+			printk(KERN_ERR "duet: failed to mark inode %llu as "
+				"defragged\n", found_key.objectid);
+			goto out;
+		}
 #endif /* CONFIG_BTRFS_DUET_DEFRAG */
 
 		ret = process_inode(dctx, path, &found_key);
@@ -308,16 +338,38 @@ next:
 
 out:
 	btrfs_free_path(path);
-	if (trans) {
-		if (!ret)
-			ret = btrfs_end_transaction(trans, defrag_root);
-		else
-			btrfs_end_transaction(trans, defrag_root);
-	}
 	return ret;
 }
 
 #ifdef CONFIG_BTRFS_DUET_DEFRAG
+static struct itree_rbnode *lookup_remove_itnode(struct defrag_synwork *dwork)
+{
+	int ret, found;
+	struct rb_node **link, *parent;
+	struct itree_rbnode *itnode = NULL;
+
+	/* Bear in mind: because of hook placement, nrpages is up-to-date for
+	 * INSERT events, but out-of-date for REMOVE events */
+
+	/* Make sure noone interferes while we search */
+	mutex_lock(&dwork->dctx->itree_mutex);
+
+	found = 0;
+	link = &dwork->dctx->itree.rb_node;
+	parent = NULL;
+
+	while (*link) {
+		parent = *link;
+		itnode = rb_entry(node, struct itree_rbnode, node);
+
+		/* We order based on (inmem_ratio, inmem_pages, btrfs_ino) */
+		if (itnode->inmem_ratio >) //TODO
+	}
+
+	mutex_unlock(&dwork->dctx->itree_mutex);
+	return NULL;
+}
+
 /*
  * This is the heart of synergistic defrag.
  *
@@ -349,12 +401,17 @@ out:
  */
 static void __handle_event(struct work_struct *work)
 {
+	int ret;
 	struct defrag_synwork *dwork = (struct defrag_synwork *)work;
 	struct itree_rbnode *itnode;
 
-	/* TODO: Lookup the btrfs_ino in the RBBT */
-	/* Bear in mind: because of hook placement, nrpages is up-to-date for
-	 * INSERT events, but out-of-date for REMOVE events */
+	/* Check if we've already processed this inode out of order (RBBT) */
+	ret = duet_chk_done(dwork->dctx->taskid, 0, dwork->btrfs_ino, 1);
+	if (ret == 1)
+		goto out;
+
+	/* Lookup itnode, and remove it */
+	itnode = lookup_remove_itnode(dwork)
 
 	/* TODO: Lookup, remove, and return itnode */
 
@@ -487,39 +544,6 @@ long btrfs_ioctl_defrag_start(struct file *file, void __user *arg_)
 	atomic_inc(&fs_info->defrag_fs_running);
 	mutex_unlock(&fs_info->defrag_lock);
 
-	/*
-	 * This is done when we lookup the root, it should already be complete
-	 * by the time we get here.
-	 */
-	WARN_ON(defrag_root->orphan_cleanup_state != ORPHAN_CLEANUP_DONE);
-
-	/*
-	 * If we just created this root we need to make sure that the orphan
-	 * cleanup has been done and committed since we search the commit root,
-	 * so check its commit root transid with our otransid and if they match
-	 * commit the transaction to make sure everything is updated.
-	 */
-	down_read(&defrag_root->fs_info->extent_commit_sem);
-	if (btrfs_header_generation(defrag_root->commit_root) ==
-	    btrfs_root_otransid(&defrag_root->root_item)) {
-		struct btrfs_trans_handle *trans;
-
-		up_read(&defrag_root->fs_info->extent_commit_sem);
-
-		trans = btrfs_attach_transaction_barrier(defrag_root);
-		if (IS_ERR(trans)) {
-			if (PTR_ERR(trans) != -ENOENT)
-				return PTR_ERR(trans);
-			/* ENOENT means theres no transaction */
-		} else {
-			ret = btrfs_commit_transaction(trans, defrag_root);
-			if (ret)
-				return ret;
-		}
-	} else {
-		up_read(&defrag_root->fs_info->extent_commit_sem);
-	}
-
 	arg = memdup_user(arg_, sizeof(*arg));
 	if (IS_ERR(arg)) {
 		ret = PTR_ERR(arg);
@@ -631,10 +655,10 @@ bail:
 
 	kfree(arg);
 	if (dctx) {
-#ifdef CONFIG_BTRFS_DUET_DEFRAG_DEBUG
+#ifdef CONFIG_BTRFS_DUET_DEFRAG
 		itree_dispose(&dctx->itree);
 		mutex_destroy(&dctx->itree_mutex);
-#endif /* CONFIG_BTRFS_DUET_DEFRAG_DEBUG */
+#endif /* CONFIG_BTRFS_DUET_DEFRAG */
 		kfree(dctx);
 	}
 	return ret;

@@ -102,14 +102,14 @@ int duet_task_register(__u8 *taskid, const char *name, __u32 blksize,
 int duet_task_deregister(__u8 taskid);
 int duet_is_online(void);
 
-int duet_chk_done(__u8 taskid, struct block_device *bdev, __u64 lbn,
-			__u32 len);
-int duet_chk_todo(__u8 taskid, struct block_device *bdev, __u64 lbn,
-			__u32 len);
-int duet_mark_done(__u8 taskid, struct block_device *bdev, __u64 lbn,
-			__u32 len);
-int duet_mark_todo(__u8 taskid, struct block_device *bdev, __u64 lbn,
-			__u32 len);
+/*
+ * For the following functions, start can be found from struct block_device
+ * like so: bdev->bd_part->start_sect << 9
+ */
+int duet_chk_done(__u8 taskid, __u64 start, __u64 lbn, __u32 len);
+int duet_chk_todo(__u8 taskid, __u64 start, __u64 lbn, __u32 len);
+int duet_mark_done(__u8 taskid, __u64 start, __u64 lbn, __u32 len);
+int duet_mark_todo(__u8 taskid, __u64 start, __u64 lbn, __u32 len);
 int duet_print_rbt(__u8 taskid);
 
 /* Hook-related functions */
