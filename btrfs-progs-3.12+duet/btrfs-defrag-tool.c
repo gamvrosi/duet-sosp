@@ -178,7 +178,7 @@ int frag_file(char *path, u64 frag_blocks)
 
 	/* Open file, then read and overwrite blocks starting from block #last-1,
 	   until fragmented enough */
-	fd = open(path, O_RDWR | O_SYNC);
+	fd = open(path, O_RDWR | O_DSYNC);
 	fd_offt = lseek(fd, (off_t)0, SEEK_END);
 
 again:
@@ -561,9 +561,15 @@ static void process_inode(struct btrfs_path *path)
 				btrfs_set_key_type(&search_key, BTRFS_INODE_ITEM_KEY);
 				search_key.offset = 0;
 				btrfs_release_path(path);
-
 				btrfs_free_fs_info(stats.info);
+
+again:
 				stats.info = open_ctree_fs_info(stats.devname, 0, 0, 1);
+				if (!stats.info) {
+					fprintf(stderr, "open_ctree_fs_info failed\n");
+					goto again;
+				}
+
 				root = stats.info->fs_root;
 
 				ret = btrfs_search_slot(NULL, root, &search_key, path, 0, 0);
