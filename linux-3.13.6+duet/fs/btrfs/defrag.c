@@ -319,13 +319,11 @@ join_trans:
 			goto out;
 		}
 
-#if 0
 #ifdef CONFIG_BTRFS_DUET_DEFRAG
 		ret = pick_inmem_inode(dctx);
 		if (ret)
 			continue;
 #endif /* CONFIG_BTRFS_DUET_DEFRAG */
-#endif /* 0 */
 
 		eb = path->nodes[0];
 		slot = path->slots[0];
@@ -544,17 +542,22 @@ static void __handle_event(struct work_struct *work)
 #ifdef CONFIG_BTRFS_DUET_DEFRAG_DEBUG
 	printk(KERN_DEBUG "duet-defrag: __handle_event started (%p)\n", (void *)work);
 #endif /* CONFIG_BTRFS_DUET_DEFRAG_DEBUG */
-#if 0
+
 	/* Check if we've already processed this inode out of order (RBBT) */
 	ret = duet_chk_done(dwork->dctx->taskid, 0, dwork->btrfs_ino, 1);
 	if (ret == 1)
 		goto out;
 
-	/* Lookup itnode, and remove it */
-	found = lookup_remove_itnode(dwork, &itnode);
-
 	switch (dwork->event_code) {
 	case DUET_EVENT_CACHE_INSERT:
+#ifdef CONFIG_BTRFS_DUET_DEFRAG_DEBUG
+		printk(KERN_DEBUG "duet-defrag: insert event detected\n");
+#endif /* CONFIG_BTRFS_DUET_DEFRAG_DEBUG */
+
+#if 0
+		/* Lookup itnode, and remove it */
+		found = lookup_remove_itnode(dwork, &itnode);
+
 		/* If the itnode doesn't exist, create it */
 		if (!found)
 			itnode = itnode_init(dwork);
@@ -578,8 +581,17 @@ static void __handle_event(struct work_struct *work)
 			kfree(itnode);
 			goto out;
 		}
+#endif /* 0 */
 		break;
 	case DUET_EVENT_CACHE_REMOVE:
+#ifdef CONFIG_BTRFS_DUET_DEFRAG_DEBUG
+		printk(KERN_DEBUG "duet-defrag: remove event detected\n");
+#endif /* CONFIG_BTRFS_DUET_DEFRAG_DEBUG */
+
+#if 0
+		/* Lookup itnode, and remove it */
+		found = lookup_remove_itnode(dwork, &itnode);
+
 		/* The itnode doesn't exist, bail */
 		if (!found)
 			goto out;
@@ -604,8 +616,9 @@ static void __handle_event(struct work_struct *work)
 			goto out;
 		}
 		break;
-	}
 #endif /* 0 */
+	}
+
 out:
 	put_page(dwork->page);
 	kfree((void *)work);
@@ -627,7 +640,7 @@ static void btrfs_defrag_duet_handler(__u8 taskid, __u8 event_code,
 	struct inode *inode;
 	struct defrag_ctx *dctx;
 	struct defrag_synwork *dwork;
-#if 0
+
 	/* Check that we have a reason to be here */
 	if ((data_type != DUET_DATA_PAGE) ||
 	    !(event_code & (DUET_EVENT_CACHE_INSERT|DUET_EVENT_CACHE_REMOVE)))
@@ -697,7 +710,7 @@ static void btrfs_defrag_duet_handler(__u8 taskid, __u8 event_code,
 		return;
 	}
 	spin_unlock(&dctx->wq_lock);
-#endif /* 0 */
+
 #ifdef CONFIG_BTRFS_DUET_DEFRAG_DEBUG
 	printk(KERN_DEBUG "duet-defrag: Queued up work for defrag\n");
 #endif /* CONFIG_BTRFS_DUET_DEFRAG_DEBUG */
