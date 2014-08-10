@@ -320,9 +320,11 @@ join_trans:
 		}
 
 #ifdef CONFIG_BTRFS_DUET_DEFRAG
-		ret = pick_inmem_inode(dctx);
-		if (ret)
-			continue;
+		if (duet_is_online()) {
+			ret = pick_inmem_inode(dctx);
+			if (ret)
+				continue;
+		}
 #endif /* CONFIG_BTRFS_DUET_DEFRAG */
 
 		eb = path->nodes[0];
@@ -338,22 +340,27 @@ join_trans:
 		dctx->defrag_progress = found_key.objectid;
 
 #ifdef CONFIG_BTRFS_DUET_DEFRAG
-		/* Check if we've already processed this inode out of order */
-		ret = duet_chk_done(dctx->taskid, 0, found_key.objectid, 1);
-		if (ret == 1) {
+		if (duet_is_online()) {
+			/* Check if we've already processed this inode */
+			ret = duet_chk_done(dctx->taskid, 0,
+						found_key.objectid, 1);
+			if (ret == 1) {
 #ifdef CONFIG_BTRFS_DUET_DEFRAG_DEBUG
-			printk(KERN_INFO "btrfs defrag: skipping inode %llu\n",
-				dctx->defrag_progress);
+				printk(KERN_INFO "btrfs defrag: skipping "
+					"inode %llu\n", dctx->defrag_progress);
 #endif /* CONFIG_BTRFS_DUET_DEFRAG_DEBUG */
-			goto next;
-		}
+				goto next;
+			}
 
-		/* We have not, so mark it as done before we process it */
-		ret = duet_mark_done(dctx->taskid, 0, found_key.objectid, 1);
-		if (ret) {
-			printk(KERN_ERR "duet: failed to mark inode %llu as "
-				"defragged\n", found_key.objectid);
-			goto out;
+			/* We have not, so mark it as done before processing */
+			ret = duet_mark_done(dctx->taskid, 0,
+						found_key.objectid, 1);
+			if (ret) {
+				printk(KERN_ERR "duet: failed to mark inode "
+					"%llu as defragged\n",
+					found_key.objectid);
+				goto out;
+			}
 		}
 #endif /* CONFIG_BTRFS_DUET_DEFRAG */
 
