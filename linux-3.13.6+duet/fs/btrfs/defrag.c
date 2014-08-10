@@ -104,7 +104,9 @@ static int defrag_inode(struct inode *inode, struct defrag_ctx *dctx,
 	int ret;
 	struct btrfs_fs_info *fs_info = dctx->defrag_root->fs_info;
 
+	sb_start_write(fs_info->sb);
 	ret = btrfs_defrag_file(inode, NULL, &dctx->range, 0, 0);
+	sb_end_write(fs_info->sb);
 
 	if (ret > 0) {
 		/* Update progress counters */
@@ -273,7 +275,8 @@ static int defrag_subvol(struct defrag_ctx *dctx)
 	reada = btrfs_reada_add(defrag_root, &key_start, &key_end);
 
 	if (!IS_ERR(reada))
-		btrfs_reada_wait(reada);
+		//btrfs_reada_wait(reada);
+		btrfs_reada_detach(reada);
 	printk(KERN_INFO "btrfs defrag: readahead ended at %lu.\n", jiffies);
 
 	key.objectid = BTRFS_FIRST_FREE_OBJECTID;
