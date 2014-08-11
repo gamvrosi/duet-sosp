@@ -23,6 +23,12 @@
 #include <linux/duet.h>
 #endif /* CONFIG_BTRFS_DUET_DEFRAG */
 
+#ifdef CONFIG_BTRFS_DUET_DEFRAG_DEBUG
+#define defrag_dbg(...)	printk(__VA_ARGS__)
+#else
+#define defrag_dbg(...)
+#endif
+
 struct defrag_ctx {
 	struct btrfs_root *defrag_root;
 	u64 defrag_progress;
@@ -123,61 +129,22 @@ static int defrag_inode(struct inode *inode, struct defrag_ctx *dctx,
 	return ret;
 }
 
-static int process_inode(struct defrag_ctx *dctx, struct btrfs_path *path,
-			 struct btrfs_key *key)
-{
-	int s, ret = 0;
-	struct extent_buffer *l;
-	struct btrfs_inode_item *ii;
-	struct inode *inode;
-
-	/* Grab the inode item */
-	l = path->nodes[0];
-	s = path->slots[0];
-	ii = btrfs_item_ptr(l, s, struct btrfs_inode_item);
-
-	/* We will only process regular files */
-	switch (btrfs_inode_mode(l, ii) & S_IFMT) {
-	case S_IFREG:
-		/* Get the inode */
-		inode = btrfs_iget(dctx->defrag_root->fs_info->sb, key,
-				   dctx->defrag_root, NULL);
-		if (IS_ERR(inode)) {
-			printk(KERN_ERR "btrfs defrag: iget failed\n");
-			ret = PTR_ERR(inode);
-			goto out;
-		}
-
-		ret = defrag_inode(inode, dctx, 0);
-		if (ret)
-			printk(KERN_ERR "btrfs defrag: file defrag failed\n");
-
-		iput(inode);
-		break;
-	case S_IFDIR:
-	case S_IFLNK:
-	default:
-		ret = 1;
-		goto out;
-	}
-
-out:
-	return ret;
-}
-
 #ifdef CONFIG_BTRFS_DUET_DEFRAG
 /*
- * Picks an inode from the inode tree, and processes it, if it has not been
+ * Picks an inode from the inode tree and processes it, if it has not been
  * processed already.
  * Returns 1 if it processed an inode out of order, or 0 if it didn't.
  */
 static int pick_inmem_inode(struct defrag_ctx *dctx)
 {
-	int ret;
+	int s, ret = 0;
 	struct rb_node *node;
 	struct itree_rbnode *itnode;
 	struct btrfs_path *path;
 	struct btrfs_key key;
+	struct extent_buffer *l;
+	struct btrfs_inode_item *ii;
+	struct inode *inode;
 
 	/* Pick an inode from the inode rbtree and remove it */
 	mutex_lock(&dctx->itree_mutex);
@@ -204,14 +171,16 @@ static int pick_inmem_inode(struct defrag_ctx *dctx)
 		return 1;
 	}
 
-	/* Search for the inode in the defrag root */
+	/*
+	 * Search for the inode in the defrag root's commit root.
+	 * Keep locking on to prevent unwanted surprises.
+	 */
 	path = btrfs_alloc_path();
 	if (!path) {
 		kfree(itnode);
 		return 0;
 	}
 	path->search_commit_root = 1;
-	path->skip_locking = 1;
 
 	key.objectid = itnode->btrfs_ino;
 	key.type = BTRFS_INODE_ITEM_KEY;
@@ -223,17 +192,44 @@ static int pick_inmem_inode(struct defrag_ctx *dctx)
 		goto out;
 	}
 
-	/* Mark, then process inode */
-	ret = duet_mark_done(dctx->taskid, 0, key.objectid, 1);
-	if (ret) {
-		printk(KERN_ERR "duet: failed to mark inode %llu as "
-			"defragged\n", key.objectid);
+	/* Grab the inode item */
+	l = path->nodes[0];
+	s = path->slots[0];
+	ii = btrfs_item_ptr(l, s, struct btrfs_inode_item);
+
+	/* We only process regular files */
+	if ((btrfs_inode_mode(l, ii) & S_IFMT) != S_IFREG) {
 		ret = 0;
 		goto out;
 	}
 
-	ret = process_inode(dctx, path, &key);
-	if (ret < 0) {
+	/* Get the inode */
+	inode = btrfs_iget(dctx->defrag_root->fs_info->sb, &key,
+						dctx->defrag_root, NULL);
+	if (IS_ERR(inode)) {
+		printk(KERN_ERR "btrfs defrag: iget failed\n");
+		ret = 0;
+		goto out;
+	}
+
+	/* Got it. Release path locks before starting defrag */
+	btrfs_release_path(path);
+
+	ret = defrag_inode(inode, dctx, 0);
+	if (ret) {
+		printk(KERN_ERR "btrfs defrag: file defrag failed\n");
+		ret = 0;
+		goto out;
+	}
+
+	iput(inode);
+
+	/* We're single-threaded here, so can delay marking for now, without
+	 * fearing it will be recursively claimed during defrag */
+	ret = duet_mark_done(dctx->taskid, 0, key.objectid, 1);
+	if (ret) {
+		printk(KERN_ERR "duet: failed to mark inode %llu as "
+			"defragged\n", key.objectid);
 		ret = 0;
 		goto out;
 	}
@@ -256,16 +252,20 @@ static int defrag_subvol(struct defrag_ctx *dctx)
 	struct extent_buffer *eb;
 	struct btrfs_key key, key_start, key_end;
 	struct reada_control *reada;
-	struct btrfs_trans_handle *trans = NULL;
+	struct btrfs_inode_item *ii;
+	struct inode *inode;
 
+	/*
+	 * We will be looking for inodes starting from the commit root.
+	 * Locking will protect us if the commit root is not read-only.
+	 */
 	path = btrfs_alloc_path();
 	if (!path)
 		return -ENOMEM;
 	path->search_commit_root = 1;
-	path->skip_locking = 1;
 
 	/* Start a readahead on defrag_root, to get things rolling faster */
-	printk(KERN_INFO "btrfs defrag: readahead started at %lu.\n", jiffies);
+	defrag_dbg(KERN_DEBUG "btrfs defrag: readahead started at %lu.\n", jiffies);
 	key_start.objectid = BTRFS_FIRST_FREE_OBJECTID;
 	key_start.type = BTRFS_INODE_ITEM_KEY;
 	key_start.offset = (u64)0;
@@ -274,133 +274,107 @@ static int defrag_subvol(struct defrag_ctx *dctx)
 	key_end.offset = (u64)-1;
 	reada = btrfs_reada_add(defrag_root, &key_start, &key_end);
 
+	/* No need to wait for readahead. It's not like we need it all now */
 	if (!IS_ERR(reada))
-		//btrfs_reada_wait(reada);
 		btrfs_reada_detach(reada);
-	printk(KERN_INFO "btrfs defrag: readahead ended at %lu.\n", jiffies);
+	defrag_dbg(KERN_DEBUG "btrfs defrag: readahead ended at %lu.\n", jiffies);
 
 	key.objectid = BTRFS_FIRST_FREE_OBJECTID;
 	key.type = BTRFS_INODE_ITEM_KEY;
 	key.offset = 0;
 
-join_trans:
-	/*
-	 * We need to make sure the transaction does not get committed while
-	 * we do anything on commit roots. Join a transaction to prevent this.
-	 */
-	trans = btrfs_join_transaction(defrag_root);
-	if (IS_ERR(trans)) {
-		ret = PTR_ERR(trans);
-		trans = NULL;
-		goto out;
-	}
-
-	ret = btrfs_search_slot_for_read(defrag_root, &key, path, 1, 0);
-	if (ret) {
-#ifdef CONFIG_BTRFS_DUET_DEFRAG_DEBUG
-		printk(KERN_INFO "btrfs defrag: btrfs_search_slot_for_read failed\n");
-#endif /* CONFIG_BTRFS_DUET_DEFRAG_DEBUG */
-		goto out;
-	}
-
 	while (1) {
-		/* If we need to commit, end joined transaction and rejoin. */
-		if (btrfs_should_end_transaction(trans, defrag_root)) {
-			ret = btrfs_end_transaction(trans, defrag_root);
-			trans = NULL;
-			if (ret < 0)
-				goto out;
-			btrfs_release_path(path);
-			goto join_trans;
-		}
-
 		/* Check if we've been asked to cancel */
 		if (atomic_read(&fs_info->defrag_cancel_req)) {
-#ifdef CONFIG_BTRFS_DUET_DEFRAG_DEBUG
-			printk(KERN_INFO "btrfs defrag: we've been asked to cancel\n");
-#endif /* CONFIG_BTRFS_DUET_DEFRAG_DEBUG */
+			defrag_dbg(KERN_INFO "btrfs defrag: we've been asked to cancel\n");
 			goto out;
 		}
 
 #ifdef CONFIG_BTRFS_DUET_DEFRAG
-		if (duet_is_online()) {
-			ret = pick_inmem_inode(dctx);
-			if (ret)
-				continue;
-		}
+		if (duet_is_online() && pick_inmem_inode(dctx))
+			continue;
 #endif /* CONFIG_BTRFS_DUET_DEFRAG */
+
+		ret = btrfs_search_slot_for_read(defrag_root, &key, path, 1, 0);
+		if (ret) {
+			defrag_dbg(KERN_ERR "btrfs defrag: search returned nothing\n");
+			goto out;
+		}
 
 		eb = path->nodes[0];
 		slot = path->slots[0];
 		btrfs_item_key_to_cpu(eb, &found_key, slot);
 
-		/* If we couldn't find an inode, we're done */
-		if (found_key.type != BTRFS_INODE_ITEM_KEY)
+		/* If we couldn't find an inode, move on to the next */
+		if (found_key.type != BTRFS_INODE_ITEM_KEY) {
+			btrfs_release_path(path);
 			goto next;
+		}
 
 		/* Mark our progress before we process the inode.
 		 * This way, duet will ignore it as processed. */
 		dctx->defrag_progress = found_key.objectid;
 
 #ifdef CONFIG_BTRFS_DUET_DEFRAG
-		if (duet_is_online()) {
-			/* Check if we've already processed this inode */
-			ret = duet_chk_done(dctx->taskid, 0,
-						found_key.objectid, 1);
-			if (ret == 1) {
-#ifdef CONFIG_BTRFS_DUET_DEFRAG_DEBUG
-				printk(KERN_INFO "btrfs defrag: skipping "
-					"inode %llu\n", dctx->defrag_progress);
-#endif /* CONFIG_BTRFS_DUET_DEFRAG_DEBUG */
-				goto next;
-			}
-
-			/* We have not, so mark it as done before processing */
-			ret = duet_mark_done(dctx->taskid, 0,
-						found_key.objectid, 1);
-			if (ret) {
-				printk(KERN_ERR "duet: failed to mark inode "
-					"%llu as defragged\n",
-					found_key.objectid);
-				goto out;
-			}
+		/* Check if we've already processed this inode */
+		if (duet_is_online() && duet_chk_done(dctx->taskid, 0,
+		    found_key.objectid, 1) == 1) {
+			defrag_dbg(KERN_INFO "btrfs defrag: skipping inode "
+					"%llu\n", dctx->defrag_progress);
+			btrfs_release_path(path);
+			goto next;
 		}
 #endif /* CONFIG_BTRFS_DUET_DEFRAG */
 
-		ret = process_inode(dctx, path, &found_key);
-		if (ret < 0) {
-#ifdef CONFIG_BTRFS_DUET_DEFRAG_DEBUG
-			printk(KERN_INFO "btrfs defrag: process_inode failed\n");
-#endif /* CONFIG_BTRFS_DUET_DEFRAG_DEBUG */
+		/* Grab the inode item */
+		ii = btrfs_item_ptr(eb, slot, struct btrfs_inode_item);
+
+		/* We only process regular files */
+		if ((btrfs_inode_mode(eb, ii) & S_IFMT) != S_IFREG) {
+			btrfs_release_path(path);
+			goto next;
+		}
+
+		/* Get the inode */
+		inode = btrfs_iget(fs_info->sb, &found_key, defrag_root, NULL);
+		if (IS_ERR(inode)) {
+			printk(KERN_ERR "btrfs defrag: iget failed\n");
+			ret = PTR_ERR(inode);
 			goto out;
 		}
-#ifdef CONFIG_BTRFS_DUET_DEFRAG_DEBUG
-		printk(KERN_INFO "btrfs defrag: processed inode %llu\n",
+
+		/* We upref'ed the inode. Release the locks */
+		btrfs_release_path(path);
+
+		ret = defrag_inode(inode, dctx, 0);
+		if (ret) {
+			printk(KERN_ERR "btrfs defrag: file defrag failed\n");
+			goto out;
+		}
+
+		iput(inode);
+
+#ifdef CONFIG_BTRFS_DUET_DEFRAG
+		/* Mark the inode as done */
+		if (duet_is_online() && duet_mark_done(dctx->taskid, 0,
+		    found_key.objectid, 1)) {
+			printk(KERN_ERR "duet: failed to mark inode %llu\n",
+				found_key.objectid);
+			goto out;
+		}
+#endif /* CONFIG_BTRFS_DUET_DEFRAG */
+
+		defrag_dbg(KERN_DEBUG "btrfs defrag: processed inode %llu\n",
 			dctx->defrag_progress);
-#endif /* CONFIG_BTRFS_DUET_DEFRAG_DEBUG */
 
 next:
 		key.objectid = found_key.objectid + 1;
 		key.type = found_key.type;
 		key.offset = 0;
-
-		ret = btrfs_next_item(defrag_root, path);
-		if (ret < 0)
-			goto out;
-		if (ret) {
-			ret = 0;
-			break;
-		}
 	}
 
 out:
 	btrfs_free_path(path);
-	if (trans) {
-		if (!ret)
-			ret = btrfs_end_transaction(trans, defrag_root);
-		else
-			btrfs_end_transaction(trans, defrag_root);
-	}
 	return ret;
 }
 

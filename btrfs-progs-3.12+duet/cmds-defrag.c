@@ -154,7 +154,7 @@ int cmd_defrag_start(int argc, char **argv)
 	/* Fill in the default defrag parameters */
 	defrag.range.compress_type = BTRFS_COMPRESS_NONE;
 	defrag.range.len = (u64)-1;
-	defrag.range.extent_thresh = (u32)-1;
+	//defrag.range.extent_thresh = (u32)-1;
 
 	while ((c = getopt(argc, argv, "Bvc:fs:l:t:C:N:")) != -1) {
 		switch (c) {
