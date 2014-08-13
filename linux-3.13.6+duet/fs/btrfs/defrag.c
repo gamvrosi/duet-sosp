@@ -17,7 +17,6 @@
  */
 #include "defrag.h"
 #include "btrfs_inode.h"
-#include "transaction.h"
 #ifdef CONFIG_BTRFS_DUET_DEFRAG
 #include <linux/workqueue.h>
 #include <linux/duet.h>
@@ -49,15 +48,12 @@ struct defrag_ctx {
 struct defrag_synwork {
 	struct work_struct work;
 	struct defrag_ctx *dctx;
-	struct page *page;
-	struct inode *inode;
 	u8 event_code;
 
 	/* State used to find the inode tree node */
 	u64 btrfs_ino;
 	u64 inmem_pages;
 	u64 total_pages;
-	u8 inmem_ratio;
 };
 
 struct itree_rbnode {
@@ -72,20 +68,15 @@ struct itree_rbnode {
 #ifdef CONFIG_BTRFS_DUET_DEFRAG
 #define get_ratio(inmem, total)	((inmem) * 100) / (total)
 
-static struct itree_rbnode *itnode_init(struct defrag_synwork *dwork)
+/* Preps the itnode for insert. Note that we also increment nrpages! */
+static int itnode_init(struct itree_rbnode **itn)
 {
-	struct itree_rbnode *itnode = NULL;
+	*itn = kzalloc(sizeof(**itn), GFP_NOFS);
+	if (!(*itn))
+		return 1;
 
-	itnode = kzalloc(sizeof(*itnode), GFP_NOFS);
-	if (!itnode)
-		return NULL;
-
-	RB_CLEAR_NODE(&itnode->node);
-	itnode->btrfs_ino = dwork->btrfs_ino;
-	itnode->inmem_pages = dwork->inmem_pages;
-	itnode->total_pages = dwork->total_pages;
-	itnode->inmem_ratio = get_ratio(dwork->inmem_pages, dwork->total_pages);
-	return itnode;
+	RB_CLEAR_NODE(&(*itn)->node);
+	return 0;
 }
 
 static void itree_dispose(struct rb_root *root)
@@ -110,9 +101,9 @@ static int defrag_inode(struct inode *inode, struct defrag_ctx *dctx,
 	int ret;
 	struct btrfs_fs_info *fs_info = dctx->defrag_root->fs_info;
 
-	sb_start_write(fs_info->sb);
+	//sb_start_write(fs_info->sb);
 	ret = btrfs_defrag_file(inode, NULL, &dctx->range, 0, 0);
-	sb_end_write(fs_info->sb);
+	//sb_end_write(fs_info->sb);
 
 	if (ret > 0) {
 		/* Update progress counters */
@@ -150,6 +141,7 @@ static int pick_inmem_inode(struct defrag_ctx *dctx)
 	mutex_lock(&dctx->itree_mutex);
 	if (RB_EMPTY_ROOT(&dctx->itree)) {
 		mutex_unlock(&dctx->itree_mutex);
+		defrag_dbg(KERN_DEBUG "duet-defrag: nothing to pick");
 		return 0;
 	}
 
@@ -170,6 +162,10 @@ static int pick_inmem_inode(struct defrag_ctx *dctx)
 		kfree(itnode);
 		return 1;
 	}
+
+	defrag_dbg(KERN_DEBUG "duet-defrag: picked key (%u, %llu/%llu, %llu)",
+		itnode->inmem_ratio, itnode->inmem_pages,
+		itnode->total_pages, itnode->btrfs_ino);
 
 	/*
 	 * Search for the inode in the defrag root's commit root.
@@ -207,7 +203,7 @@ static int pick_inmem_inode(struct defrag_ctx *dctx)
 	inode = btrfs_iget(dctx->defrag_root->fs_info->sb, &key,
 						dctx->defrag_root, NULL);
 	if (IS_ERR(inode)) {
-		printk(KERN_ERR "btrfs defrag: iget failed\n");
+		printk(KERN_ERR "btrfs defrag: pick_inmem iget failed\n");
 		ret = 0;
 		goto out;
 	}
@@ -215,7 +211,16 @@ static int pick_inmem_inode(struct defrag_ctx *dctx)
 	/* Got it. Release path locks before starting defrag */
 	btrfs_release_path(path);
 
-	ret = defrag_inode(inode, dctx, 0);
+	/* Mark as done */
+	ret = duet_mark_done(dctx->taskid, 0, key.objectid, 1);
+	if (ret) {
+		printk(KERN_ERR "duet: failed to mark inode %llu as "
+			"defragged\n", key.objectid);
+		ret = 0;
+		goto out;
+	}
+
+	ret = defrag_inode(inode, dctx, 1);
 	if (ret) {
 		printk(KERN_ERR "btrfs defrag: file defrag failed\n");
 		ret = 0;
@@ -224,15 +229,8 @@ static int pick_inmem_inode(struct defrag_ctx *dctx)
 
 	iput(inode);
 
-	/* We're single-threaded here, so can delay marking for now, without
-	 * fearing it will be recursively claimed during defrag */
-	ret = duet_mark_done(dctx->taskid, 0, key.objectid, 1);
-	if (ret) {
-		printk(KERN_ERR "duet: failed to mark inode %llu as "
-			"defragged\n", key.objectid);
-		ret = 0;
-		goto out;
-	}
+	defrag_dbg(KERN_DEBUG "duet-defrag: processed inode %llu out of order\n",
+			key.objectid);
 
 	ret = 1;
 out:
@@ -290,10 +288,12 @@ static int defrag_subvol(struct defrag_ctx *dctx)
 			goto out;
 		}
 
+#if 0
 #ifdef CONFIG_BTRFS_DUET_DEFRAG
 		if (duet_is_online() && pick_inmem_inode(dctx))
 			continue;
 #endif /* CONFIG_BTRFS_DUET_DEFRAG */
+#endif
 
 		ret = btrfs_search_slot_for_read(defrag_root, &key, path, 1, 0);
 		if (ret) {
@@ -346,14 +346,6 @@ static int defrag_subvol(struct defrag_ctx *dctx)
 		/* We upref'ed the inode. Release the locks */
 		btrfs_release_path(path);
 
-		ret = defrag_inode(inode, dctx, 0);
-		if (ret) {
-			printk(KERN_ERR "btrfs defrag: file defrag failed\n");
-			goto out;
-		}
-
-		iput(inode);
-
 #ifdef CONFIG_BTRFS_DUET_DEFRAG
 		/* Mark the inode as done */
 		if (duet_is_online() && duet_mark_done(dctx->taskid, 0,
@@ -363,6 +355,14 @@ static int defrag_subvol(struct defrag_ctx *dctx)
 			goto out;
 		}
 #endif /* CONFIG_BTRFS_DUET_DEFRAG */
+
+		ret = defrag_inode(inode, dctx, 0);
+		if (ret) {
+			printk(KERN_ERR "btrfs defrag: file defrag failed\n");
+			goto out;
+		}
+
+		iput(inode);
 
 		defrag_dbg(KERN_DEBUG "btrfs defrag: processed inode %llu\n",
 			dctx->defrag_progress);
@@ -387,19 +387,20 @@ out:
  * 1. The number of inmem_pages, as it is known by the tree, should already be
  *    in the page descriptor. We can only trust the page descriptor because our
  *    work queue is ordered, so INSERT events will be serviced as they get
- *    queued. XXX: Can we decouple this without creating a second RB tree?
+ *    queued.
  *    (page *)page->(address_space *)mapping->(inode *)host / (ulong)nrpages
  * 2. To find the total_pages in the inode, use the inode size: i_size_read()
  * 3. To find the inode number according to btrfs: btrfs_ino(inode)
  *
- * Bonus (TODO): if we find any nodes during the lookup that are behind the
- * current progress mark, remove them to free up memory and purge the tree
+ * TODO: if we find any nodes during the lookup that are behind the current
+ * progress mark, remove them to free up memory and purge the tree
  */
 static int lookup_remove_itnode(struct defrag_synwork *dwork,
 				struct itree_rbnode **itn)
 {
 	int found = 0;
 	struct rb_node *node = NULL;
+	u8 inmem_ratio = get_ratio(dwork->inmem_pages, dwork->total_pages);
 
 	/* Make sure noone interferes while we search */
 	mutex_lock(&dwork->dctx->itree_mutex);
@@ -409,9 +410,9 @@ static int lookup_remove_itnode(struct defrag_synwork *dwork,
 		*itn = rb_entry(node, struct itree_rbnode, node);
 
 		/* We order based on (inmem_ratio, inmem_pages, btrfs_ino) */
-		if ((*itn)->inmem_ratio > dwork->inmem_ratio) {
+		if ((*itn)->inmem_ratio > inmem_ratio) {
 			node = node->rb_left;
-		} else if ((*itn)->inmem_ratio < dwork->inmem_ratio) {
+		} else if ((*itn)->inmem_ratio < inmem_ratio) {
 			node = node->rb_right;
 		} else {
 			/* Found inmem_ratio, look for inmem_pages */
@@ -433,15 +434,18 @@ static int lookup_remove_itnode(struct defrag_synwork *dwork,
 		}
 	}
 
-#ifdef CONFIG_BTRFS_DUET_DEFRAG_DEBUG
-	printk(KERN_DEBUG "duet-defrag: %s node with key (%u, %llu, %llu)\n",
-		found ? "found" : "didn't find", (*itn)->inmem_ratio,
-		(*itn)->inmem_pages, (*itn)->btrfs_ino);
-#endif /* CONFIG_BTRFS_DUET_DEFRAG_DEBUG */
+	defrag_dbg(KERN_DEBUG "duet-defrag: %s node (%u, %llu/%llu, %llu)\n",
+		found ? "found" : "didn't find",
+		found ? (*itn)->inmem_ratio : inmem_ratio,
+		found ? (*itn)->inmem_pages : dwork->inmem_pages,
+		found ? (*itn)->total_pages : dwork->total_pages,
+		found ? (*itn)->btrfs_ino : dwork->btrfs_ino);
 
 	/* If we found it, remove it */
 	if (found)
 		rb_erase(node, &dwork->dctx->itree);
+	else
+		*itn = NULL;
 	mutex_unlock(&dwork->dctx->itree_mutex);
 
 	return found;
@@ -452,6 +456,7 @@ static int insert_itnode(struct defrag_synwork *dwork,
 {
 	int found = 0;
 	struct rb_node **link, *parent = NULL;
+	struct itree_rbnode *cur;
 
 	/* Make sure noone interferes while we search */
 	mutex_lock(&dwork->dctx->itree_mutex);
@@ -459,24 +464,24 @@ static int insert_itnode(struct defrag_synwork *dwork,
 
 	while (*link) {
 		parent = *link;
-		itn = rb_entry(parent, struct itree_rbnode, node);
+		cur = rb_entry(parent, struct itree_rbnode, node);
 
 		/* We order based on (inmem_ratio, inmem_pages, btrfs_ino) */
-		if (itn->inmem_ratio > dwork->inmem_ratio) {
+		if (cur->inmem_ratio > itn->inmem_ratio) {
 			link = &(*link)->rb_left;
-		} else if (itn->inmem_ratio < dwork->inmem_ratio) {
+		} else if (cur->inmem_ratio < itn->inmem_ratio) {
 			link = &(*link)->rb_right;
 		} else {
 			/* Found inmem_ratio, look for inmem_pages */
-			if (itn->inmem_pages > dwork->inmem_pages) {
+			if (cur->inmem_pages > itn->inmem_pages) {
 				link = &(*link)->rb_left;
-			} else if (itn->inmem_pages < dwork->inmem_pages) {
+			} else if (cur->inmem_pages < itn->inmem_pages) {
 				link = &(*link)->rb_right;
 			} else {
 				/* Found inmem_pages, look for btrfs_ino */
-				if (itn->btrfs_ino > dwork->btrfs_ino) {
+				if (cur->btrfs_ino > itn->btrfs_ino) {
 					link = &(*link)->rb_left;
-				} else if (itn->btrfs_ino < dwork->btrfs_ino) {
+				} else if (cur->btrfs_ino < itn->btrfs_ino) {
 					link = &(*link)->rb_right;
 				} else {
 					found = 1;
@@ -486,11 +491,9 @@ static int insert_itnode(struct defrag_synwork *dwork,
 		}
 	}
 
-#ifdef CONFIG_BTRFS_DUET_DEFRAG_DEBUG
-	printk(KERN_DEBUG "duet-defrag: %s node with key (%u, %llu, %llu)\n",
+	defrag_dbg(KERN_DEBUG "duet-defrag: %s node (%u, %llu/%llu, %llu)\n",
 		found ? "will not insert" : "will insert", itn->inmem_ratio,
-		itn->inmem_pages, itn->btrfs_ino);
-#endif /* CONFIG_BTRFS_DUET_DEFRAG_DEBUG */
+		itn->inmem_pages, itn->total_pages, itn->btrfs_ino);
 
 	if (found)
 		goto out;
@@ -517,15 +520,16 @@ out:
  * - if this is a REMOVE event, and the node was not in the RBIT, return;
  *   otherwise, decrement page count and reinsert if inmem_pages > 0
  */
-static void __handle_event(struct work_struct *work)
+static void __handle_page_event(struct work_struct *work)
 {
-	int ret, found;
+	int ret;
 	struct defrag_synwork *dwork = (struct defrag_synwork *)work;
 	struct itree_rbnode *itnode = NULL;
 
-#ifdef CONFIG_BTRFS_DUET_DEFRAG_DEBUG
-	printk(KERN_DEBUG "duet-defrag: __handle_event started (%p)\n", (void *)work);
-#endif /* CONFIG_BTRFS_DUET_DEFRAG_DEBUG */
+	defrag_dbg(KERN_DEBUG "duet-defrag: %s (%llu/%llu, %llu)\n",
+		dwork->event_code == DUET_EVENT_CACHE_INSERT ? "insert" :
+		"remove", dwork->inmem_pages, dwork->total_pages,
+		dwork->btrfs_ino);
 
 	/* Check if we've already processed this inode out of order (RBBT) */
 	ret = duet_chk_done(dwork->dctx->taskid, 0, dwork->btrfs_ino, 1);
@@ -534,29 +538,19 @@ static void __handle_event(struct work_struct *work)
 
 	switch (dwork->event_code) {
 	case DUET_EVENT_CACHE_INSERT:
-#ifdef CONFIG_BTRFS_DUET_DEFRAG_DEBUG
-		printk(KERN_DEBUG "duet-defrag: insert event detected\n");
-#endif /* CONFIG_BTRFS_DUET_DEFRAG_DEBUG */
-
-#if 0
-		/* Lookup itnode, and remove it */
-		found = lookup_remove_itnode(dwork, &itnode);
-
-		/* If the itnode doesn't exist, create it */
-		if (!found)
-			itnode = itnode_init(dwork);
-
-		if (!itnode) {
-			printk(KERN_ERR "duet-defrag: itnode not present\n");
+		/* Lookup and remove itnode, or create if it doesn't exist */
+		ret = lookup_remove_itnode(dwork, &itnode);
+		if (!ret && itnode_init(&itnode)) {
+			printk(KERN_ERR "duet-defrag: error getting an itnode\n");
 			goto out;
 		}
 
 		/* Update the itnode */
-		itnode->inmem_pages++;
-		itnode->total_pages = (i_size_read(dwork->inode)-1) >>
-							PAGE_CACHE_SHIFT;
-		itnode->inmem_ratio = get_ratio(itnode->inmem_pages,
-							itnode->total_pages);
+		itnode->btrfs_ino = dwork->btrfs_ino;
+		itnode->inmem_pages = dwork->inmem_pages + 1;
+		itnode->total_pages = dwork->total_pages;
+		itnode->inmem_ratio = get_ratio(dwork->inmem_pages,
+						dwork->total_pages);
 
 		/* Insert the itnode */
 		ret = insert_itnode(dwork, itnode);
@@ -565,27 +559,19 @@ static void __handle_event(struct work_struct *work)
 			kfree(itnode);
 			goto out;
 		}
-#endif /* 0 */
 		break;
 	case DUET_EVENT_CACHE_REMOVE:
-#ifdef CONFIG_BTRFS_DUET_DEFRAG_DEBUG
-		printk(KERN_DEBUG "duet-defrag: remove event detected\n");
-#endif /* CONFIG_BTRFS_DUET_DEFRAG_DEBUG */
-
-#if 0
-		/* Lookup itnode, and remove it */
-		found = lookup_remove_itnode(dwork, &itnode);
-
-		/* The itnode doesn't exist, bail */
-		if (!found)
+		/* Lookup and remove itnode, or bail if it doesn't exist */
+		ret = lookup_remove_itnode(dwork, &itnode);
+		if (!ret)
 			goto out;
 
 		/* The itnode exists, update it */
-		itnode->inmem_pages--;
-		itnode->total_pages = (i_size_read(dwork->inode)-1) >>
-							PAGE_CACHE_SHIFT;
-		itnode->inmem_ratio = get_ratio(itnode->inmem_pages,
-							itnode->total_pages);
+		itnode->btrfs_ino = dwork->btrfs_ino;
+		itnode->inmem_pages = dwork->inmem_pages - 1;
+		itnode->total_pages = dwork->total_pages;
+		itnode->inmem_ratio = get_ratio(dwork->inmem_pages,
+						dwork->total_pages);
 
 		/* Remove if needed, otherwise reinsert */
 		if (!itnode->inmem_pages) {
@@ -600,11 +586,9 @@ static void __handle_event(struct work_struct *work)
 			goto out;
 		}
 		break;
-#endif /* 0 */
 	}
 
 out:
-	put_page(dwork->page);
 	kfree((void *)work);
 }
 
@@ -640,8 +624,13 @@ static void btrfs_defrag_duet_handler(__u8 taskid, __u8 event_code,
 	dctx = (struct defrag_ctx *)privdata;
 
 	if (inode->i_sb != dctx->sb) {
-		printk(KERN_ERR "duet-defrag: superblock mismatch for inode "
+		defrag_dbg(KERN_ERR "duet-defrag: superblock mismatch for inode "
 			"%lu\n", inode->i_ino);
+		return;
+	}
+
+	if (!i_size_read(inode)) {
+		defrag_dbg(KERN_ERR "duet-defrag: found zero-size inode\n");
 		return;
 	}
 
@@ -664,7 +653,7 @@ static void btrfs_defrag_duet_handler(__u8 taskid, __u8 event_code,
 		return;
 	}
 
-	INIT_WORK((struct work_struct *)dwork, __handle_event);
+	INIT_WORK((struct work_struct *)dwork, __handle_page_event);
 
 	/*
 	 * Populate synergistic work struct. Note that due to hook placement,
@@ -676,14 +665,8 @@ static void btrfs_defrag_duet_handler(__u8 taskid, __u8 event_code,
 	dwork->inmem_pages = page->mapping->nrpages;
 	if (event_code == DUET_EVENT_CACHE_INSERT)
 		dwork->inmem_pages--;
-	dwork->total_pages = (i_size_read(inode)-1) >> PAGE_CACHE_SHIFT;
-	dwork->inmem_ratio = get_ratio(dwork->inmem_pages, dwork->total_pages);
-	dwork->page = page;
-	dwork->inode = inode;
+	dwork->total_pages = ((i_size_read(inode)-1) >> PAGE_CACHE_SHIFT) + 1;
 	dwork->event_code = event_code;
-
-	/* Get a hold on the page, so it doesn't go away. */
-	get_page(page);
 
 	spin_lock(&dctx->wq_lock);
 	if (!dctx->syn_wq || queue_work(dctx->syn_wq,
@@ -694,10 +677,6 @@ static void btrfs_defrag_duet_handler(__u8 taskid, __u8 event_code,
 		return;
 	}
 	spin_unlock(&dctx->wq_lock);
-
-#ifdef CONFIG_BTRFS_DUET_DEFRAG_DEBUG
-	printk(KERN_DEBUG "duet-defrag: Queued up work for defrag\n");
-#endif /* CONFIG_BTRFS_DUET_DEFRAG_DEBUG */
 }
 #endif /* CONFIG_BTRFS_DUET_DEFRAG */
 
@@ -785,9 +764,9 @@ long btrfs_ioctl_defrag_start(struct file *file, void __user *arg_)
 	 * consulting the page descriptor to tell us things -- and if we
 	 * process e.g. INSERT items out of order we may see a file shrinking
 	 * when it's really growing
+	 * XXX: Would WQ_HIGHPRI make sense in this case?
 	 */
-	dctx->syn_wq = alloc_ordered_workqueue("duet-defrag",
-						WQ_UNBOUND | WQ_HIGHPRI);
+	dctx->syn_wq = alloc_workqueue("duet-defrag", WQ_UNBOUND, 0);
 	if (!dctx->syn_wq) {
 		printk(KERN_ERR "defrag: failed to allocate work queue\n");
 		ret = -EFAULT;
