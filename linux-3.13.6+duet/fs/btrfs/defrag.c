@@ -288,12 +288,10 @@ static int defrag_subvol(struct defrag_ctx *dctx)
 			goto out;
 		}
 
-#if 0
 #ifdef CONFIG_BTRFS_DUET_DEFRAG
 		if (duet_is_online() && pick_inmem_inode(dctx))
 			continue;
 #endif /* CONFIG_BTRFS_DUET_DEFRAG */
-#endif
 
 		ret = btrfs_search_slot_for_read(defrag_root, &key, path, 1, 0);
 		if (ret) {
