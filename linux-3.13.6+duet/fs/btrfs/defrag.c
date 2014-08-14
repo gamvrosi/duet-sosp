@@ -447,6 +447,9 @@ static int update_itree(struct defrag_synwork *dwork)
 	struct rb_node *node = NULL;
 	struct itree_rbnode *itn = NULL;
 	u8 cur_inmem_ratio, new_inmem_ratio;
+#ifdef CONFIG_BTRFS_DUET_DEFRAG_CPUMON
+	ktime_t start, finish;
+#endif /* CONFIG_BTRFS_DUET_DEFRAG_CPUMON */
 
 	/* Calculate the current inmem ratio, and the updated one */
 	cur_inmem_ratio = get_ratio(dwork->inmem_pages, dwork->total_pages);
@@ -460,6 +463,9 @@ static int update_itree(struct defrag_synwork *dwork)
 	mutex_lock(&dwork->dctx->inner_tree_mtx);
 	node = dwork->dctx->itree.rb_node;
 
+#ifdef CONFIG_BTRFS_DUET_DEFRAG_CPUMON
+	start = ktime_get();
+#endif /* CONFIG_BTRFS_DUET_DEFRAG_CPUMON */
 	while (node) {
 		itn = rb_entry(node, struct itree_rbnode, node);
 
@@ -534,6 +540,11 @@ static int update_itree(struct defrag_synwork *dwork)
 	}
 
 out:
+#ifdef CONFIG_BTRFS_DUET_DEFRAG_CPUMON
+	finish = ktime_get();
+	atomic64_add(ktime_us_delta(finish, start),
+			&dwork->dctx->rbit_total_time);
+#endif /* CONFIG_BTRFS_DUET_DEFRAG_CPUMON */
 	mutex_unlock(&dwork->dctx->outer_tree_mtx);
 	mutex_unlock(&dwork->dctx->inner_tree_mtx);
 	return ret;
@@ -544,9 +555,6 @@ static void __handle_page_event(struct work_struct *work)
 {
 	int ret;
 	struct defrag_synwork *dwork = (struct defrag_synwork *)work;
-#ifdef CONFIG_BTRFS_DUET_DEFRAG_CPUMON
-	ktime_t start, finish;
-#endif /* CONFIG_BTRFS_DUET_DEFRAG_CPUMON */
 
 	defrag_dbg(KERN_DEBUG "duet-defrag: %s (%llu/%llu, %llu)\n",
 		dwork->event_code == DUET_EVENT_CACHE_INSERT ? "insert" :
@@ -558,17 +566,9 @@ static void __handle_page_event(struct work_struct *work)
 	if (ret == 1)
 		goto out;
 
-#ifdef CONFIG_BTRFS_DUET_DEFRAG_CPUMON
-	start = ktime_get();
-#endif /* CONFIG_BTRFS_DUET_DEFRAG_CPUMON */
 	ret = update_itree(dwork);
 	if (ret)
 		printk(KERN_ERR "duet-defrag: error updating the itree\n");
-#ifdef CONFIG_BTRFS_DUET_DEFRAG_CPUMON
-	finish = ktime_get();
-	atomic64_add(ktime_us_delta(finish, start),
-			&dwork->dctx->rbit_total_time);
-#endif /* CONFIG_BTRFS_DUET_DEFRAG_CPUMON */
 
 out:
 	kfree((void *)work);
