@@ -21,6 +21,9 @@
 #include <linux/workqueue.h>
 #include <linux/duet.h>
 #endif /* CONFIG_BTRFS_DUET_DEFRAG */
+#ifdef CONFIG_BTRFS_DUET_DEFRAG_CPUMON
+#include <linux/ktime.h>
+#endif /* CONFIG_BTRFS_DUET_DEFRAG_CPUMON */
 
 #ifdef CONFIG_BTRFS_DUET_DEFRAG_DEBUG
 #define defrag_dbg(...)	printk(__VA_ARGS__)
@@ -34,6 +37,9 @@ struct defrag_ctx {
 	struct btrfs_ioctl_defrag_range_args range;
 	struct super_block *sb;	/* will help us tell if inodes are ours */
 
+#ifdef CONFIG_BTRFS_DUET_DEFRAG_CPUMON
+	atomic64_t rbit_total_time;
+#endif /* CONFIG_BTRFS_DUET_DEFRAG_CPUMON */
 #ifdef CONFIG_BTRFS_DUET_DEFRAG
 	spinlock_t wq_lock;
 	struct workqueue_struct *syn_wq;
@@ -229,7 +235,7 @@ static int pick_inmem_inode(struct defrag_ctx *dctx)
 
 	iput(inode);
 
-	defrag_dbg(KERN_DEBUG "duet-defrag: processed inode %llu out of order\n",
+	printk(KERN_INFO "duet-defrag: processed inode %llu out of order\n",
 			key.objectid);
 
 	ret = 1;
@@ -295,8 +301,9 @@ static int defrag_subvol(struct defrag_ctx *dctx)
 
 		ret = btrfs_search_slot_for_read(defrag_root, &key, path, 1, 0);
 		if (ret) {
-			defrag_dbg(KERN_ERR "btrfs defrag: search returned nothing\n");
-			goto out;
+			printk(KERN_INFO "btrfs defrag: defrag complete\n");
+			ret = 0;
+			break;
 		}
 
 		eb = path->nodes[0];
@@ -362,7 +369,7 @@ static int defrag_subvol(struct defrag_ctx *dctx)
 
 		iput(inode);
 
-		defrag_dbg(KERN_DEBUG "btrfs defrag: processed inode %llu\n",
+		printk(KERN_INFO "btrfs defrag: processed inode %llu\n",
 			dctx->defrag_progress);
 
 next:
@@ -523,6 +530,9 @@ static void __handle_page_event(struct work_struct *work)
 	int ret;
 	struct defrag_synwork *dwork = (struct defrag_synwork *)work;
 	struct itree_rbnode *itnode = NULL;
+#ifdef CONFIG_BTRFS_DUET_DEFRAG_CPUMON
+	ktime_t start, finish;
+#endif /* CONFIG_BTRFS_DUET_DEFRAG_CPUMON */
 
 	defrag_dbg(KERN_DEBUG "duet-defrag: %s (%llu/%llu, %llu)\n",
 		dwork->event_code == DUET_EVENT_CACHE_INSERT ? "insert" :
@@ -534,13 +544,17 @@ static void __handle_page_event(struct work_struct *work)
 	if (ret == 1)
 		goto out;
 
+#ifdef CONFIG_BTRFS_DUET_DEFRAG_CPUMON
+	start = ktime_get();
+#endif /* CONFIG_BTRFS_DUET_DEFRAG_CPUMON */
+
 	switch (dwork->event_code) {
 	case DUET_EVENT_CACHE_INSERT:
 		/* Lookup and remove itnode, or create if it doesn't exist */
 		ret = lookup_remove_itnode(dwork, &itnode);
 		if (!ret && itnode_init(&itnode)) {
 			printk(KERN_ERR "duet-defrag: error getting an itnode\n");
-			goto out;
+			break;
 		}
 
 		/* Update the itnode */
@@ -555,14 +569,13 @@ static void __handle_page_event(struct work_struct *work)
 		if (ret) {
 			printk(KERN_ERR "duet-defrag: insert failed\n");
 			kfree(itnode);
-			goto out;
 		}
 		break;
 	case DUET_EVENT_CACHE_REMOVE:
 		/* Lookup and remove itnode, or bail if it doesn't exist */
 		ret = lookup_remove_itnode(dwork, &itnode);
 		if (!ret)
-			goto out;
+			break;
 
 		/* The itnode exists, update it */
 		itnode->btrfs_ino = dwork->btrfs_ino;
@@ -574,18 +587,22 @@ static void __handle_page_event(struct work_struct *work)
 		/* Remove if needed, otherwise reinsert */
 		if (!itnode->inmem_pages) {
 			kfree(itnode);
-			goto out;
+			break;
 		}
 
 		ret = insert_itnode(dwork, itnode);
 		if (ret) {
 			printk(KERN_ERR "duet-defrag: insert failed\n");
 			kfree(itnode);
-			goto out;
 		}
 		break;
 	}
 
+#ifdef CONFIG_BTRFS_DUET_DEFRAG_CPUMON
+	finish = ktime_get();
+	atomic64_add(ktime_us_delta(finish, start),
+			&dwork->dctx->rbit_total_time);
+#endif /* CONFIG_BTRFS_DUET_DEFRAG_CPUMON */
 out:
 	kfree((void *)work);
 }
@@ -721,6 +738,9 @@ long btrfs_ioctl_defrag_start(struct file *file, void __user *arg_)
 		return -ENOMEM;
 	}
 
+#ifdef CONFIG_BTRFS_DUET_DEFRAG_CPUMON
+	atomic64_set(&dctx->rbit_total_time, 0);
+#endif /* CONFIG_BTRFS_DUET_DEFRAG_CPUMON */
 #ifdef CONFIG_BTRFS_DUET_DEFRAG
 	mutex_init(&dctx->itree_mutex);
 	dctx->itree = RB_ROOT;
@@ -794,9 +814,9 @@ out:
 #ifdef CONFIG_BTRFS_DUET_DEFRAG_DEBUG
 	/* Let's first print out the bitmaps */
 	duet_print_rbt(dctx->taskid);
-	printk(KERN_DEBUG "defrag: total bytes defragged = %ld\n",
+	printk(KERN_DEBUG "defrag: total bytes defragged = %lld\n",
 			atomic64_read(&fs_info->defrag_bytes_total));
-	printk(KERN_DEBUG "defrag: bytes defragged best-effort: %ld\n",
+	printk(KERN_DEBUG "defrag: bytes defragged best-effort: %lld\n",
 			atomic64_read(&fs_info->defrag_bytes_best_effort));
 #endif /* CONFIG_BTRFS_DUET_DEFRAG_DEBUG */
 
@@ -807,6 +827,11 @@ out:
 	spin_unlock(&dctx->wq_lock);
 	flush_workqueue(tmp_wq);
 	destroy_workqueue(tmp_wq);
+
+#ifdef CONFIG_BTRFS_DUET_DEFRAG_CPUMON
+	printk(KERN_DEBUG "defrag: CPU time spent updating the RBIT: %llds\n",
+		(long long) (atomic64_read(&dctx->rbit_total_time) / 1E6));
+#endif /* CONFIG_BTRFS_DUET_DEFRAG_CPUMON */
 
 	/* Deregister the task from the Duet framework */
 	if (duet_task_deregister(dctx->taskid))

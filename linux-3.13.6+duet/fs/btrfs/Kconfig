@@ -184,6 +184,17 @@ config BTRFS_DUET_DEFRAG_DEBUG
 
 	  If unsure/not a developer, say N here.
 
+config BTRFS_DUET_DEFRAG_CPUMON
+	bool "Report CPU time spent updating the RBIT"
+	depends on BTRFS_FS
+	depends on BTRFS_DUET_DEFRAG
+	help
+	  Monitors and reports the total cpu time spent updating the red-black
+	  inode tree used by the synergistic btrfs defrag. The total time is
+	  printed to syslog on completion of the defrag run.
+
+	  If unsure/not a developer, say N here.
+
 endmenu
 
 config BTRFS_FS_RUN_SANITY_TESTS
