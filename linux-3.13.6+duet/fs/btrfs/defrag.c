@@ -545,8 +545,8 @@ out:
 	atomic64_add(ktime_us_delta(finish, start),
 			&dwork->dctx->rbit_total_time);
 #endif /* CONFIG_BTRFS_DUET_DEFRAG_CPUMON */
-	mutex_unlock(&dwork->dctx->outer_tree_mtx);
 	mutex_unlock(&dwork->dctx->inner_tree_mtx);
+	mutex_unlock(&dwork->dctx->outer_tree_mtx);
 	return ret;
 }
 
