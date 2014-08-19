@@ -756,7 +756,8 @@ long btrfs_ioctl_defrag_start(struct file *file, void __user *arg_)
 	 * when it's really growing
 	 * XXX: Would WQ_HIGHPRI make sense in this case?
 	 */
-	dctx->syn_wq = alloc_workqueue("duet-defrag", WQ_UNBOUND, 0);
+	//dctx->syn_wq = alloc_workqueue("duet-defrag", WQ_UNBOUND, 0);
+	dctx->syn_wq = alloc_ordered_workqueue("duet-defrag", 0);
 	if (!dctx->syn_wq) {
 		printk(KERN_ERR "defrag: failed to allocate work queue\n");
 		ret = -EFAULT;
