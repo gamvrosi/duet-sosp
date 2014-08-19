@@ -1154,6 +1154,376 @@ out:
 
 }
 
+#if CONFIG_BTRFS_DUET_DEFRAG
+/* Same as cluster_pages_for_defrag, but instrumented to return cache hits */
+static int cluster_pages_for_defrag_trace(struct inode *inode,
+					  struct page **pages,
+					  unsigned long start_index,
+					  unsigned long num_pages,
+					  unsigned long *cache_hits)
+{
+	unsigned long file_end;
+	u64 isize = i_size_read(inode);
+	u64 page_start;
+	u64 page_end;
+	u64 page_cnt;
+	int ret;
+	int i;
+	int i_done;
+	int hit;
+	struct btrfs_ordered_extent *ordered;
+	struct extent_state *cached_state = NULL;
+	struct extent_io_tree *tree;
+	gfp_t mask = btrfs_alloc_write_mask(inode->i_mapping);
+
+	file_end = (isize - 1) >> PAGE_CACHE_SHIFT;
+	if (!isize || start_index > file_end)
+		return 0;
+
+	page_cnt = min_t(u64, (u64)num_pages, (u64)file_end - start_index + 1);
+
+	ret = btrfs_delalloc_reserve_space(inode,
+					   page_cnt << PAGE_CACHE_SHIFT);
+	if (ret)
+		return ret;
+	i_done = 0;
+	tree = &BTRFS_I(inode)->io_tree;
+
+	/* step one, lock all the pages */
+	for (i = 0; i < page_cnt; i++) {
+		struct page *page;
+again:
+		page = find_or_create_page_trace(inode->i_mapping,
+					   start_index + i, mask, &hit);
+		if (!page)
+			break;
+
+		if (hit)
+			(*cache_hits)++;
+
+		page_start = page_offset(page);
+		page_end = page_start + PAGE_CACHE_SIZE - 1;
+		while (1) {
+			lock_extent(tree, page_start, page_end);
+			ordered = btrfs_lookup_ordered_extent(inode,
+							      page_start);
+			unlock_extent(tree, page_start, page_end);
+			if (!ordered)
+				break;
+
+			unlock_page(page);
+			btrfs_start_ordered_extent(inode, ordered, 1);
+			btrfs_put_ordered_extent(ordered);
+			lock_page(page);
+			/*
+			 * we unlocked the page above, so we need check if
+			 * it was released or not.
+			 */
+			if (page->mapping != inode->i_mapping) {
+				unlock_page(page);
+				page_cache_release(page);
+				goto again;
+			}
+		}
+
+		if (!PageUptodate(page)) {
+			btrfs_readpage(NULL, page);
+			lock_page(page);
+			if (!PageUptodate(page)) {
+				unlock_page(page);
+				page_cache_release(page);
+				ret = -EIO;
+				break;
+			}
+		}
+
+		if (page->mapping != inode->i_mapping) {
+			unlock_page(page);
+			page_cache_release(page);
+			goto again;
+		}
+
+		pages[i] = page;
+		i_done++;
+	}
+	if (!i_done || ret)
+		goto out;
+
+	if (!(inode->i_sb->s_flags & MS_ACTIVE))
+		goto out;
+
+	/*
+	 * so now we have a nice long stream of locked
+	 * and up to date pages, lets wait on them
+	 */
+	for (i = 0; i < i_done; i++)
+		wait_on_page_writeback(pages[i]);
+
+	page_start = page_offset(pages[0]);
+	page_end = page_offset(pages[i_done - 1]) + PAGE_CACHE_SIZE;
+
+	lock_extent_bits(&BTRFS_I(inode)->io_tree,
+			 page_start, page_end - 1, 0, &cached_state);
+	clear_extent_bit(&BTRFS_I(inode)->io_tree, page_start,
+			  page_end - 1, EXTENT_DIRTY | EXTENT_DELALLOC |
+			  EXTENT_DO_ACCOUNTING | EXTENT_DEFRAG, 0, 0,
+			  &cached_state, GFP_NOFS);
+
+	if (i_done != page_cnt) {
+		spin_lock(&BTRFS_I(inode)->lock);
+		BTRFS_I(inode)->outstanding_extents++;
+		spin_unlock(&BTRFS_I(inode)->lock);
+		btrfs_delalloc_release_space(inode,
+				     (page_cnt - i_done) << PAGE_CACHE_SHIFT);
+	}
+
+
+	set_extent_defrag(&BTRFS_I(inode)->io_tree, page_start, page_end - 1,
+			  &cached_state, GFP_NOFS);
+
+	unlock_extent_cached(&BTRFS_I(inode)->io_tree,
+			     page_start, page_end - 1, &cached_state,
+			     GFP_NOFS);
+
+	for (i = 0; i < i_done; i++) {
+		clear_page_dirty_for_io(pages[i]);
+		ClearPageChecked(pages[i]);
+		set_page_extent_mapped(pages[i]);
+		set_page_dirty(pages[i]);
+		unlock_page(pages[i]);
+		page_cache_release(pages[i]);
+	}
+	return i_done;
+out:
+	for (i = 0; i < i_done; i++) {
+		unlock_page(pages[i]);
+		page_cache_release(pages[i]);
+	}
+	btrfs_delalloc_release_space(inode, page_cnt << PAGE_CACHE_SHIFT);
+	return ret;
+}
+
+int btrfs_defrag_file_trace(struct inode *inode, struct file *file,
+		      struct btrfs_ioctl_defrag_range_args *range,
+		      u64 newer_than, unsigned long max_to_defrag,
+		      unsigned long *cache_hits)
+{
+	struct btrfs_root *root = BTRFS_I(inode)->root;
+	struct file_ra_state *ra = NULL;
+	unsigned long last_index;
+	u64 isize = i_size_read(inode);
+	u64 last_len = 0;
+	u64 skip = 0;
+	u64 defrag_end = 0;
+	u64 newer_off = range->start;
+	unsigned long i;
+	unsigned long ra_index = 0;
+	int ret;
+	int defrag_count = 0;
+	int compress_type = BTRFS_COMPRESS_ZLIB;
+	int extent_thresh = range->extent_thresh;
+	unsigned long max_cluster = (256 * 1024) >> PAGE_CACHE_SHIFT;
+	unsigned long cluster = max_cluster;
+	u64 new_align = ~((u64)128 * 1024 - 1);
+	struct page **pages = NULL;
+
+	*cache_hits = 0;
+
+	if (isize == 0)
+		return 0;
+
+	if (range->start >= isize)
+		return -EINVAL;
+
+	if (range->flags & BTRFS_DEFRAG_RANGE_COMPRESS) {
+		if (range->compress_type > BTRFS_COMPRESS_TYPES)
+			return -EINVAL;
+		if (range->compress_type)
+			compress_type = range->compress_type;
+	}
+
+	if (extent_thresh == 0)
+		extent_thresh = 256 * 1024;
+
+	/*
+	 * if we were not given a file, allocate a readahead
+	 * context
+	 */
+	if (!file) {
+		ra = kzalloc(sizeof(*ra), GFP_NOFS);
+		if (!ra)
+			return -ENOMEM;
+		file_ra_state_init(ra, inode->i_mapping);
+	} else {
+		ra = &file->f_ra;
+	}
+
+	pages = kmalloc_array(max_cluster, sizeof(struct page *),
+			GFP_NOFS);
+	if (!pages) {
+		ret = -ENOMEM;
+		goto out_ra;
+	}
+
+	/* find the last page to defrag */
+	if (range->start + range->len > range->start) {
+		last_index = min_t(u64, isize - 1,
+			 range->start + range->len - 1) >> PAGE_CACHE_SHIFT;
+	} else {
+		last_index = (isize - 1) >> PAGE_CACHE_SHIFT;
+	}
+
+	if (newer_than) {
+		ret = find_new_extents(root, inode, newer_than,
+				       &newer_off, 64 * 1024);
+		if (!ret) {
+			range->start = newer_off;
+			/*
+			 * we always align our defrag to help keep
+			 * the extents in the file evenly spaced
+			 */
+			i = (newer_off & new_align) >> PAGE_CACHE_SHIFT;
+		} else
+			goto out_ra;
+	} else {
+		i = range->start >> PAGE_CACHE_SHIFT;
+	}
+	if (!max_to_defrag)
+		max_to_defrag = last_index + 1;
+
+	/*
+	 * make writeback starts from i, so the defrag range can be
+	 * written sequentially.
+	 */
+	if (i < inode->i_mapping->writeback_index)
+		inode->i_mapping->writeback_index = i;
+
+	while (i <= last_index && defrag_count < max_to_defrag &&
+	       (i < (i_size_read(inode) + PAGE_CACHE_SIZE - 1) >>
+		PAGE_CACHE_SHIFT)) {
+		/*
+		 * make sure we stop running if someone unmounts
+		 * the FS
+		 */
+		if (!(inode->i_sb->s_flags & MS_ACTIVE))
+			break;
+
+		if (btrfs_defrag_cancelled(root->fs_info)) {
+			printk(KERN_DEBUG "btrfs: defrag_file cancelled\n");
+			ret = -EAGAIN;
+			break;
+		}
+
+		if (!should_defrag_range(inode, (u64)i << PAGE_CACHE_SHIFT,
+					 extent_thresh, &last_len, &skip,
+					 &defrag_end, range->flags &
+					 BTRFS_DEFRAG_RANGE_COMPRESS)) {
+			unsigned long next;
+			/*
+			 * the should_defrag function tells us how much to skip
+			 * bump our counter by the suggested amount
+			 */
+			next = (skip + PAGE_CACHE_SIZE - 1) >> PAGE_CACHE_SHIFT;
+			i = max(i + 1, next);
+			continue;
+		}
+
+		if (!newer_than) {
+			cluster = (PAGE_CACHE_ALIGN(defrag_end) >>
+				   PAGE_CACHE_SHIFT) - i;
+			cluster = min(cluster, max_cluster);
+		} else {
+			cluster = max_cluster;
+		}
+
+		if (i + cluster > ra_index) {
+			ra_index = max(i, ra_index);
+			btrfs_force_ra(inode->i_mapping, ra, file, ra_index,
+				       cluster);
+			ra_index += max_cluster;
+		}
+
+		mutex_lock(&inode->i_mutex);
+		if (range->flags & BTRFS_DEFRAG_RANGE_COMPRESS)
+			BTRFS_I(inode)->force_compress = compress_type;
+		ret = cluster_pages_for_defrag_trace(inode, pages, i, cluster,
+								cache_hits);
+		if (ret < 0) {
+			mutex_unlock(&inode->i_mutex);
+			goto out_ra;
+		}
+
+		defrag_count += ret;
+		balance_dirty_pages_ratelimited(inode->i_mapping);
+		mutex_unlock(&inode->i_mutex);
+
+		if (newer_than) {
+			if (newer_off == (u64)-1)
+				break;
+
+			if (ret > 0)
+				i += ret;
+
+			newer_off = max(newer_off + 1,
+					(u64)i << PAGE_CACHE_SHIFT);
+
+			ret = find_new_extents(root, inode,
+					       newer_than, &newer_off,
+					       64 * 1024);
+			if (!ret) {
+				range->start = newer_off;
+				i = (newer_off & new_align) >> PAGE_CACHE_SHIFT;
+			} else {
+				break;
+			}
+		} else {
+			if (ret > 0) {
+				i += ret;
+				last_len += ret << PAGE_CACHE_SHIFT;
+			} else {
+				i++;
+				last_len = 0;
+			}
+		}
+	}
+
+	if ((range->flags & BTRFS_DEFRAG_RANGE_START_IO))
+		filemap_flush(inode->i_mapping);
+
+	if ((range->flags & BTRFS_DEFRAG_RANGE_COMPRESS)) {
+		/* the filemap_flush will queue IO into the worker threads, but
+		 * we have to make sure the IO is actually started and that
+		 * ordered extents get created before we return
+		 */
+		atomic_inc(&root->fs_info->async_submit_draining);
+		while (atomic_read(&root->fs_info->nr_async_submits) ||
+		      atomic_read(&root->fs_info->async_delalloc_pages)) {
+			wait_event(root->fs_info->async_submit_wait,
+			   (atomic_read(&root->fs_info->nr_async_submits) == 0 &&
+			    atomic_read(&root->fs_info->async_delalloc_pages) == 0));
+		}
+		atomic_dec(&root->fs_info->async_submit_draining);
+	}
+
+	if (range->compress_type == BTRFS_COMPRESS_LZO) {
+		btrfs_set_fs_incompat(root->fs_info, COMPRESS_LZO);
+	}
+
+	ret = defrag_count;
+
+out_ra:
+	if (range->flags & BTRFS_DEFRAG_RANGE_COMPRESS) {
+		mutex_lock(&inode->i_mutex);
+		BTRFS_I(inode)->force_compress = BTRFS_COMPRESS_NONE;
+		mutex_unlock(&inode->i_mutex);
+	}
+	if (!file)
+		kfree(ra);
+	kfree(pages);
+	return ret;
+}
+#endif /* CONFIG_BTRFS_DUET_DEFRAG */
+
 int btrfs_defrag_file(struct inode *inode, struct file *file,
 		      struct btrfs_ioctl_defrag_range_args *range,
 		      u64 newer_than, unsigned long max_to_defrag)

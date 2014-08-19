@@ -3756,6 +3756,12 @@ int btrfs_is_empty_uuid(u8 *uuid);
 int btrfs_defrag_file(struct inode *inode, struct file *file,
 		      struct btrfs_ioctl_defrag_range_args *range,
 		      u64 newer_than, unsigned long max_pages);
+#ifdef CONFIG_BTRFS_DUET_DEFRAG
+int btrfs_defrag_file_trace(struct inode *inode, struct file *file,
+		      struct btrfs_ioctl_defrag_range_args *range,
+		      u64 newer_than, unsigned long max_pages,
+		      unsigned long *cache_hits);
+#endif /* CONFIG_BTRFS_DUET_DEFRAG */
 void btrfs_get_block_group_info(struct list_head *groups_list,
 				struct btrfs_ioctl_space_info *space);
 void update_ioctl_balance_args(struct btrfs_fs_info *fs_info, int lock,

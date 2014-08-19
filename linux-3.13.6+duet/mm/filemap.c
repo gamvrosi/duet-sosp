@@ -847,6 +847,38 @@ repeat:
 }
 EXPORT_SYMBOL(find_or_create_page);
 
+struct page *find_or_create_page_trace(struct address_space *mapping,
+		pgoff_t index, gfp_t gfp_mask, int *hit)
+{
+	struct page *page;
+	int err;
+repeat:
+	*hit = 1;
+	page = find_lock_page(mapping, index);
+	if (!page) {
+		*hit = 0;
+		page = __page_cache_alloc(gfp_mask);
+		if (!page)
+			return NULL;
+		/*
+		 * We want a regular kernel memory (not highmem or DMA etc)
+		 * allocation for the radix tree nodes, but we need to honour
+		 * the context-specific requirements the caller has asked for.
+		 * GFP_RECLAIM_MASK collects those requirements.
+		 */
+		err = add_to_page_cache_lru(page, mapping, index,
+			(gfp_mask & GFP_RECLAIM_MASK));
+		if (unlikely(err)) {
+			page_cache_release(page);
+			page = NULL;
+			if (err == -EEXIST)
+				goto repeat;
+		}
+	}
+	return page;
+}
+EXPORT_SYMBOL(find_or_create_page_trace);
+
 /**
  * find_get_pages - gang pagecache lookup
  * @mapping:	The address_space to search
