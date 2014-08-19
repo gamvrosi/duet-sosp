@@ -2243,6 +2243,7 @@ int open_ctree(struct super_block *sb,
 
 	atomic64_set(&fs_info->defrag_bytes_total, 0);
 	atomic64_set(&fs_info->defrag_bytes_best_effort, 0);
+	atomic64_set(&fs_info->defrag_bytes_from_mem, 0);
 	atomic64_set(&fs_info->defrag_start_jiffies, 0);
 #endif /* CONFIG_BTRFS_DEFRAG */
 

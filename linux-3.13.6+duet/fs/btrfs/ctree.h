@@ -1682,6 +1682,7 @@ struct btrfs_fs_info {
 	/* progress-related state for defrag */
 	atomic64_t defrag_bytes_total;
 	atomic64_t defrag_bytes_best_effort;
+	atomic64_t defrag_bytes_from_mem;
 	atomic64_t defrag_start_jiffies;
 #endif /* CONFIG_BTRFS_DEFRAG */
 };

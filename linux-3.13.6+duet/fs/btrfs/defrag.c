@@ -234,6 +234,9 @@ static int pick_inmem_inode(struct defrag_ctx *dctx)
 		goto out;
 	}
 
+	atomic64_add(itnode->inmem_pages * PAGE_SIZE,
+			&dctx->defrag_root->fs_info->defrag_bytes_from_mem);
+
 	iput(inode);
 
 	printk(KERN_INFO "duet-defrag: processed inode %llu out of order\n",
@@ -732,6 +735,7 @@ long btrfs_ioctl_defrag_start(struct file *file, void __user *arg_)
 	mutex_lock(&fs_info->defrag_lock);
 	atomic64_set(&fs_info->defrag_bytes_total, 0);
 	atomic64_set(&fs_info->defrag_bytes_best_effort, 0);
+	atomic64_set(&fs_info->defrag_bytes_from_mem, 0);
 	atomic64_set(&fs_info->defrag_start_jiffies, jiffies);
 	fs_info->cur_defrag = dctx;
 	/* Were we asked to cancel already? */
@@ -786,6 +790,8 @@ out:
 			atomic64_read(&fs_info->defrag_bytes_total));
 	printk(KERN_DEBUG "defrag: bytes defragged best-effort: %ld\n",
 			atomic64_read(&fs_info->defrag_bytes_best_effort));
+	printk(KERN_DEBUG "defrag: bytes found already in memory: %ld\n",
+			atomic64_read(&fs_info->defrag_bytes_from_mem));
 #endif /* CONFIG_BTRFS_DUET_DEFRAG_DEBUG */
 
 	/* Flush and destroy work queue */
@@ -891,6 +897,8 @@ long btrfs_ioctl_defrag_progress(struct btrfs_root *root, void __user *arg)
 	da->progress.bytes_total = atomic64_read(&fs_info->defrag_bytes_total);
 	da->progress.bytes_best_effort =
 			atomic64_read(&fs_info->defrag_bytes_best_effort);
+	da->progress.bytes_from_mem =
+			atomic64_read(&fs_info->defrag_bytes_from_mem);
 
 	mutex_unlock(&fs_info->defrag_lock);
 

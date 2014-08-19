@@ -339,11 +339,11 @@ static int cmd_defrag_status(int argc, char **argv)
 		goto out;
 	}
 
-	printf("Defragged %llu bytes, %s %u sec.\n"
-		"Defragged %llu bytes out of order.\n",
-		da.progress.bytes_total,
+	printf("Defragged %llu bytes, %llu out of order, %s %u sec.\n"
+		"Defragged %llu bytes from memory.\n",
+		da.progress.bytes_total, da.progress.bytes_best_effort,
 		da.progress.running ? "running for" : "finished after",
-		da.progress.elapsed_time, da.progress.bytes_best_effort);
+		da.progress.elapsed_time, da.progress.bytes_from_mem);
 
 	ret = 0;
 out:

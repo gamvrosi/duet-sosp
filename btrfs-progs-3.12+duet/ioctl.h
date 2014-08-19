@@ -436,6 +436,7 @@ struct btrfs_ioctl_send_args {
 struct btrfs_defrag_progress {
 	__u64 bytes_total;		/* out */
 	__u64 bytes_best_effort;	/* out */
+	__u64 bytes_from_mem;		/* out */
 	__u32 elapsed_time;		/* out */
 	__u8 running;			/* out */
 };
