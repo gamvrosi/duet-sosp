@@ -274,13 +274,13 @@ done:
 	return ret;
 }
 
-static void free_fpath(struct filepath **fpath)
+static void free_fpath(struct filepath *fpath)
 {
 	struct filepath *tmp;
 
-	while (*fpath != NULL) {
-		tmp = *fpath;
-		*fpath = (*fpath)->next;
+	while (fpath) {
+		tmp = fpath;
+		fpath = fpath->next;
 		free(tmp);
 	}
 }
@@ -370,7 +370,7 @@ static int find_full_path(struct btrfs_root *root, struct btrfs_path *path, char
 	}
 
 out:
-	free_fpath(&fpath);
+	free_fpath(fpath);
 	return ret;
 }
 
