@@ -140,13 +140,10 @@ static int defrag_inode(struct inode *inode, struct defrag_ctx *dctx,
  */
 static int pick_inmem_inode(struct defrag_ctx *dctx)
 {
-	int removed=0, s, ret=0;
+	int removed=0, ret=0;
 	struct rb_node *node;
 	struct itree_rbnode *itnode;
-	struct btrfs_path *path;
 	struct btrfs_key key;
-	struct extent_buffer *l;
-	struct btrfs_inode_item *ii;
 	struct inode *inode;
 #ifdef CONFIG_BTRFS_DUET_DEFRAG_CPUMON
 	ktime_t start, finish;
@@ -196,37 +193,9 @@ again:
 		itnode->inmem_ratio, itnode->inmem_pages,
 		itnode->total_pages, itnode->btrfs_ino, removed);
 
-	/*
-	 * Search for the inode in the defrag root's commit root.
-	 * Keep locking on to prevent unwanted surprises.
-	 */
-	path = btrfs_alloc_path();
-	if (!path) {
-		kfree(itnode);
-		return 0;
-	}
-	path->search_commit_root = 1;
-
 	key.objectid = itnode->btrfs_ino;
 	key.type = BTRFS_INODE_ITEM_KEY;
 	key.offset = 0;
-
-	ret = btrfs_search_slot(NULL, dctx->defrag_root, &key, path, 0, 0);
-	if (ret) {
-		ret = 0;
-		goto out;
-	}
-
-	/* Grab the inode item */
-	l = path->nodes[0];
-	s = path->slots[0];
-	ii = btrfs_item_ptr(l, s, struct btrfs_inode_item);
-
-	/* We only process regular files */
-	if ((btrfs_inode_mode(l, ii) & S_IFMT) != S_IFREG) {
-		ret = 0;
-		goto out;
-	}
 
 	/* Get the inode */
 	inode = btrfs_iget(dctx->defrag_root->fs_info->sb, &key,
@@ -237,8 +206,11 @@ again:
 		goto out;
 	}
 
-	/* Got it. Release path locks before starting defrag */
-	btrfs_release_path(path);
+	/* We only process regular files */
+	if ((inode->i_mode & S_IFMT) != S_IFREG) {
+		ret = 0;
+		goto iput_out;
+	}
 
 	/* Mark as done */
 	ret = duet_mark_done(dctx->taskid, 0, key.objectid, 1);
@@ -246,24 +218,23 @@ again:
 		printk(KERN_ERR "duet: failed to mark inode %llu as "
 			"defragged\n", key.objectid);
 		ret = 0;
-		goto out;
+		goto iput_out;
 	}
 
 	ret = defrag_inode(inode, dctx, 1);
 	if (ret) {
 		printk(KERN_ERR "btrfs defrag: file defrag failed\n");
 		ret = 0;
-		goto out;
+		goto iput_out;
 	}
-
-	iput(inode);
 
 	printk(KERN_INFO "duet-defrag: processed inode %llu out of order\n",
 			key.objectid);
 
 	ret = 1;
+iput_out:
+	iput(inode);
 out:
-	btrfs_free_path(path);
 	kfree(itnode);
 	return ret;
 }
@@ -279,7 +250,6 @@ static int defrag_subvol(struct defrag_ctx *dctx)
 	struct extent_buffer *eb;
 	struct btrfs_key key, key_start, key_end;
 	struct reada_control *reada;
-	struct btrfs_inode_item *ii;
 	struct inode *inode;
 
 	/*
@@ -333,11 +303,12 @@ static int defrag_subvol(struct defrag_ctx *dctx)
 		slot = path->slots[0];
 		btrfs_item_key_to_cpu(eb, &found_key, slot);
 
+		/* We upref'ed the inode. Release the locks */
+		btrfs_release_path(path);
+
 		/* If we couldn't find an inode, move on to the next */
-		if (found_key.type != BTRFS_INODE_ITEM_KEY) {
-			btrfs_release_path(path);
+		if (found_key.type != BTRFS_INODE_ITEM_KEY)
 			goto next;
-		}
 
 		/* Mark our progress before we process the inode.
 		 * This way, duet will ignore it as processed. */
@@ -349,19 +320,9 @@ static int defrag_subvol(struct defrag_ctx *dctx)
 		    found_key.objectid, 1) == 1) {
 			defrag_dbg(KERN_INFO "btrfs defrag: skipping inode "
 					"%llu\n", dctx->defrag_progress);
-			btrfs_release_path(path);
 			goto next;
 		}
 #endif /* CONFIG_BTRFS_DUET_DEFRAG */
-
-		/* Grab the inode item */
-		ii = btrfs_item_ptr(eb, slot, struct btrfs_inode_item);
-
-		/* We only process regular files */
-		if ((btrfs_inode_mode(eb, ii) & S_IFMT) != S_IFREG) {
-			btrfs_release_path(path);
-			goto next;
-		}
 
 		/* Get the inode */
 		inode = btrfs_iget(fs_info->sb, &found_key, defrag_root, NULL);
@@ -371,8 +332,11 @@ static int defrag_subvol(struct defrag_ctx *dctx)
 			goto out;
 		}
 
-		/* We upref'ed the inode. Release the locks */
-		btrfs_release_path(path);
+		/* We only process regular files */
+		if ((inode->i_mode & S_IFMT) != S_IFREG) {
+			iput(inode);
+			goto next;
+		}
 
 #ifdef CONFIG_BTRFS_DUET_DEFRAG
 		/* Mark the inode as done */
@@ -380,6 +344,7 @@ static int defrag_subvol(struct defrag_ctx *dctx)
 		    found_key.objectid, 1)) {
 			printk(KERN_ERR "duet: failed to mark inode %llu\n",
 				found_key.objectid);
+			iput(inode);
 			goto out;
 		}
 #endif /* CONFIG_BTRFS_DUET_DEFRAG */
@@ -387,6 +352,7 @@ static int defrag_subvol(struct defrag_ctx *dctx)
 		ret = defrag_inode(inode, dctx, 0);
 		if (ret) {
 			printk(KERN_ERR "btrfs defrag: file defrag failed\n");
+			iput(inode);
 			goto out;
 		}
 
