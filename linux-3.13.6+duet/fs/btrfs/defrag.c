@@ -140,7 +140,7 @@ static int defrag_inode(struct inode *inode, struct defrag_ctx *dctx,
  */
 static int pick_inmem_inode(struct defrag_ctx *dctx)
 {
-	int s, ret = 0;
+	int removed=0, s, ret=0;
 	struct rb_node *node;
 	struct itree_rbnode *itnode;
 	struct btrfs_path *path;
@@ -148,15 +148,27 @@ static int pick_inmem_inode(struct defrag_ctx *dctx)
 	struct extent_buffer *l;
 	struct btrfs_inode_item *ii;
 	struct inode *inode;
+#ifdef CONFIG_BTRFS_DUET_DEFRAG_CPUMON
+	ktime_t start, finish;
+#endif /* CONFIG_BTRFS_DUET_DEFRAG_CPUMON */
 
-	/* Pick an inode from the inode rbtree and remove it */
-	mutex_lock(&dctx->inner_tree_mtx);
 	if (RB_EMPTY_ROOT(&dctx->itree)) {
-		mutex_unlock(&dctx->inner_tree_mtx);
 		defrag_dbg(KERN_DEBUG "duet-defrag: nothing to pick");
 		return 0;
 	}
 
+#ifdef CONFIG_BTRFS_DUET_DEFRAG_CPUMON
+	start = ktime_get();
+#endif /* CONFIG_BTRFS_DUET_DEFRAG_CPUMON */
+	/* Pick an inode from the inode rbtree and remove it */
+	mutex_lock(&dctx->inner_tree_mtx);
+	if (RB_EMPTY_ROOT(&dctx->itree)) {
+		defrag_dbg(KERN_DEBUG "duet-defrag: nothing to pick");
+		mutex_unlock(&dctx->inner_tree_mtx);
+		return 0;
+	}
+
+again:
 	/* We order from smallest to largest key so pick the largest */
 	node = rb_last(&dctx->itree);
 	if (!node) {
@@ -165,19 +177,24 @@ static int pick_inmem_inode(struct defrag_ctx *dctx)
 	}
 
 	rb_erase(node, &dctx->itree);
-	mutex_unlock(&dctx->inner_tree_mtx);
 
 	/* Check if it's been processed before */
 	itnode = rb_entry(node, struct itree_rbnode, node);
 	ret = duet_chk_done(dctx->taskid, 0, itnode->btrfs_ino, 1);
 	if (ret == 1) {
 		kfree(itnode);
-		return 1;
+		removed++;
+		goto again;
 	}
+	mutex_unlock(&dctx->inner_tree_mtx);
+#ifdef CONFIG_BTRFS_DUET_DEFRAG_CPUMON
+	finish = ktime_get();
+	atomic64_add(ktime_us_delta(finish, start), &dctx->rbit_total_time);
+#endif /* CONFIG_BTRFS_DUET_DEFRAG_CPUMON */
 
-	defrag_dbg(KERN_DEBUG "duet-defrag: picked key (%u, %llu/%llu, %llu)",
+	printk(KERN_DEBUG "duet-defrag: picked key (%u, %llu/%llu, %llu) -- removed %d",
 		itnode->inmem_ratio, itnode->inmem_pages,
-		itnode->total_pages, itnode->btrfs_ino);
+		itnode->total_pages, itnode->btrfs_ino, removed);
 
 	/*
 	 * Search for the inode in the defrag root's commit root.
