@@ -327,9 +327,10 @@ static int defrag_subvol(struct defrag_ctx *dctx)
 		/* Get the inode */
 		inode = btrfs_iget(fs_info->sb, &found_key, defrag_root, NULL);
 		if (IS_ERR(inode)) {
-			printk(KERN_ERR "btrfs defrag: iget failed\n");
-			ret = PTR_ERR(inode);
-			goto out;
+			printk(KERN_ERR "btrfs defrag: iget failed, retrying\n");
+			//ret = PTR_ERR(inode);
+			//goto out;
+			continue;
 		}
 
 		/* We only process regular files */
