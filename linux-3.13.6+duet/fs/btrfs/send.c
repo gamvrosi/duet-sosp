@@ -1241,7 +1241,7 @@ static int find_extent_clone(struct send_ctx *sctx,
 	int compressed;
 	u32 i;
 
-	tmp_path = alloc_path_for_send();
+	tmp_path = btrfs_alloc_path();
 	if (!tmp_path)
 		return -ENOMEM;
 
@@ -1324,7 +1324,7 @@ static int find_extent_clone(struct send_ctx *sctx,
 
 	extent_item_pos = logical - found_key.objectid;
 	ret = iterate_extent_inodes(sctx->send_root->fs_info,
-					found_key.objectid, extent_item_pos, 1,
+					found_key.objectid, extent_item_pos, 0,
 					__iterate_backrefs, backref_ctx);
 
 	if (ret < 0)

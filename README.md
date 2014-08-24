@@ -25,3 +25,9 @@ Readahead:
 
 readahead only prefetches metadata, and inline data. extents are usually not
 stored in the extent tree (unless the data is inlined).
+
+Patches applied to btrfs send:
+------------------------------
+
+[PATCH] Btrfs: remove transaction from btrfs send [Wang Shilong]
+[PATCH v2] Btrfs: do not use extent commit root for sending [Wang Shilong]
