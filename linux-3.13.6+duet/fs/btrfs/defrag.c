@@ -303,11 +303,12 @@ static int defrag_subvol(struct defrag_ctx *dctx)
 		slot = path->slots[0];
 		btrfs_item_key_to_cpu(eb, &found_key, slot);
 
+		/* We upref'ed the inode. Release the locks */
+		btrfs_release_path(path);
+
 		/* If we couldn't find an inode, move on to the next */
-		if (found_key.type != BTRFS_INODE_ITEM_KEY) {
-			btrfs_release_path(path);
+		if (found_key.type != BTRFS_INODE_ITEM_KEY)
 			goto next;
-		}
 
 		/* Mark our progress before we process the inode.
 		 * This way, duet will ignore it as processed. */
@@ -319,7 +320,6 @@ static int defrag_subvol(struct defrag_ctx *dctx)
 		    found_key.objectid, 1) == 1) {
 			defrag_dbg(KERN_INFO "btrfs defrag: skipping inode "
 					"%llu\n", dctx->defrag_progress);
-			btrfs_release_path(path);
 			goto next;
 		}
 #endif /* CONFIG_BTRFS_DUET_DEFRAG */
@@ -329,12 +329,8 @@ static int defrag_subvol(struct defrag_ctx *dctx)
 		if (IS_ERR(inode)) {
 			printk(KERN_ERR "btrfs defrag: iget failed, skipping\n");
 			//ret = PTR_ERR(inode);
-			btrfs_release_path(path);
 			goto next;
 		}
-
-		/* We upref'ed the inode. Release the locks */
-		btrfs_release_path(path);
 
 		/* We only process regular files */
 		if ((inode->i_mode & S_IFMT) != S_IFREG) {
