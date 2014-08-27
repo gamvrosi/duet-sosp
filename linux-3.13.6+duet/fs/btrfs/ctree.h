@@ -3760,7 +3760,7 @@ int btrfs_defrag_file(struct inode *inode, struct file *file,
 int btrfs_defrag_file_trace(struct inode *inode, struct file *file,
 		      struct btrfs_ioctl_defrag_range_args *range,
 		      u64 newer_than, unsigned long max_pages,
-		      unsigned long *cache_hits);
+		      unsigned long *cache_hits, unsigned long *dirty_pages);
 #endif /* CONFIG_BTRFS_DUET_DEFRAG */
 void btrfs_get_block_group_info(struct list_head *groups_list,
 				struct btrfs_ioctl_space_info *space);

@@ -106,22 +106,22 @@ static int defrag_inode(struct inode *inode, struct defrag_ctx *dctx,
 			int out_of_order)
 {
 	int ret;
-	unsigned long cache_hits;
+	unsigned long cache_hits, dirty_pages;
 	struct btrfs_fs_info *fs_info = dctx->defrag_root->fs_info;
 
 	//sb_start_write(fs_info->sb);
 	ret = btrfs_defrag_file_trace(inode, NULL, &dctx->range,
-					0, 0, &cache_hits);
+				0, 0, &cache_hits, &dirty_pages);
 	//sb_end_write(fs_info->sb);
 
 	if (ret > 0) {
 		/* Update progress counters */
-		atomic64_add(ret * PAGE_SIZE, &fs_info->defrag_bytes_total);
+		atomic64_add(2*ret*PAGE_SIZE, &fs_info->defrag_bytes_total);
 #ifdef CONFIG_BTRFS_DUET_DEFRAG
 		if (out_of_order) {
-			atomic64_add(ret * PAGE_SIZE,
+			atomic64_add(2 * ret * PAGE_SIZE,
 				&fs_info->defrag_bytes_best_effort);
-			atomic64_add(cache_hits * PAGE_SIZE,
+			atomic64_add((dirty_pages + cache_hits) * PAGE_SIZE,
 				&fs_info->defrag_bytes_from_mem);
 		}
 #endif /* CONFIG_BTRFS_DUET_DEFRAG */

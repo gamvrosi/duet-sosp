@@ -1160,7 +1160,8 @@ static int cluster_pages_for_defrag_trace(struct inode *inode,
 					  struct page **pages,
 					  unsigned long start_index,
 					  unsigned long num_pages,
-					  unsigned long *cache_hits)
+					  unsigned long *cache_hits,
+					  unsigned long *dirty_pages)
 {
 	unsigned long file_end;
 	u64 isize = i_size_read(inode);
@@ -1197,9 +1198,6 @@ again:
 					   start_index + i, mask, &hit);
 		if (!page)
 			break;
-
-		if (hit)
-			(*cache_hits)++;
 
 		page_start = page_offset(page);
 		page_end = page_start + PAGE_CACHE_SIZE - 1;
@@ -1245,6 +1243,12 @@ again:
 
 		pages[i] = page;
 		i_done++;
+
+		if (hit)
+			(*cache_hits)++;
+
+		if (PageDirty(page))
+			(*dirty_pages)++;
 	}
 	if (!i_done || ret)
 		goto out;
@@ -1306,7 +1310,7 @@ out:
 int btrfs_defrag_file_trace(struct inode *inode, struct file *file,
 		      struct btrfs_ioctl_defrag_range_args *range,
 		      u64 newer_than, unsigned long max_to_defrag,
-		      unsigned long *cache_hits)
+		      unsigned long *cache_hits, unsigned long *dirty_pages)
 {
 	struct btrfs_root *root = BTRFS_I(inode)->root;
 	struct file_ra_state *ra = NULL;
@@ -1328,6 +1332,7 @@ int btrfs_defrag_file_trace(struct inode *inode, struct file *file,
 	struct page **pages = NULL;
 
 	*cache_hits = 0;
+	*dirty_pages = 0;
 
 	if (isize == 0)
 		return 0;
@@ -1447,7 +1452,7 @@ int btrfs_defrag_file_trace(struct inode *inode, struct file *file,
 		if (range->flags & BTRFS_DEFRAG_RANGE_COMPRESS)
 			BTRFS_I(inode)->force_compress = compress_type;
 		ret = cluster_pages_for_defrag_trace(inode, pages, i, cluster,
-								cache_hits);
+						cache_hits, dirty_pages);
 		if (ret < 0) {
 			mutex_unlock(&inode->i_mutex);
 			goto out_ra;
