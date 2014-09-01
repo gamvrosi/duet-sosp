@@ -43,6 +43,10 @@ int duet_bootstrap(void)
 	rcu_assign_pointer(duet_hook_fp, duet_hook);
 	synchronize_rcu();
 #endif /* CONFIG_DUET_CACHE */
+#ifdef CONFIG_DUET_CACHE
+	rcu_assign_pointer(duet_hook_blk_fp, duet_hook);
+	synchronize_rcu();
+#endif /* CONFIG_DUET_CACHE */
 	return 0;
 }
 
@@ -58,6 +62,10 @@ int duet_shutdown(void)
 
 #ifdef CONFIG_DUET_CACHE
 	rcu_assign_pointer(duet_hook_fp, NULL);
+	synchronize_rcu();
+#endif /* CONFIG_DUET_CACHE */
+#ifdef CONFIG_DUET_CACHE
+	rcu_assign_pointer(duet_hook_blk_fp, NULL);
 	synchronize_rcu();
 #endif /* CONFIG_DUET_CACHE */
 

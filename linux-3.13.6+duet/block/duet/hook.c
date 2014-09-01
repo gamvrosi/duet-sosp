@@ -17,6 +17,7 @@
  */
 #include <linux/buffer_head.h>
 #include <linux/blk_types.h>
+#include <linux/blkdev.h>
 #include <linux/bio.h>
 #include <linux/fs.h>
 #include "common.h"
@@ -201,6 +202,13 @@ void duet_page_hook(__u8 event_code, struct page *page)
 			(void *)page, DUET_DATA_PAGE);
 }
 
+void duet_blkreq_hook(__u8 event_code, struct request *rq)
+{
+	duet_handle_event(event_code, (void *)rq->bio->bi_bdev,
+		rq->bio->bi_size, rq->bio->bi_sector << 9, (void *)rq->bio,
+		DUET_DATA_BLKREQ);
+}
+
 void duet_hook(__u8 event_code, __u8 hook_type, void *hook_data)
 {
 	if (!duet_is_online())
@@ -237,6 +245,13 @@ void duet_hook(__u8 event_code, __u8 hook_type, void *hook_data)
 			event_code);
 #endif /* CONFIG_DUET_DEBUG */
 		duet_page_hook(event_code, (struct page *)hook_data);
+		break;
+	case DUET_SETUP_HOOK_BLKREQ:
+#ifdef CONFIG_DUET_DEBUG
+		printk(KERN_INFO "duet: Setting up BLKREQ hook (code %u)\n",
+			event_code);
+#endif /* CONFIG_DUET_DEBUG */
+		duet_blkreq_hook(event_code, (struct request *)hook_data);
 		break;
 	default:
 #ifdef CONFIG_DUET_DEBUG

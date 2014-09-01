@@ -40,6 +40,12 @@
 
 #include "blk.h"
 #include "blk-cgroup.h"
+#ifdef CONFIG_DUET_BLOCK
+#include <linux/duet.h>
+
+duet_hook_t *duet_hook_blk_fp = NULL;
+EXPORT_SYMBOL(duet_hook_blk_fp);
+#endif /* CONFIG_DUET_BLOCK */
 
 static DEFINE_SPINLOCK(elv_list_lock);
 static LIST_HEAD(elv_list);
@@ -750,11 +756,24 @@ EXPORT_SYMBOL(elv_abort_queue);
 void elv_completed_request(struct request_queue *q, struct request *rq)
 {
 	struct elevator_queue *e = q->elevator;
+#ifdef CONFIG_DUET_BLOCK
+	duet_hook_t *dhfp = NULL;
+#endif /* CONFIG_DUET_BLOCK */
 
 	/*
 	 * request is released from the driver, io must be done
 	 */
 	if (blk_account_rq(rq)) {
+#ifdef CONFIG_DUET_BLOCK
+		/* Pass by duet first */
+		rcu_read_lock();
+		dhfp = rcu_dereference(duet_hook_blk_fp);
+
+		if (dhfp)
+			dhfp(DUET_EVENT_BLKREQ, DUET_SETUP_HOOK_BLKREQ,
+								(void *)rq);
+		rcu_read_unlock();
+#endif /* CONFIG_DUET_BLOCK */
 		q->in_flight[rq_is_sync(rq)]--;
 		if ((rq->cmd_flags & REQ_SORTED) &&
 		    e->type->ops.elevator_completed_req_fn)
