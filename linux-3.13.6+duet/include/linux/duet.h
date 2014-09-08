@@ -56,7 +56,8 @@ enum {
 	DUET_SETUP_HOOK_BW_END,		/* sync: submit_bio_wait (after) */
 	DUET_SETUP_HOOK_BH,		/* async: submit_bh */
 	DUET_SETUP_HOOK_PAGE,		/* struct page hook after the event */
-	DUET_SETUP_HOOK_BLKREQ,		/* asynchronous block layer request */
+	DUET_SETUP_HOOK_BLKREQ_INIT,	/* block layer data request initiation */
+	DUET_SETUP_HOOK_BLKREQ_DONE,	/* block layer data request completion */
 };
 
 /* The special hook data struct needed for the darned submit_bio_wait */
@@ -103,7 +104,8 @@ struct duet_bw_hook_data {
  * is added to a device's dispatch queue. We replace the callback in the struct
  * request with a callback to Duet
  */
-#define DUET_EVENT_BLKREQ	(1 << 5)
+#define DUET_EVENT_BLKREQ_INIT	(1 << 5)
+#define DUET_EVENT_BLKREQ_DONE	(1 << 6)
 #endif /* CONFIG_DUET_BLOCK */
 
 /* Core interface functions */

@@ -40,15 +40,14 @@
 
 #include "blk.h"
 #include "blk-cgroup.h"
-#ifdef CONFIG_DUET_BLOCK
-#include <linux/duet.h>
-
-duet_hook_t *duet_hook_blk_fp = NULL;
-EXPORT_SYMBOL(duet_hook_blk_fp);
-#endif /* CONFIG_DUET_BLOCK */
 
 static DEFINE_SPINLOCK(elv_list_lock);
 static LIST_HEAD(elv_list);
+
+#ifdef CONFIG_DUET_BLOCK
+duet_hook_t *duet_hook_blk_fp = NULL;
+EXPORT_SYMBOL(duet_hook_blk_fp);
+#endif /* CONFIG_DUET_BLOCK */
 
 /*
  * Merge hash stuff.
@@ -770,8 +769,10 @@ void elv_completed_request(struct request_queue *q, struct request *rq)
 		dhfp = rcu_dereference(duet_hook_blk_fp);
 
 		if (dhfp)
-			dhfp(DUET_EVENT_BLKREQ, DUET_SETUP_HOOK_BLKREQ,
-								(void *)rq);
+			dhfp(DUET_EVENT_BLKREQ_DONE,
+			     DUET_SETUP_HOOK_BLKREQ_DONE,
+			     (void *)rq);
+
 		rcu_read_unlock();
 #endif /* CONFIG_DUET_BLOCK */
 		q->in_flight[rq_is_sync(rq)]--;

@@ -202,7 +202,13 @@ void duet_page_hook(__u8 event_code, struct page *page)
 			(void *)page, DUET_DATA_PAGE);
 }
 
-void duet_blkreq_hook(__u8 event_code, struct request *rq)
+void duet_blkreq_init_hook(__u8 event_code, struct bio *bio)
+{
+	duet_handle_event(event_code, (void *)bio->bi_bdev, bio->bi_size,
+		bio->bi_sector << 9, (void *)bio, DUET_DATA_BIO);
+}
+
+void duet_blkreq_done_hook(__u8 event_code, struct request *rq)
 {
 	duet_handle_event(event_code, (void *)rq->bio->bi_bdev,
 		rq->bio->bi_size, rq->bio->bi_sector << 9, (void *)rq->bio,
@@ -246,12 +252,19 @@ void duet_hook(__u8 event_code, __u8 hook_type, void *hook_data)
 #endif /* CONFIG_DUET_DEBUG */
 		duet_page_hook(event_code, (struct page *)hook_data);
 		break;
-	case DUET_SETUP_HOOK_BLKREQ:
+	case DUET_SETUP_HOOK_BLKREQ_INIT:
 #ifdef CONFIG_DUET_DEBUG
-		printk(KERN_INFO "duet: Setting up BLKREQ hook (code %u)\n",
+		printk(KERN_INFO "duet: Setting up BLKREQ_INIT hook (code %u)\n",
 			event_code);
 #endif /* CONFIG_DUET_DEBUG */
-		duet_blkreq_hook(event_code, (struct request *)hook_data);
+		duet_blkreq_init_hook(event_code, (struct bio *)hook_data);
+		break;
+	case DUET_SETUP_HOOK_BLKREQ_DONE:
+#ifdef CONFIG_DUET_DEBUG
+		printk(KERN_INFO "duet: Setting up BLKREQ_DONE hook (code %u)\n",
+			event_code);
+#endif /* CONFIG_DUET_DEBUG */
+		duet_blkreq_done_hook(event_code, (struct request *)hook_data);
 		break;
 	default:
 #ifdef CONFIG_DUET_DEBUG
