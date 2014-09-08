@@ -29,7 +29,7 @@
 #define TASK_NAME_LEN 128
 
 #ifdef CONFIG_DUET_CACHE
-extern void (*duet_hook_fp)(__u8, __u8, void *);
+extern void (*duet_hook_cache_fp)(__u8, __u8, void *);
 #endif /* CONFIG_DUET_CACHE */
 #ifdef CONFIG_DUET_BLOCK
 extern void (*duet_hook_blk_fp)(__u8, __u8, void *);

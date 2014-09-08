@@ -95,7 +95,7 @@ struct duet_bw_hook_data {
  */
 #define DUET_EVENT_CACHE_INSERT	(1 << 2)
 #define DUET_EVENT_CACHE_REMOVE	(1 << 3)
-//#define DUET_EVENT_CACHE_MODIFY	(1 << 4)
+#define DUET_EVENT_CACHE_MODIFY	(1 << 4)
 #endif /* CONFIG_DUET_CACHE */
 
 #ifdef CONFIG_DUET_BLOCK

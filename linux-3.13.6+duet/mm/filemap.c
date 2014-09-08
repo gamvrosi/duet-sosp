@@ -46,10 +46,8 @@
 #include <asm/mman.h>
 
 #ifdef CONFIG_DUET_CACHE
-#include <linux/duet.h>
-
-duet_hook_t *duet_hook_fp = NULL;
-EXPORT_SYMBOL(duet_hook_fp);
+duet_hook_t *duet_hook_cache_fp = NULL;
+EXPORT_SYMBOL(duet_hook_cache_fp);
 #endif /* CONFIG_DUET_CACHE */
 
 /*
@@ -126,7 +124,7 @@ void __delete_from_page_cache(struct page *page)
 	duet_hook_t *dhfp = NULL;
 
 	rcu_read_lock();
-	dhfp = rcu_dereference(duet_hook_fp);
+	dhfp = rcu_dereference(duet_hook_cache_fp);
 
 	/* TODO: Make sure that duet_hook doesn't sleep */
 	if (dhfp)
@@ -514,7 +512,7 @@ int add_to_page_cache_locked(struct page *page, struct address_space *mapping,
 
 #ifdef CONFIG_DUET_CACHE
 	rcu_read_lock();
-	dhfp = rcu_dereference(duet_hook_fp);
+	dhfp = rcu_dereference(duet_hook_cache_fp);
 
 	if (dhfp)
 		dhfp(DUET_EVENT_CACHE_INSERT, DUET_SETUP_HOOK_PAGE,
