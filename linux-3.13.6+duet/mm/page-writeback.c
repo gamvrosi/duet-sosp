@@ -2243,6 +2243,18 @@ EXPORT_SYMBOL(redirty_page_for_writepage);
 int set_page_dirty(struct page *page)
 {
 	struct address_space *mapping = page_mapping(page);
+#ifdef CONFIG_DUET_CACHE
+	duet_hook_t *dhfp = NULL;
+
+	rcu_read_lock();
+	dhfp = rcu_dereference(duet_hook_cache_fp);
+
+	/* TODO: Make sure that duet_hook doesn't sleep */
+	if (dhfp)
+		dhfp(DUET_EVENT_CACHE_MODIFY, DUET_SETUP_HOOK_PAGE,
+								(void *)page);
+	rcu_read_unlock();
+#endif /* CONFIG_DUET_CACHE */
 
 	if (likely(mapping)) {
 		int (*spd)(struct page *) = mapping->a_ops->set_page_dirty;

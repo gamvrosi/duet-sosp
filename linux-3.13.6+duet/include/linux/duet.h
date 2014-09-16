@@ -46,6 +46,7 @@ enum {
 	DUET_DATA_BIO = 1,		/* data points to a bio */
 	DUET_DATA_BH,			/* data points to a buffer head */
 	DUET_DATA_PAGE,			/* data points to a struct page */
+	DUET_DATA_BLKREQ,		/* data points to a struct request */
 };
 
 /* Hook types: these change depending on what we're hooking on */
@@ -55,6 +56,8 @@ enum {
 	DUET_SETUP_HOOK_BW_END,		/* sync: submit_bio_wait (after) */
 	DUET_SETUP_HOOK_BH,		/* async: submit_bh */
 	DUET_SETUP_HOOK_PAGE,		/* struct page hook after the event */
+	DUET_SETUP_HOOK_BLKREQ_INIT,	/* block layer data request initiation */
+	DUET_SETUP_HOOK_BLKREQ_DONE,	/* block layer data request completion */
 };
 
 /* The special hook data struct needed for the darned submit_bio_wait */
@@ -92,8 +95,18 @@ struct duet_bw_hook_data {
  */
 #define DUET_EVENT_CACHE_INSERT	(1 << 2)
 #define DUET_EVENT_CACHE_REMOVE	(1 << 3)
-//#define DUET_EVENT_CACHE_MODIFY	(1 << 4)
+#define DUET_EVENT_CACHE_MODIFY	(1 << 4)
 #endif /* CONFIG_DUET_CACHE */
+
+#ifdef CONFIG_DUET_BLOCK
+/*
+ * BLOCK_READ and BLOCK_WRITE are expected to be triggered when a block request
+ * is added to a device's dispatch queue. We replace the callback in the struct
+ * request with a callback to Duet
+ */
+#define DUET_EVENT_BLKREQ_INIT	(1 << 5)
+#define DUET_EVENT_BLKREQ_DONE	(1 << 6)
+#endif /* CONFIG_DUET_BLOCK */
 
 /* Core interface functions */
 int duet_task_register(__u8 *taskid, const char *name, __u32 blksize,
