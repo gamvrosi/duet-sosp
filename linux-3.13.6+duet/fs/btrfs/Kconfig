@@ -170,6 +170,7 @@ config BTRFS_DUET_DEFRAG
 	depends on BTRFS_FS
 	select DUET
 	select DUET_CACHE
+	select BTRFS_DEFRAG
 	select BTRFS_FS_MAPPING
 	help
 	  Adds support for the btrfs defrag to collaborate with other tasks

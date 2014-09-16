@@ -1154,7 +1154,7 @@ out:
 
 }
 
-#if CONFIG_BTRFS_DUET_DEFRAG
+#ifdef CONFIG_BTRFS_DUET_DEFRAG
 /* Same as cluster_pages_for_defrag, but instrumented to return cache hits */
 static int cluster_pages_for_defrag_trace(struct inode *inode,
 					  struct page **pages,

@@ -3701,12 +3701,16 @@ verbose_printk("btrfs: send_write offset=%llu, len=%d\n", offset, len);
 	if (ret < 0)
 		goto out;
 
+#ifdef CONFIG_BTRFS_DUET_BACKUP
 	start = ktime_get();
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
 	num_read = fill_read_buf(sctx, sctx->read_buf, sctx->cur_ino, offset,
 									len);
+#ifdef CONFIG_BTRFS_DUET_BACKUP
 	finish = ktime_get();
 	sctx->send_root->fs_info->send_elapsed_rtime +=
 						ktime_us_delta(finish, start);
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
 
 	if (num_read <= 0) {
 		if (num_read < 0)

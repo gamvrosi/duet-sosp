@@ -30,4 +30,24 @@ Patches applied to btrfs send:
 ------------------------------
 
 [PATCH] Btrfs: remove transaction from btrfs send [Wang Shilong]
+
 [PATCH v2] Btrfs: do not use extent commit root for sending [Wang Shilong]
+
+Ubuntu Dependencies:
+-------------
+
+For the kernel:
+
+build-essential
+kernel-package
+
+For the tools:
+
+uuid-dev
+libblkid-dev
+libz-dev
+liblzo2-dev
+libattr1-dev
+libacl1-dev
+e2fslibs-dev
+
