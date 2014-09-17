@@ -73,7 +73,11 @@ struct itree_rbnode {
 };
 
 #ifdef CONFIG_BTRFS_DUET_DEFRAG
-#define get_ratio(inmem, total)	((inmem) * 100) / (total)
+#define get_ratio(ret, inmem, total)	\
+	do {				\
+		ret = (inmem) * 100;	\
+		do_div(ret, total);	\
+	} while (0);
 
 /* Preps the itnode for insert. Note that we also increment nrpages! */
 static int itnode_init(struct itree_rbnode **itn)
@@ -440,8 +444,8 @@ static int update_itree(struct defrag_synwork *dwork)
 #endif /* CONFIG_BTRFS_DUET_DEFRAG_CPUMON */
 
 	/* Calculate the current inmem ratio, and the updated one */
-	cur_inmem_ratio = get_ratio(dwork->inmem_pages, dwork->total_pages);
-	new_inmem_ratio = get_ratio(dwork->inmem_pages +
+	get_ratio(cur_inmem_ratio, dwork->inmem_pages, dwork->total_pages);
+	get_ratio(new_inmem_ratio, dwork->inmem_pages +
 		(dwork->event_code == DUET_EVENT_CACHE_INSERT ? 1 : -1),
 		dwork->total_pages);
 
@@ -790,7 +794,7 @@ out:
 
 #ifdef CONFIG_BTRFS_DUET_DEFRAG_CPUMON
 	printk(KERN_DEBUG "defrag: CPU time spent updating the RBIT: %llds\n",
-		(long long) (atomic64_read(&dctx->rbit_total_time) / 1E6));
+		(long long) div64_u64(atomic64_read(&dctx->rbit_total_time), 1E6));
 #endif /* CONFIG_BTRFS_DUET_DEFRAG_CPUMON */
 
 	/* Deregister the task from the Duet framework */
@@ -873,11 +877,13 @@ long btrfs_ioctl_defrag_progress(struct btrfs_root *root, void __user *arg)
 	} else if (atomic_read(&fs_info->defrag_fs_running)) {
 		da->progress.running = 1;
 		da->progress.elapsed_time = (jiffies -
-			atomic64_read(&fs_info->defrag_start_jiffies)) / HZ;
+			atomic64_read(&fs_info->defrag_start_jiffies));
+		do_div(da->progress.elapsed_time, HZ);
 	} else {
 		da->progress.running = 0;
 		da->progress.elapsed_time =
-			atomic64_read(&fs_info->defrag_start_jiffies) / HZ;
+			atomic64_read(&fs_info->defrag_start_jiffies);
+		do_div(da->progress.elapsed_time, HZ);
 	}
 
 	da->progress.bytes_total = atomic64_read(&fs_info->defrag_bytes_total);

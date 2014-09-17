@@ -89,7 +89,7 @@ static int bmaptree_chkupd(struct duet_task *task, __u64 start, __u64 lbn,
 			__u32 len, __u8 set, __u8 chk)
 {
 	int ret, found;
-	__u64 cur_lbn, node_lbn, lbn_gran, cur_len, rlbn;
+	__u64 cur_lbn, node_lbn, lbn_gran, cur_len, rlbn, div_rem;
 	__u32 i, rem_len;
 	struct rb_node **link, *parent;
 	struct duet_rbnode *dnode = NULL;
@@ -106,7 +106,8 @@ static int bmaptree_chkupd(struct duet_task *task, __u64 start, __u64 lbn,
 	cur_lbn = rlbn;
 	rem_len = len;
 	lbn_gran = task->blksize * task->bmapsize * 8;
-	node_lbn = rlbn - (rlbn % lbn_gran);
+	div64_u64_rem(rlbn, lbn_gran, &div_rem);
+	node_lbn = rlbn - div_rem;
 
 	/*
 	 * Obtain RBBT lock. This will slow us down, but only the work queue

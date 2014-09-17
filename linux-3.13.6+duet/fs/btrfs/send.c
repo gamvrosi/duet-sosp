@@ -5708,16 +5708,20 @@ long btrfs_ioctl_send_progress(struct btrfs_root *root, void __user *arg)
 		sa->progress.elapsed_time = 0;
 	} else if (atomic_read(&fs_info->send_running)) {
 		sa->progress.running = 1;
-		sa->progress.elapsed_time = (jiffies -
-			atomic64_read(&fs_info->send_start_jiffies)) / HZ;
+		sa->progress.elapsed_time = jiffies -
+			atomic64_read(&fs_info->send_start_jiffies);
+		do_div(sa->progress.elapsed_time, HZ);
 	} else {
 		sa->progress.running = 0;
 		sa->progress.elapsed_time =
-			atomic64_read(&fs_info->send_start_jiffies) / HZ;
+			atomic64_read(&fs_info->send_start_jiffies);
+		do_div(sa->progress.elapsed_time, HZ);
 	}
 
-	sa->progress.elapsed_rtime = (u32) (fs_info->send_elapsed_rtime / 1E6);
-	sa->progress.elapsed_wtime = (u32) (fs_info->send_elapsed_wtime / 1E6);
+	sa->progress.elapsed_rtime = fs_info->send_elapsed_rtime;
+	do_div(sa->progress.elapsed_rtime, 1E6);
+	sa->progress.elapsed_wtime = fs_info->send_elapsed_wtime;
+	do_div(sa->progress.elapsed_wtime, 1E6);
 	sa->progress.sent_total_bytes =
 		atomic64_read(&fs_info->send_total_bytes);
 	sa->progress.sent_best_effort =

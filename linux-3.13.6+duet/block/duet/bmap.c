@@ -115,12 +115,16 @@ static void duet_bmap_set_bits(__u8 *bmap, __u32 start, __u32 num, __u8 set)
 int duet_bmap_set(__u8 *bmap, __u32 bmap_bytelen, __u64 first_byte,
 	__u32 blksize, __u64 req_byte, __u32 req_bytelen, __u8 set)
 {
-	__u32 start, num;
+	__u64 start, num;
 
 	/* TODO: Examine to check if it would mark a block which is only
 	 * partially included in the range */
-	start = (req_byte - first_byte) / blksize;
-	num = req_bytelen / blksize + (req_bytelen % blksize ? 1 : 0);
+	start = (req_byte - first_byte);
+	do_div(start, blksize);
+
+	num = req_bytelen;
+	if (do_div(num, blksize))
+		num++;
 
 	if (start + num >= (first_byte + (bmap_bytelen * 8 * blksize)))
 		return -1;
@@ -196,10 +200,13 @@ static int duet_bmap_chk_bits(__u8 *bmap, __u32 start, __u32 num, __u8 set)
 int duet_bmap_chk(__u8 *bmap, __u32 bmap_bytelen, __u64 first_byte,
 	__u32 blksize, __u64 req_byte, __u32 req_bytelen, __u8 set)
 {
-	__u32 start, num;
+	__u64 start, num;
 
-	start = (req_byte - first_byte) / blksize;
-	num = req_bytelen / blksize + (req_bytelen % blksize ? 1 : 0);
+	start = (req_byte - first_byte);
+	do_div(start, blksize);
+	num = req_bytelen;
+	if (do_div(num, blksize))
+		num++;
 
 	if (start + num >= (first_byte + (bmap_bytelen * 8 * blksize)))
 		return -1;

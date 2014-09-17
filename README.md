@@ -40,6 +40,7 @@ For the kernel:
 
 build-essential
 kernel-package
+libncurses5-dev
 
 For the tools:
 
