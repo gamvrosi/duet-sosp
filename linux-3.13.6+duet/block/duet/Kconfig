@@ -58,6 +58,16 @@ config DUET_CACHE
 
 	  If unsure, say N.
 
+config DUET_BMAP_STATS
+	bool "Duet RBBT stats support"
+	depends on DUET
+
+	help
+	  This option enabled support for keeping statistics about RBBT
+	  memory consumption
+
+	  If unsure, say N.
+
 config DUET_DEBUG
 	bool "Duet debugging support"
 	depends on DUET

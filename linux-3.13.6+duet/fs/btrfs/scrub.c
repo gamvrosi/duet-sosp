@@ -190,6 +190,10 @@ struct scrub_ctx {
 	spinlock_t		stat_lock;
 
 #ifdef CONFIG_BTRFS_DUET_SCRUB
+#ifdef CONFIG_BTRFS_DUET_BMAP_STATS
+	__u64			last_physical;
+#endif /* CONFIG_BTRFS_DUET_BMAP_STATS */
+
 	__u8			taskid;
 	struct block_device	*scrub_bdev;
 	spinlock_t		wq_lock;
@@ -708,6 +712,13 @@ static void btrfs_scrub_duet_handler(__u8 taskid, __u8 event_code, void *owner,
 #ifdef CONFIG_BTRFS_FS_SCRUB_DEBUG
 	printk(KERN_DEBUG "duet: In the btrfs_scrub_duet_handler\n");
 #endif /* CONFIG_BTRFS_FS_SCRUB_DEBUG */
+
+#ifdef CONFIG_BTRFS_DUET_BMAP_STATS
+	if (sctx->stats.last_physical > sctx->last_physical + 32768) {
+		sctx->last_physical = sctx->stats.last_physical;
+		duet_trim_rbbt(taskid, sctx->last_physical);
+	}
+#endif /* CONFIG_BTRFS_DUET_BMAP_STATS */
 
 	/* Verify that this event code is valid (redundant) */
 	if (!(event_code & (DUET_EVENT_BTRFS_WRITE | DUET_EVENT_BTRFS_READ)))

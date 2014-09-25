@@ -48,6 +48,16 @@ static struct duet_rbnode *dnode_init(struct duet_task *task, __u64 lbn)
 {
 	struct duet_rbnode *dnode = NULL;
 
+#ifdef CONFIG_DUET_BMAP_STATS
+	(task->curnodes)++;
+	if (task->curnodes > task->maxnodes) {
+		task->maxnodes = task->curnodes;
+		printk(KERN_INFO "duet: Task #%d (%s) has %llu nodes in its RBBT.\n"
+			"      That's %llu bytes.\n", task->id, task->name,
+			task->maxnodes, task->maxnodes * task->bmapsize);
+	}
+#endif /* CONFIG_DUET_BMAP_STATS */
+	
 	dnode = kzalloc(sizeof(*dnode), GFP_NOFS);
 	if (!dnode)
 		return NULL;
@@ -230,9 +240,13 @@ static int bmaptree_chkupd(struct duet_task *task, __u64 start, __u64 lbn,
 					}
 				}
 
-				if (!ret)
+				if (!ret) {
 					dnode_dispose(dnode, parent,
 						&task->bmaptree);
+#ifdef CONFIG_DUET_BMAP_STATS
+				        (task->curnodes)--;
+#endif /* CONFIG_DUET_BMAP_STATS */
+				}
 			}
 		}
 
@@ -272,12 +286,35 @@ static struct duet_task *find_task(__u8 taskid)
 	return task;
 }
 
+#ifdef CONFIG_DUET_BMAP_STATS
+static int bmaptree_trim(struct duet_task *task, __u64 end)
+{
+        struct rb_node *rbnode;
+        struct duet_rbnode *dnode;
+
+        while (!RB_EMPTY_ROOT(&task->bmaptree)) {
+                rbnode = rb_first(&task->bmaptree);
+                dnode = rb_entry(rbnode, struct duet_rbnode, node);
+
+		/* Check whether we can dispose of this node */
+		if (dnode->lbn + (task->bmapsize * 8) <= end)
+			dnode_dispose(dnode, rbnode, &task->bmaptree);
+		else
+			break;
+        }
+	mutex_unlock(&task->bmaptree_mutex);
+
+	return 0;
+}
+#endif /* CONFIG_DUET_BMAP_STATS */
+
 static int bmaptree_print(struct duet_task *task)
 {
 	struct duet_rbnode *dnode = NULL;
 	struct rb_node *node;
 	__u32 bits_on;
 
+	mutex_lock(&task->bmaptree_mutex);
 	printk(KERN_INFO "duet: Printing RBBT for task #%d\n", task->id);
 	node = rb_first(&task->bmaptree);
 	while (node) {
@@ -291,6 +328,7 @@ static int bmaptree_print(struct duet_task *task)
 
 		node = rb_next(node);
 	}
+	mutex_unlock(&task->bmaptree_mutex);
 
 	return 0;
 }
@@ -319,6 +357,31 @@ static int duet_mark_chkupd(__u8 taskid, __u64 start, __u64 lbn, __u32 len,
 
 	return ret;
 }
+
+#ifdef CONFIG_DUET_BMAP_STATS
+/* Trim down unnecessary nodes from the RBBT */
+int duet_trim_rbbt(__u8 taskid, __u64 end)
+{
+	struct duet_task *task;
+
+	task = find_task(taskid);
+	if (!task)
+		return -ENOENT;
+
+	if (bmaptree_trim(task, end)) {
+		printk(KERN_ERR "duet: failed to trim tree for task %d\n",
+			task->id);
+		return -1;
+	}
+
+	/* decref and wake up cleaner if needed */
+	if (atomic_dec_and_test(&task->refcount))
+		wake_up(&task->cleaner_queue);
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(duet_trim_rbbt);
+#endif /* CONFIG_DUET_BMAP_STATS */
 
 /* Do a preorder print of the red-black bitmap tree */
 int duet_print_rbt(__u8 taskid)

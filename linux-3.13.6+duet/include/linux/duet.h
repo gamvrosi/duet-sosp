@@ -129,4 +129,8 @@ int duet_print_rbt(__u8 taskid);
 void duet_hook(__u8 event_type, __u8 hook_type, void *hook_data);
 void duet_bh_endio(struct buffer_head *bh, int uptodate);
 
+#ifdef CONFIG_DUET_BMAP_STATS
+int duet_trim_rbbt(__u8 taskid, __u64 end);
+#endif /* CONFIG_DUET_BMAP_STATS */
+
 #endif /* _DUET_H */

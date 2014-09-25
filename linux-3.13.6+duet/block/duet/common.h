@@ -60,6 +60,10 @@ struct duet_task {
 	__u32			bmapsize;		/* bytes per bmap */
 	struct mutex		bmaptree_mutex;
 	struct rb_root		bmaptree;
+#ifdef CONFIG_DUET_BMAP_STATS
+	__u64			curnodes;	/* Current # of RBBT nodes */
+	__u64			maxnodes;	/* Max # of RBBT nodes */
+#endif /* CONFIG_DUET_BMAP_STATS */
 
 	/* event handling */
 	__u8			event_mask;
