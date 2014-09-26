@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Check that we're running on Ubuntu. We're picky like that.
-if [[ !`grep "DISTRIB_ID=Ubuntu" /etc/lsb-release` ]]; then
+if [[ ! `grep "DISTRIB_ID=Ubuntu" /etc/lsb-release` ]]; then
 	echo "Duet is currently only supported on Ubuntu. Sorry." >&2
 	exit 1
 fi
