@@ -1,9 +1,15 @@
 #!/bin/bash
 
+# Check that we're running on Ubuntu. We're picky like that.
+if [[ ! `grep "DISTRIB_ID=Ubuntu" /etc/lsb-release` ]]; then
+	echo "Duet is currently only supported on Ubuntu. Sorry." >&2
+	exit 1
+fi
+
 while getopts ":dci" opt; do
 	case $opt in
 	d)
-		echo "Installing dependencies..." >&2
+		echo "Installing dependencies..."
 
 		# Install kernel dependencies
 		sudo apt-get install build-essential kernel-package \
@@ -13,7 +19,7 @@ while getopts ":dci" opt; do
 		sudo apt-get install uuid-dev libblkid-dev libz-dev liblzo2-dev \
 			libattr1-dev libacl1-dev e2fslibs-dev
 
-		echo "Done processing dependencies. Exiting." >&2
+		echo "Done processing dependencies. Exiting."
 		exit 0
 		;;
 	c)
