@@ -210,6 +210,15 @@ void duet_blkreq_init_hook(__u8 event_code, struct bio *bio)
 
 void duet_blkreq_done_hook(__u8 event_code, struct request *rq)
 {
+	/*
+	 * TODO: When we finally get to use these hooks, figure out which
+	 * fields are actually needed by the handlers that speak to the block
+	 * layer. Until then, we'll bail if the a bio doesn't exist for the
+	 * request.
+	 */
+	if (!rq->bio)
+		return;
+
 	duet_handle_event(event_code, (void *)rq->bio->bi_bdev,
 		rq->bio->bi_size, rq->bio->bi_sector << 9, (void *)rq->bio,
 		DUET_DATA_BLKREQ);

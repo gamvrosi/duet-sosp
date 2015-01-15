@@ -122,6 +122,9 @@ struct send_ctx {
 	u64 cur_inode_mode;
 
 	u64 send_progress;
+#ifdef CONFIG_BTRFS_DUET_BMAP_STATS
+	u64 last_progress;
+#endif /* CONFIG_BTRFS_DUET_BMAP_STATS */
 
 	struct list_head new_refs;
 	struct list_head deleted_refs;
@@ -153,6 +156,9 @@ struct send_synwork {
 	unsigned int bvec_offt;
 
 	char *send_buf;
+	char *page_buf;
+	u8 page_valid;
+	u32 *csum_buf;
 #endif /* CONFIG_BTRFS_DUET_BACKUP */
 };
 
@@ -4952,7 +4958,6 @@ static int __send_o3_cmd(void *send_buf, u32 *send_size, struct send_ctx *sctx)
 	return ret;
 }
 
-
 static int __tlv_put_o3_data(void *send_buf, u32 *send_size, u16 attr,
 			struct send_synwork *swork, u64 *iofft, u64 *ilen)
 {
@@ -4982,30 +4987,40 @@ static int __tlv_put_o3_data(void *send_buf, u32 *send_size, u16 attr,
 		if (!len)
 			break;
 
-		addr = kmap(bvec->bv_page);
+		if (!swork->page_valid) {
+			addr = kmap(bvec->bv_page);
+			memcpy(swork->page_buf, addr + bvec->bv_offset,
+								bvec->bv_len);
+			kunmap(bvec->bv_page);
+			if (swork->csum_buf[swork->bvec_idx] != crc32c(0,
+			    swork->page_buf + bvec->bv_offset, bvec->bv_len)) {
+				printk(KERN_ERR "duet-send: found modified page, "
+					"giving up write (that's ok).\n");
+				return -ENODATA;
+			}
+			swork->page_valid = 1;
+		}
+
 		bvec_rem = bvec->bv_len - swork->bvec_offt;
 
 		/* If remaining bytes are more than those in bvec,
 		 * copy what's left in this bvec, and move on */
 		if (len >= bvec_rem) {
-			memcpy(hdr + 1,
-			       addr + bvec->bv_offset + swork->bvec_offt,
-			       bvec_rem);
+			memcpy(hdr + 1, swork->page_buf + bvec->bv_offset +
+				swork->bvec_offt, bvec_rem);
 			swork->bvec_offt = 0;
 			len -= bvec_rem;
 		/* Otherwise, copy as many bytes as needed, move offset,
 		 * and break out of the loop */
 		} else {
-			memcpy(hdr + 1,
-			       addr + bvec->bv_offset + swork->bvec_offt,
-			       len);
+			memcpy(hdr + 1, swork->page_buf + bvec->bv_offset +
+				swork->bvec_offt, len);
 			swork->bvec_offt += len;
 			len = 0;
-			kunmap(bvec->bv_page);
 			break;
 		}
 
-		kunmap(bvec->bv_page);
+		swork->page_valid = 0;
 	}
 
 	if (len) {
@@ -5156,6 +5171,32 @@ static inline int put_bio_pages(struct bio *bio, unsigned short maxidx)
 	return __refcount_bio_pages(bio, maxidx, 0);
 }
 
+static int crc_bio_pages(struct bio *bio, unsigned short maxidx, u32 *csum_buf)
+{
+	int segno = 0;
+	struct bio_vec *bvec;
+	char *addr;
+
+#ifdef CONFIG_BTRFS_DUET_BACKUP_DEBUG
+	printk(KERN_DEBUG "bio_pages: crc'ing for bi_idx %d, bi_vcnt %d\n",
+		bio->bi_idx, bio->bi_vcnt);
+#endif /* CONFIG_BTRFS_DUET_BACKUP_DEBUG */
+
+	bio_for_each_segment_range(bvec, bio, segno, maxidx) {
+#ifdef CONFIG_BTRFS_DUET_BACKUP_DEBUG
+		printk(KERN_DEBUG "bio_pages: page #%u: bv_page %p, bv_len %u,"
+			" bv_offt %u\n", segno, bvec->bv_page, bvec->bv_len,
+			bvec->bv_offset);
+#endif /* CONFIG_BTRFS_DUET_BACKUP_DEBUG */
+		addr = kmap(bvec->bv_page);
+		csum_buf[segno] = crc32c(0, addr + bvec->bv_offset,
+								bvec->bv_len);
+		kunmap(bvec->bv_page);
+	}
+
+	return 0;
+}
+
 /*
  * This is the core of the synergistic backup. We are passed the physical range
  * that was read. We first tease out the ranges of pages/blocks that are of
@@ -5182,7 +5223,15 @@ static void __handle_read_event(struct work_struct *work)
 
 	swork->send_buf = vmalloc(BTRFS_SEND_BUF_SIZE);
 	if (!swork->send_buf) {
-		printk(KERN_ERR "duet-read: failed to allocate send buffer\n");
+		printk(KERN_ERR "duet-send: failed to allocate send buffer\n");
+		goto buf_err;
+	}
+
+	swork->page_valid = 0;
+	swork->page_buf = vmalloc(PAGE_SIZE);
+	if (!swork->page_buf) {
+		printk(KERN_ERR "duet-send: failed to allocate page buffer\n");
+		kfree(swork->send_buf);
 		goto buf_err;
 	}
 
@@ -5198,7 +5247,7 @@ static void __handle_read_event(struct work_struct *work)
 		int ret = 0;
 
 #ifdef CONFIG_BTRFS_DUET_BACKUP_DEBUG
-		printk(KERN_DEBUG "duet-read: looking for unset ranges in "
+		printk(KERN_DEBUG "duet-send: looking for unset ranges in "
 			"[%llu, %llu]\n", cur_lbn, cur_len);
 #endif /* CONFIG_BTRFS_DUET_BACKUP_DEBUG */
 
@@ -5221,7 +5270,7 @@ static void __handle_read_event(struct work_struct *work)
 		if (duet_mark_done(swork->sctx->taskid,
 				swork->bdev->bd_part->start_sect << 9,
 				wrctx.unset_pofft, wrctx.unset_len)) {
-			printk(KERN_ERR "duet-read: failed to mark range p%llu"
+			printk(KERN_ERR "duet-send: failed to mark range p%llu"
 				" %llub\n", wrctx.unset_pofft, wrctx.unset_len);
 			goto out;
 		}
@@ -5251,7 +5300,7 @@ static void __handle_read_event(struct work_struct *work)
 		}
 
 		if (wrctx.skipped_bytes) {
-			printk(KERN_ERR "duet-read: somehow we skipped more "
+			printk(KERN_ERR "duet-send: somehow we skipped more "
 				"data than that available in the bio. This is "
 				"probably a bug (left = %llu).\n",
 				wrctx.skipped_bytes);
@@ -5264,12 +5313,21 @@ static void __handle_read_event(struct work_struct *work)
 				swork->sctx->send_root, send_o3_write,
 				(void *)swork);
 		if (ret && ret != -ENOENT) {
-			printk(KERN_ERR "duet-read: failed to go over i-ranges"
+			printk(KERN_ERR "duet-send: failed to go over i-ranges"
 				" in range p%llu %llub\n", wrctx.unset_pofft,
 				wrctx.unset_len);
-			goto out;
+
+			/* Unmark the bits */
+			if (duet_mark_todo(swork->sctx->taskid,
+				swork->bdev->bd_part->start_sect << 9,
+				wrctx.unset_pofft, wrctx.unset_len))
+				printk(KERN_ERR "duet-send: failed to mark range p%llu"
+					" %llub\n", wrctx.unset_pofft, wrctx.unset_len);
+
+			if (ret != -ENODATA)
+				goto out;
 		} else if (ret == -ENOENT) {
-			printk(KERN_INFO "duet-read: found no i-ranges in send"
+			printk(KERN_INFO "duet-send: found no i-ranges in send"
 				" root for p%llu %llub (and that's ok).\n",
 				wrctx.unset_pofft, wrctx.unset_len);
 		}
@@ -5283,6 +5341,7 @@ static void __handle_read_event(struct work_struct *work)
 	printk(KERN_DEBUG "__handle_read_event: done\n");
 #endif /* CONFIG_BTRFS_DUET_BACKUP_DEBUG */
 out:
+	vfree(swork->page_buf);
 	vfree(swork->send_buf);
 buf_err:
 	/* Let the bio go */
@@ -5302,6 +5361,13 @@ static void btrfs_send_duet_handler(__u8 taskid, __u8 event_code, void *owner,
 	/* TODO: Support buffer_head data type */
 	if (data_type != DUET_DATA_BIO)
 		return;
+
+#ifdef CONFIG_BTRFS_DUET_BMAP_STATS
+	if (sctx->send_progress > sctx->last_progress + 32768) {
+                sctx->last_progress = sctx->send_progress;
+                duet_trim_rbbt(taskid, sctx->last_progress);
+        }
+#endif /* CONFIG_BTRFS_DUET_BMAP_STATS */
 
 	switch(event_code) {
 	case DUET_EVENT_BTRFS_READ:
@@ -5328,20 +5394,30 @@ static void btrfs_send_duet_handler(__u8 taskid, __u8 event_code, void *owner,
 		swork->sctx = sctx;
 		swork->bio = (struct bio *)data;
 		swork->bvec_maxidx = swork->bio->bi_idx;
+		swork->csum_buf = (u32 *)kzalloc(sizeof(u32) *
+						swork->bio->bi_idx, GFP_ATOMIC);
+		if (!swork->csum_buf) {
+			printk(KERN_ERR "duet-send: failed to allocate csum buf\n");
+			kfree(swork);
+			return;
+		}
 
 		/*
-		 * Get a hold on that bio, so that it doesn't go away. Also
-		 * get a hold on all its pages. This is sufficient because
-		 * our snapshot is read-only, so the contents won't change.
+		 * Get a hold on that bio, so that it doesn't go away. Also get
+		 * a hold on all its pages. Also CRC all the pages to make sure
+		 * later that we're sending the right data, e.g. in the case
+		 * that a partial write changes the data after the read.
 		 */
 		bio_get(swork->bio);
 		get_bio_pages(swork->bio, swork->bvec_maxidx);
+		crc_bio_pages(swork->bio, swork->bvec_maxidx, swork->csum_buf);
 
 		spin_lock(&sctx->wq_lock);
 		if (!sctx->syn_wq || queue_work(sctx->syn_wq,
 					(struct work_struct *)swork) != 1) {
 			printk(KERN_ERR "duet-send: failed to queue up work\n");
 			spin_unlock(&sctx->wq_lock);
+			kfree(swork->csum_buf);
 			kfree(swork);
 			return;
 		}

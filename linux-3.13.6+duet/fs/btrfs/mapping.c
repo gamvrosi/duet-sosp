@@ -291,8 +291,11 @@ static int __extrefs_to_iranges(struct btrfs_extent_item *ei,
 				iofft, vlen);
 #endif /* CONFIG_BTRFS_FS_MAPPING_DEBUG */
 
-			if (iterate)
-				iterate(iofft, vlen, (void *)&ino, privdata);
+			if (iterate) {
+				ret = iterate(iofft, vlen, (void *)&ino, privdata);
+				if (ret == -ENODATA)
+					goto out;
+			}
 		}
 
 next:
