@@ -79,17 +79,6 @@ struct itree_rbnode {
 		do_div(ret, total);	\
 	} while (0);
 
-/* Preps the itnode for insert. Note that we also increment nrpages! */
-static int itnode_init(struct itree_rbnode **itn)
-{
-	*itn = kzalloc(sizeof(**itn), GFP_NOFS);
-	if (!(*itn))
-		return 1;
-
-	RB_CLEAR_NODE(&(*itn)->node);
-	return 0;
-}
-
 static void itree_dispose(struct rb_root *root)
 {
 	struct rb_node *rbnode;
@@ -488,11 +477,13 @@ static int update_itree(struct defrag_synwork *dwork)
 
 	/* If we didn't find it and should create/insert, do so and return */
 	if (!found && dwork->event_code == DUET_EVENT_CACHE_INSERT) {
-		if (itnode_init(&itn)) {
+		itn = kzalloc(sizeof(*itn), GFP_NOFS);
+		if (!itn) {
 			printk(KERN_ERR "duet-defrag: itnode alloc failed\n");
 			ret = 1;
 			goto out;
 		}
+		RB_CLEAR_NODE(&(itn->node));
 
 		/* Update the itnode */
 		itn->btrfs_ino = dwork->btrfs_ino;

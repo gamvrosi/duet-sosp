@@ -48,9 +48,6 @@
 #include "rcu-string.h"
 #include "dev-replace.h"
 #include "raid56.h"
-#ifdef CONFIG_DUET_BTRFS
-#include <linux/duet.h>
-#endif /* CONFIG_DUET_BTRFS */
 
 #ifdef CONFIG_X86
 #include <asm/cpufeature.h>
@@ -3166,14 +3163,6 @@ static int write_dev_supers(struct btrfs_device *device,
 			bh->b_private = device;
 		}
 
-#ifdef CONFIG_DUET_BTRFS
-#ifdef CONFIG_DUET_DEBUG
-		printk(KERN_DEBUG "duet: hooking on write_dev_supers\n");
-#endif /* CONFIG_DUET_DEBUG */
-		duet_hook(DUET_EVENT_BTRFS_WRITE, DUET_SETUP_HOOK_BH,
-			(void *)bh);
-#endif /* CONFIG_DUET_BTRFS */
-
 		/*
 		 * we fua the first super.  The others we allow
 		 * to go down lazy.
@@ -3256,14 +3245,6 @@ static int write_dev_flush(struct btrfs_device *device, int wait)
 	device->flush_bio = bio;
 
 	bio_get(bio);
-#if 0
-#ifdef CONFIG_DUET_BTRFS
-#ifdef CONFIG_DUET_DEBUG
-	printk(KERN_DEBUG "duet: hooking on write_dev_flush\n");
-#endif /* CONFIG_DUET_DEBUG */
-	duet_hook(DUET_EVENT_BTRFS_WRITE, DUET_SETUP_HOOK_BA, (void *)bio);
-#endif /* CONFIG_DUET_BTRFS */
-#endif /* 0 */
 	btrfsic_submit_bio(WRITE_FLUSH, bio);
 
 	return 0;

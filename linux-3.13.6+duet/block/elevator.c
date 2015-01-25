@@ -45,8 +45,7 @@ static DEFINE_SPINLOCK(elv_list_lock);
 static LIST_HEAD(elv_list);
 
 #ifdef CONFIG_DUET_BLOCK
-duet_hook_t *duet_hook_blk_fp = NULL;
-EXPORT_SYMBOL(duet_hook_blk_fp);
+extern duet_hook_t *duet_hook_blk_fp;
 #endif /* CONFIG_DUET_BLOCK */
 
 /*

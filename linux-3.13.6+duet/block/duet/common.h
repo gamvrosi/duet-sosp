@@ -34,6 +34,9 @@ extern void (*duet_hook_cache_fp)(__u8, __u8, void *);
 #ifdef CONFIG_DUET_BLOCK
 extern void (*duet_hook_blk_fp)(__u8, __u8, void *);
 #endif /* CONFIG_DUET_BLOCK */
+#ifdef CONFIG_DUET_FS
+extern void (*duet_hook_fs_fp)(__u8, __u8, void *);
+#endif /* CONFIG_DUET_FS */
 
 enum {
 	DUET_STATUS_OFF = 0,

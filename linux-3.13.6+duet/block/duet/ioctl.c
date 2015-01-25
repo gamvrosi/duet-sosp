@@ -41,12 +41,14 @@ int duet_bootstrap(void)
 
 #ifdef CONFIG_DUET_CACHE
 	rcu_assign_pointer(duet_hook_cache_fp, duet_hook);
-	synchronize_rcu();
 #endif /* CONFIG_DUET_CACHE */
 #ifdef CONFIG_DUET_BLOCK
 	rcu_assign_pointer(duet_hook_blk_fp, duet_hook);
-	synchronize_rcu();
 #endif /* CONFIG_DUET_BLOCK */
+#ifdef CONFIG_DUET_FS
+	rcu_assign_pointer(duet_hook_fs_fp, duet_hook);
+#endif /* CONFIG_DUET_FS */
+	synchronize_rcu();
 	return 0;
 }
 
@@ -62,12 +64,14 @@ int duet_shutdown(void)
 
 #ifdef CONFIG_DUET_CACHE
 	rcu_assign_pointer(duet_hook_cache_fp, NULL);
-	synchronize_rcu();
 #endif /* CONFIG_DUET_CACHE */
 #ifdef CONFIG_DUET_BLOCK
 	rcu_assign_pointer(duet_hook_blk_fp, NULL);
-	synchronize_rcu();
 #endif /* CONFIG_DUET_BLOCK */
+#ifdef CONFIG_DUET_FS
+	rcu_assign_pointer(duet_hook_fs_fp, NULL);
+#endif /* CONFIG_DUET_FS */
+	synchronize_rcu();
 
 	/* Remove all tasks */
 	mutex_lock(&duet_env.task_list_mutex);

@@ -94,7 +94,7 @@ config BTRFS_DUET_SCRUB
 	bool "Duet framework support for the btrfs scrubber"
 	depends on BTRFS_FS
 	select DUET
-	select DUET_BTRFS
+	select DUET_FS
 	help
 	  Adds support for the btrfs scrubber to collaborate with other tasks
 	  through the duet framework
@@ -109,7 +109,7 @@ config BTRFS_FS_SCRUB_READA
 	bool "Btrfs scrubbing enhanced readahead (EXPERIMENTAL)"
 	depends on BTRFS_FS_SCRUB_ADAPT
 	select DUET
-	select DUET_BTRFS
+	select DUET_FS
 	help
 	  Enables enhanced readahead functionality for the btrfs scrubber.
 
@@ -144,7 +144,7 @@ config BTRFS_DUET_BACKUP
 	bool "Duet framework support for the btrfs backup (send/receive)"
 	depends on BTRFS_FS
 	select DUET
-	select DUET_BTRFS
+	select DUET_FS
 	select BTRFS_FS_MAPPING
 	help
 	  Adds support for the btrfs backup (send/receive) to collaborate with

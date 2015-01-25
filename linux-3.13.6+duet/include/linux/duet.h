@@ -70,10 +70,10 @@ struct duet_bw_hook_data {
 #define BIO_DUET        22      /* duet has seen this bio */
 
 /* Hook codes: basically, these determine the event type */
-#ifdef CONFIG_DUET_BTRFS
+#ifdef CONFIG_DUET_FS
 /*
- * BTRFS_READ (resp. BTRFS_WRITE) are expected to be triggered at the critical
- * path of btrfs, when a bio is sent as part of a read (resp. write). In the
+ * FS_READ (resp. FS_WRITE) are expected to be triggered at the critical path of
+ * filesystems, when a bio is sent as part of a read (resp. write). In the
  * case of the BW_START hook type, control is transferred to the framework
  * before the bio is dispatched. In the case of all the other hooks, control is
  * transferred to the handler after the bio callback completes, but while
@@ -81,9 +81,9 @@ struct duet_bw_hook_data {
  * freed while we operate on it, and it is suggested that intended work be
  * deferred using an appropriate mechanism (e.g. a work queue).
  */
-#define DUET_EVENT_BTRFS_READ	(1 << 0)
-#define DUET_EVENT_BTRFS_WRITE	(1 << 1)
-#endif /* CONFIG_DUET_BTRFS */
+#define DUET_EVENT_FS_READ	(1 << 0)
+#define DUET_EVENT_FS_WRITE	(1 << 1)
+#endif /* CONFIG_DUET_FS */
 
 #ifdef CONFIG_DUET_CACHE
 /*

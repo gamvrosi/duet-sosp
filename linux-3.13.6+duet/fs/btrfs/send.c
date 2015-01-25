@@ -5370,7 +5370,7 @@ static void btrfs_send_duet_handler(__u8 taskid, __u8 event_code, void *owner,
 #endif /* CONFIG_BTRFS_DUET_BMAP_STATS */
 
 	switch(event_code) {
-	case DUET_EVENT_BTRFS_READ:
+	case DUET_EVENT_FS_READ:
 		bdev = (struct block_device *)owner;
 
 #ifdef CONFIG_BTRFS_DUET_BACKUP_DEBUG
@@ -5650,7 +5650,7 @@ long btrfs_ioctl_send(struct file *mnt_file, void __user *arg_)
 
 	/* Register the task with the Duet framework */
 	if (duet_task_register(&sctx->taskid, "btrfs-send",
-			fs_info->sb->s_blocksize, 32768, DUET_EVENT_BTRFS_READ,
+			fs_info->sb->s_blocksize, 32768, DUET_EVENT_FS_READ,
 			btrfs_send_duet_handler, (void *)sctx)) {
 		printk(KERN_ERR "send: failed to register with the duet framework\n");
 		ret = -EFAULT;

@@ -104,15 +104,6 @@
 #include "locking.h"
 #include "check-integrity.h"
 #include "rcu-string.h"
-#ifdef CONFIG_DUET_BTRFS
-/*
- * For duet, we avoid changing btrfsic_submit_b* directly, because:
- * 1) the IC interface may not be used;
- * 2) we care about the caller. Thus, we add specific hooks before
- *    every invocation of bio-related functions.
- */
-#include <linux/duet.h>
-#endif /* CONFIG_DUET_BTRFS */
 
 #define BTRFSIC_BLOCK_HASHTABLE_SIZE 0x10000
 #define BTRFSIC_BLOCK_LINK_HASHTABLE_SIZE 0x10000
@@ -1665,9 +1656,6 @@ static int btrfsic_read_block(struct btrfsic_state *state,
 	unsigned int i;
 	u64 dev_bytenr;
 	int ret;
-#ifdef CONFIG_DUET_BTRFS
-	struct duet_bw_hook_data hook_data;
-#endif /* CONFIG_DUET_BTRFS */
 
 	BUG_ON(block_ctx->datav);
 	BUG_ON(block_ctx->pagev);
@@ -1721,10 +1709,6 @@ static int btrfsic_read_block(struct btrfsic_state *state,
 			return -1;
 		}
 
-#ifdef CONFIG_DUET_BTRFS
-		duet_hook(0, DUET_SETUP_HOOK_BW_START, (void *)bio);
-#endif /* CONFIG_DUET_BTRFS */
-
 		if (submit_bio_wait(READ, bio)) {
 			printk(KERN_INFO
 			       "btrfsic: read error at logical %llu dev %s!\n",
@@ -1732,16 +1716,6 @@ static int btrfsic_read_block(struct btrfsic_state *state,
 			bio_put(bio);
 			return -1;
 		}
-
-#ifdef CONFIG_DUET_BTRFS
-#ifdef CONFIG_DUET_DEBUG
-		printk(KERN_DEBUG "duet: hooking on btrfsic_read_block\n");
-#endif /* CONFIG_DUET_DEBUG */
-		hook_data.bio = bio;
-		hook_data.offset = dev_bytenr;
-		duet_hook(DUET_EVENT_BTRFS_READ, DUET_SETUP_HOOK_BW_END,
-			(void *)&hook_data);
-#endif /* CONFIG_DUET_BTRFS */
 
 		bio_put(bio);
 		dev_bytenr += (j - i) * PAGE_CACHE_SIZE;

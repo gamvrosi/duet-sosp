@@ -39,6 +39,15 @@
 #include "blk.h"
 #include "blk-cgroup.h"
 
+#ifdef CONFIG_DUET_BLOCK
+duet_hook_t *duet_hook_blk_fp = NULL;
+EXPORT_SYMBOL(duet_hook_blk_fp);
+#endif /* CONFIG_DUET_BLOCK */
+#ifdef CONFIG_DUET_FS
+duet_hook_t *duet_hook_fs_fp = NULL;
+EXPORT_SYMBOL(duet_hook_fs_fp);
+#endif /* CONFIG_DUET_FS */
+
 EXPORT_TRACEPOINT_SYMBOL_GPL(block_bio_remap);
 EXPORT_TRACEPOINT_SYMBOL_GPL(block_rq_remap);
 EXPORT_TRACEPOINT_SYMBOL_GPL(block_bio_complete);
@@ -1862,6 +1871,22 @@ EXPORT_SYMBOL(generic_make_request);
  */
 void submit_bio(int rw, struct bio *bio)
 {
+#ifdef CONFIG_DUET_FS
+	duet_hook_t *dhfp = NULL;
+
+#ifdef CONFIG_DUET_DEBUG
+	printk(KERN_DEBUG "duet: hooking on submit_bio\n");
+#endif /* CONFIG_DUET_DEBUG */
+	/* Pass by duet first */
+	rcu_read_lock();
+	dhfp = rcu_dereference(duet_hook_fs_fp);
+
+	if (dhfp)
+		dhfp(rw & WRITE ? DUET_EVENT_FS_WRITE : DUET_EVENT_FS_READ,
+			DUET_SETUP_HOOK_BA, (void *)bio);
+	rcu_read_unlock();
+#endif /* CONFIG_DUET_FS */
+
 	bio->bi_rw |= rw;
 
 	/*
