@@ -52,3 +52,34 @@ libattr1-dev
 libacl1-dev
 e2fslibs-dev
 
+Setting up inter-VM linux kernel debugging (for VirtualBox 4.1+):
+----------------------------------------------------------------
+
+Note: To speed things up, compile on a server, outside the VMs
+
+1. Clone git repo on server
+2. Create a new virtual machine
+3. Rsync git files from server:
+  rsync -rtvue "ssh -A fs.csl.utoronto.ca ssh" ./duet/ c159:src/iris/duet/
+  (make sure that you can connect with passphrase-less keys to fs.csl and the server)
+4. Run 'make localmodconfig' on VM
+5. Run ./setup.sh -c on server, to compile
+6. Rsync from server to VM
+7. Install gdb on VM and shutdown.
+8. Clone VM. One VM is now the debugger, and the other the debuggee.
+9. On both VMs create a serial port in VM settings (e.g. COM1 on /tmp/vmcom1).
+   On the debugger, check the "Create pipe" box.
+10. On the debugger, create a gdbinit file that contains:
+   set remotebaud 115200
+   target remote /dev/ttyS0
+11. On the debuggee, you can change hostname by editing /etc/hostname, /etc/hosts, and
+   running 'sudo service hostname restart'
+12. On the debuggee, edit the /etc/default/grub line:
+   GRUB_LINUX_DEFAULT="kgdboc=ttyS0,115200 kgdbwait"
+   and run 'sudo update-grub'
+13. Reboot debuggee. On debugger run 'sudo gdb -x gdbinit vmlinux' and press 'c' to
+   allow debuggee to boot.
+
+If you want to recompile, do so on the server. Then follow step 3 to pull changes
+to both VMs and install on the debuggee, then reboot as per step 13.
+
