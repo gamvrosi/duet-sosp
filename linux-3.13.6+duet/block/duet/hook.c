@@ -29,12 +29,6 @@ struct duet_bio_private {
 	__u32		size;
 };
 
-struct duet_bh_private {
-	bh_end_io_t	*real_end_io;
-	void		*real_private;
-	__u8		event_code;
-};
-
 static inline void mark_bio_seen(struct bio *bio)
 {
 	/* Mark this bio as seen by the duet framework */
@@ -94,37 +88,6 @@ static void duet_bio_endio(struct bio *bio, int err)
 	bio->bi_end_io(bio, err);
 }
 
-/* Callback function for asynchronous bh calls. We first restore the normal
- * callback (and call it), and then proceed to call duet_handle_event. */
-void duet_bh_endio(struct buffer_head *bh, int uptodate)
-{
-	struct duet_bh_private *private;
-	__u8 event_code;
-	__u64 lbn;
-	__u32 len;
-	struct block_device *bdev;
-
-	/* Grab data from buffer head */
-	private = bh->b_private;
-	lbn = bh->b_blocknr * bh->b_size;
-	len = bh->b_size;
-	bdev = bh->b_bdev;
-	event_code = private->event_code;
-
-	/* Restore real values */
-	bh->b_end_io = private->real_end_io;
-	bh->b_private = private->real_private;
-	kfree(private);
-
-	/* Transfer control to the duet event handler */
-	duet_handle_event(event_code, (void *)bdev, lbn, len, (void *)bh,
-								DUET_DATA_BH);
-
-	/* Call the real callback */
-	bh->b_end_io(bh, uptodate);
-}
-EXPORT_SYMBOL_GPL(duet_bh_endio); /* export to check at _submit_bh */
-
 /* Function that is paired to submit_bio calls. We need to hijack the bio
  * with a duet callback, duet_bio_endio. */
 static void duet_ba_hook(__u8 event_code, struct bio *bio)
@@ -167,28 +130,6 @@ static void duet_bw_hook(__u8 event_code, struct duet_bw_hook_data *hook_data)
 	/* Transfer control to the duet event handler */
 	duet_handle_event(event_code, (void *)bdev, lbn, len, (void *)bio,
 								DUET_DATA_BIO);
-}
-
-/* Function that is paired to submit_bh calls. We need to hijack the bh
- * with a duet callback, duet_bh_endio. */
-static void duet_bh_hook(__u8 event_code, struct buffer_head *bh)
-{
-	struct duet_bh_private *private = NULL;
-
-	private = kzalloc(sizeof(*private), GFP_NOFS);
-	if (!private) {
-		printk(KERN_ERR "duet: bh_hook failed to allocate private\n");
-		return;
-	}
-
-	/* Populate overload structure */
-	private->real_end_io = bh->b_end_io;
-	private->real_private = bh->b_private;
-	private->event_code = event_code;
-
-	/* Fix up buffer head structure */
-	bh->b_end_io = duet_bh_endio;
-	bh->b_private = (void *)private;
 }
 
 /* We're in RCU context so whatever happens, stay awake! */
@@ -246,13 +187,6 @@ void duet_hook(__u8 event_code, __u8 hook_type, void *hook_data)
 			event_code);
 #endif /* CONFIG_DUET_DEBUG */
 		duet_bw_hook(event_code, (struct duet_bw_hook_data *)hook_data);
-		break;
-	case DUET_SETUP_HOOK_BH:
-#ifdef CONFIG_DUET_DEBUG
-		printk(KERN_INFO "duet: Setting up BH hook (code %u)\n",
-			event_code);
-#endif /* CONFIG_DUET_DEBUG */
-		duet_bh_hook(event_code, (struct buffer_head *)hook_data);
 		break;
 	case DUET_SETUP_HOOK_PAGE:
 #ifdef CONFIG_DUET_DEBUG

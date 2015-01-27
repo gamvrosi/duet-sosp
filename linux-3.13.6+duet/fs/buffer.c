@@ -42,11 +42,6 @@
 #include <linux/mpage.h>
 #include <linux/bit_spinlock.h>
 #include <trace/events/block.h>
-#ifdef CONFIG_DUET_FS
-#include <linux/duet.h>
-
-extern duet_hook_t *duet_hook_fs_fp;
-#endif /* CONFIG_DUET_FS */
 
 static int fsync_buffers_list(spinlock_t *lock, struct list_head *list);
 
@@ -3048,11 +3043,6 @@ int _submit_bh(int rw, struct buffer_head *bh, unsigned long bio_flags)
 	bio->bi_end_io = end_bio_bh_io_sync;
 	bio->bi_private = bh;
 	bio->bi_flags |= bio_flags;
-#if 0
-	/* Mark this bio as seen by the duet framework */
-	if (bh->b_end_io == duet_bh_endio)
-		set_bit(BIO_DUET, &bio->bi_flags);
-#endif /* 0 */
 
 	/* Take care of bh's that straddle the end of the device */
 	guard_bh_eod(rw, bio, bh);
@@ -3075,22 +3065,6 @@ EXPORT_SYMBOL_GPL(_submit_bh);
 
 int submit_bh(int rw, struct buffer_head *bh)
 {
-#ifdef CONFIG_DUET_FS
-	duet_hook_t *dhfp = NULL;
-
-#ifdef CONFIG_DUET_DEBUG
-	printk(KERN_DEBUG "duet: hooking on submit_bh\n");
-#endif /* CONFIG_DUET_DEBUG */
-	/* Pass by duet first */
-	rcu_read_lock();
-	dhfp = rcu_dereference(duet_hook_fs_fp);
-
-	if (dhfp)
-		dhfp(rw & WRITE ? DUET_EVENT_FS_WRITE : DUET_EVENT_FS_READ,
-			DUET_SETUP_HOOK_BH, (void *)bh);
-	rcu_read_unlock();
-#endif /* CONFIG_DUET_FS */
-
 	return _submit_bh(rw, bh, 0);
 }
 EXPORT_SYMBOL(submit_bh);

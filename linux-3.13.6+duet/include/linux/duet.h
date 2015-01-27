@@ -28,7 +28,7 @@
  *   __u64 offt: {p-offt, i-offt}
  *   __u32 len: {p-len, i-len}
  *   void *data: {struct bio *bio, struct page *page}
- *   int data_type: DUET_DATA_{BIO, BH, PAGE}
+ *   int data_type: DUET_DATA_{BIO, PAGE}
  *   void *private
  */
 typedef void (duet_event_handler_t) (__u8, __u8, void *, __u64, __u32, void *,
@@ -44,7 +44,6 @@ typedef void (duet_hook_t) (__u8, __u8, void *);
 /* Return data types: we need this to access the data at the handler */
 enum {
 	DUET_DATA_BIO = 1,		/* data points to a bio */
-	DUET_DATA_BH,			/* data points to a buffer head */
 	DUET_DATA_PAGE,			/* data points to a struct page */
 	DUET_DATA_BLKREQ,		/* data points to a struct request */
 };
@@ -54,7 +53,6 @@ enum {
 	DUET_SETUP_HOOK_BA = 1,		/* async: submit_bio */
 	DUET_SETUP_HOOK_BW_START,	/* sync: submit_bio_wait (before) */
 	DUET_SETUP_HOOK_BW_END,		/* sync: submit_bio_wait (after) */
-	DUET_SETUP_HOOK_BH,		/* async: submit_bh */
 	DUET_SETUP_HOOK_PAGE,		/* struct page hook after the event */
 	DUET_SETUP_HOOK_BLKREQ_INIT,	/* block layer data request initiation */
 	DUET_SETUP_HOOK_BLKREQ_DONE,	/* block layer data request completion */
@@ -127,7 +125,6 @@ int duet_print_rbt(__u8 taskid);
 
 /* Hook-related functions */
 void duet_hook(__u8 event_type, __u8 hook_type, void *hook_data);
-void duet_bh_endio(struct buffer_head *bh, int uptodate);
 
 #ifdef CONFIG_DUET_BMAP_STATS
 int duet_trim_rbbt(__u8 taskid, __u64 end);
