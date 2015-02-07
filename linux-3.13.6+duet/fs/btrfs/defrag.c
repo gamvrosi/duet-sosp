@@ -99,12 +99,18 @@ static int defrag_inode(struct inode *inode, struct defrag_ctx *dctx,
 			int out_of_order)
 {
 	int ret;
+#ifdef CONFIG_BTRFS_DUET_DEFRAG
 	unsigned long cache_hits, dirty_pages;
+#endif /* CONFIG_BTRFS_DUET_DEFRAG */
 	struct btrfs_fs_info *fs_info = dctx->defrag_root->fs_info;
 
 	//sb_start_write(fs_info->sb);
+#ifdef CONFIG_BTRFS_DUET_DEFRAG
 	ret = btrfs_defrag_file_trace(inode, NULL, &dctx->range,
 				0, 0, &cache_hits, &dirty_pages);
+#else
+	ret = btrfs_defrag_file(inode, NULL, &dctx->range, 0, 0);
+#endif /* CONFIG_BTRFS_DUET_DEFRAG */
 	//sb_end_write(fs_info->sb);
 
 	if (ret > 0) {

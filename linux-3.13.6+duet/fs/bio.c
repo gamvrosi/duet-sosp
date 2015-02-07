@@ -797,7 +797,7 @@ int submit_bio_wait(int rw, struct bio *bio)
 	rcu_read_lock();
 	dhfp = rcu_dereference(duet_hook_fs_fp);
 	if (dhfp)
-		dhfp(0, DUET_SETUP_HOOK_BW_START, (void *)bio);
+		dhfp(0, DUET_HOOK_BW_START, (void *)bio);
 	rcu_read_unlock();
 #endif /* CONFIG_DUET_FS */
 
@@ -815,8 +815,8 @@ int submit_bio_wait(int rw, struct bio *bio)
 	rcu_read_lock();
 	dhfp = rcu_dereference(duet_hook_fs_fp);
 	if (dhfp)
-		dhfp(rw & WRITE ? DUET_EVENT_FS_WRITE : DUET_EVENT_FS_READ,
-			DUET_SETUP_HOOK_BW_END, (void *)&hook_data);
+		dhfp(rw & WRITE ? DUET_EVT_FS_WRITE : DUET_EVT_FS_READ,
+			DUET_HOOK_BW_END, (void *)&hook_data);
 	rcu_read_unlock();
 #endif /* CONFIG_DUET_FS */
 

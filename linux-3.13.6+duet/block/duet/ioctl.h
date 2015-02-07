@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 George Amvrosiadis.  All rights reserved.
+ * Copyright (C) 2014-2015 George Amvrosiadis.  All rights reserved.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public
@@ -15,57 +15,55 @@
  * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
  * Boston, MA 021110-1307, USA.
  */
-
 #ifndef _DUET_IOCTL_H
 #define _DUET_IOCTL_H
+
 #include <linux/ioctl.h>
 #include "common.h"
 
+#define MAX_TASKS 32
 #define DUET_IOCTL_MAGIC 0xDE
 
-/* status ioctl flags */
-#define DUET_STATUS_START (1 << 0)
-#define DUET_STATUS_STOP  (1 << 1)
+/* ioctl codes */
+#define DUET_START		1
+#define DUET_STOP		2
+#define DUET_REGISTER		3
+#define DUET_DEREGISTER		4
+#define DUET_MARK		5
+#define DUET_CHECK		6
+#define DUET_FETCH		7
+#define DUET_PRINTBIT		8
+#define DUET_PRINTITEM		9
 
-/* tasks ioctl flags */
-#define DUET_TASKS_LIST		(1 << 0)
-#define DUET_TASKS_REGISTER	(1 << 1)
-#define DUET_TASKS_DEREGISTER	(1 << 2)
-
-/* debug ioctl flags */
-#define DUET_DEBUG_ADDBLK	(1 << 0)
-#define DUET_DEBUG_RMBLK	(1 << 1)
-#define DUET_DEBUG_CHKBLK	(1 << 2)
-#define DUET_DEBUG_PRINTRBT	(1 << 3)
-
-struct duet_ioctl_status_args {
-	__u8 cmd_flags;		/* in */
+struct duet_ioctl_item {
+	__u64 itmnum;
+	__u8 evttype;	
 };
 
-#define MAX_TASKS 32
-struct duet_ioctl_tasks_args {
+struct duet_ioctl_list_args {
+	__u8 tid[MAX_TASKS];			/* out */
+	char tnames[MAX_TASKS][TASK_NAME_LEN];	/* out */
+	__u32 bitrange[MAX_TASKS];		/* out */
+	__u32 bmapsize[MAX_TASKS];		/* out */
+	__u8 evtmask[MAX_TASKS];		/* out */
+	__u8 itmtype[MAX_TASKS];		/* out */
+};
+
+struct duet_ioctl_cmd_args {
 	__u8 cmd_flags;					/* in */
-	__u8 taskid[MAX_TASKS];				/* in/out */
-	__u32 blksize[MAX_TASKS];			/* in/out */
-	__u32 bmapsize[MAX_TASKS];			/* in/out */
-	__u8 event_mask[MAX_TASKS];			/* in/out */
-	char task_names[MAX_TASKS][TASK_NAME_LEN];	/* in/out */
+	__u8 tid;					/* in/out */
+	__u8 ret;					/* out */
+
+	__u8 evtmask;					/* in */
+	__u8 itmtype;					/* in */
+	__u32 bitrange;					/* in */
+	__u32 itmnum;					/* in/out */
+	__u64 itmidx;					/* in */
+	char tname[TASK_NAME_LEN];			/* in */
+	struct duet_ioctl_item items[MAX_ITEMS];	/* out */
 };
 
-struct duet_ioctl_debug_args {
-	__u8 cmd_flags;		/* in */
-	__u8 taskid;		/* in */
-	__u64 offset;		/* in */
-	__u32 len;		/* in */
-	__u8 unset;		/* in */
-	__u8 ret;		/* out */
-};
-
-#define DUET_IOC_STATUS _IOW(DUET_IOCTL_MAGIC, 1, \
-				struct duet_ioctl_status_args)
-#define DUET_IOC_TASKS _IOWR(DUET_IOCTL_MAGIC, 2, \
-				struct duet_ioctl_tasks_args)
-#define DUET_IOC_DEBUG _IOWR(DUET_IOCTL_MAGIC, 3, \
-				struct duet_ioctl_debug_args)
+#define DUET_IOC_CMD	_IOWR(DUET_IOCTL_MAGIC, 1, struct duet_ioctl_cmd_args)
+#define DUET_IOC_TLIST	_IOWR(DUET_IOCTL_MAGIC, 2, struct duet_ioctl_list_args)
 
 #endif /* _DUET_IOCTL_H */

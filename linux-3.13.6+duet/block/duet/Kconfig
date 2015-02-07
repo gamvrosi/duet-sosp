@@ -19,12 +19,12 @@ config DUET
 
 	  If unsure, say N.
 
-config DUET_BLOCK
-	bool "Duet synergy framework support for the block layer"
+config DUET_SCHED
+	bool "Duet synergy framework support for the I/O scheduler layer"
 	depends on DUET
 
 	help
-	  This option enables Duet hook support for the block layer.
+	  This option enables Duet hook support for the I/O scheduler layer.
 	  The hooks offered can be found in linux/duet.h
 
 	  This option requires support for the duet core framework
@@ -58,13 +58,13 @@ config DUET_CACHE
 
 	  If unsure, say N.
 
-config DUET_BMAP_STATS
-	bool "Duet RBBT stats support"
+config DUET_TREE_STATS
+	bool "Duet tree stats support"
 	depends on DUET
 
 	help
-	  This option enabled support for keeping statistics about RBBT
-	  memory consumption
+	  This option enabled support for keeping statistics about
+	  memory consumption of trees (BitTree and NodeTree).
 
 	  If unsure, say N.
 

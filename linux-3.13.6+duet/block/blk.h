@@ -2,13 +2,13 @@
 #define BLK_INTERNAL_H
 
 #include <linux/idr.h>
-#if defined(CONFIG_DUET_BLOCK) || defined(CONFIG_DUET_FS)
+#if defined(CONFIG_DUET_SCHED) || defined(CONFIG_DUET_FS)
 #include <linux/duet.h>
-#endif /* defined(CONFIG_DUET_BLOCK) || defined(CONFIG_DUET_FS) */
+#endif /* defined(CONFIG_DUET_SCHED) || defined(CONFIG_DUET_FS) */
 
-#ifdef CONFIG_DUET_BLOCK
+#ifdef CONFIG_DUET_SCHED
 extern duet_hook_t *duet_hook_blk_fp;
-#endif /* CONFIG_DUET_BLOCK */
+#endif /* CONFIG_DUET_SCHED */
 #ifdef CONFIG_DUET_FS
 extern duet_hook_t *duet_hook_fs_fp;
 #endif /* CONFIG_DUET_FS */

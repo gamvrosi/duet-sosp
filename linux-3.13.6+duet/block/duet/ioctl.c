@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 George Amvrosiadis.  All rights reserved.
+ * Copyright (C) 2014-2015 George Amvrosiadis.  All rights reserved.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public
@@ -21,11 +21,11 @@
 #include <linux/duet.h>
 #include "ioctl.h"
 
-int duet_is_online(void)
+int duet_online(void)
 {
 	return (atomic_read(&duet_env.status) == DUET_STATUS_ON);
 }
-EXPORT_SYMBOL_GPL(duet_is_online);
+EXPORT_SYMBOL_GPL(duet_online);
 
 int duet_bootstrap(void)
 {
@@ -42,9 +42,9 @@ int duet_bootstrap(void)
 #ifdef CONFIG_DUET_CACHE
 	rcu_assign_pointer(duet_hook_cache_fp, duet_hook);
 #endif /* CONFIG_DUET_CACHE */
-#ifdef CONFIG_DUET_BLOCK
+#ifdef CONFIG_DUET_SCHED
 	rcu_assign_pointer(duet_hook_blk_fp, duet_hook);
-#endif /* CONFIG_DUET_BLOCK */
+#endif /* CONFIG_DUET_SCHED */
 #ifdef CONFIG_DUET_FS
 	rcu_assign_pointer(duet_hook_fs_fp, duet_hook);
 #endif /* CONFIG_DUET_FS */
@@ -65,9 +65,9 @@ int duet_shutdown(void)
 #ifdef CONFIG_DUET_CACHE
 	rcu_assign_pointer(duet_hook_cache_fp, NULL);
 #endif /* CONFIG_DUET_CACHE */
-#ifdef CONFIG_DUET_BLOCK
+#ifdef CONFIG_DUET_SCHED
 	rcu_assign_pointer(duet_hook_blk_fp, NULL);
-#endif /* CONFIG_DUET_BLOCK */
+#endif /* CONFIG_DUET_SCHED */
 #ifdef CONFIG_DUET_FS
 	rcu_assign_pointer(duet_hook_fs_fp, NULL);
 #endif /* CONFIG_DUET_FS */
@@ -97,232 +97,134 @@ int duet_shutdown(void)
 	return 0;
 }
 
-static int duet_ioctl_status(void __user *arg)
+static int duet_ioctl_cmd(void __user *arg)
 {
-	struct duet_ioctl_status_args *sa;
+	struct duet_ioctl_cmd_args *ca;
 
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-#ifdef CONFIG_DUET_DEBUG
-	printk(KERN_INFO "duet: size of duet_ioctl_status_args is %zu\n",
-		sizeof(*sa));
-#endif /* CONFIG_DUET_DEBUG */
+	ca = memdup_user(arg, sizeof(*ca));
+	if (IS_ERR(ca))
+		return PTR_ERR(ca);
 
-	sa = memdup_user(arg, sizeof(*sa));
-	if (IS_ERR(sa))
-		return PTR_ERR(sa);
-
-	switch (sa->cmd_flags) {
-	case DUET_STATUS_START:
-		if (duet_bootstrap()) {
-			printk(KERN_ERR "duet: failed to start duet\n");
-			goto err;
-		}
-		printk(KERN_INFO "duet: framework enabled\n");
-		break;
-	case DUET_STATUS_STOP:
-		if (duet_shutdown()) {
-			printk(KERN_ERR "duet: failed to stop duet\n");
-			goto err;
-		}
-		printk(KERN_INFO "duet: framework disabled\n");
-		break;
-	default:
-		printk(KERN_ERR "duet: unknown status command received\n");
+	/* If we're in the process of cleaning up, no ioctls (other
+	 * than the one that switches duet on/off) are allowed */
+	if (atomic_read(&duet_env.status) != DUET_STATUS_ON &&
+	    ca->cmd_flags != DUET_START && ca->cmd_flags != DUET_STOP) {
+		printk(KERN_INFO "duet: ioctl rejected - duet is offline\n");
 		goto err;
-		break;
 	}
 
-	kfree(sa);
-	return 0;
+	switch (ca->cmd_flags) {
+	case DUET_START:
+		ca->ret = duet_bootstrap();
 
-err:
-	kfree(sa);
-	return -EINVAL;
-}
+		if (ca->ret)
+			printk(KERN_ERR "duet: failed to enable framework\n");
+		else
+			printk(KERN_INFO "duet: framework enabled\n");
 
-static int duet_task_sendlist(struct duet_ioctl_tasks_args *ta)
-{
-	int i=0;
-	struct duet_task *cur;
-
-	/* We will only send the first MAX_TASKS, and that's ok */
-	rcu_read_lock();
-	list_for_each_entry_rcu(cur, &duet_env.tasks, task_list) {
-		ta->taskid[i] = cur->id;
-		memcpy(ta->task_names[i], cur->name, TASK_NAME_LEN);
-		ta->blksize[i] = cur->blksize;
-		ta->bmapsize[i] = cur->bmapsize;
-		ta->event_mask[i] = cur->event_mask;
-		i++;
-		if (i == MAX_TASKS)
-			break;
-        }
-        rcu_read_unlock();
-
-	return 0;
-}
-
-static int duet_debug_addblk(struct duet_ioctl_debug_args *da)
-{
-	return duet_mark_done(da->taskid, 0, da->offset, da->len);
-}
-
-static int duet_debug_rmblk(struct duet_ioctl_debug_args *da)
-{
-	return duet_mark_todo(da->taskid, 0, da->offset, da->len);
-}
-
-static int duet_debug_chkblk(struct duet_ioctl_debug_args *da)
-{
-	if (da->unset)
-		da->ret = duet_chk_todo(da->taskid, 0, da->offset, da->len);
-	else
-		da->ret = duet_chk_done(da->taskid, 0, da->offset, da->len);
-
-	return 0;
-}
-
-static int duet_debug_printrbt(struct duet_ioctl_debug_args *da)
-{
-	return duet_print_rbt(da->taskid);
-}
-
-static int duet_ioctl_tasks(void __user *arg)
-{
-	struct duet_ioctl_tasks_args *ta;
-
-	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
-
-#ifdef CONFIG_DUET_DEBUG
-	printk(KERN_INFO "duet: size of duet_ioctl_tasks_args is %zu\n",
-		sizeof(*ta));
-#endif /* CONFIG_DUET_DEBUG */
-
-	ta = memdup_user(arg, sizeof(*ta));
-	if (IS_ERR(ta))
-		return PTR_ERR(ta);
-
-	switch (ta->cmd_flags) {
-	case DUET_TASKS_LIST:
-		if (duet_task_sendlist(ta)) {
-			printk(KERN_ERR "duet: failed to send list\n");
-			goto err;
-		}
-		if (copy_to_user(arg, ta, sizeof(*ta))) {
-			printk(KERN_ERR "duet: failed to copy out tasklist\n");
-			goto err;
-		}
-#ifdef CONFIG_DUET_DEBUG
-		printk(KERN_INFO "duet: task list sent\n");
-#endif /* CONFIG_DUET_DEBUG */
 		break;
-	case DUET_TASKS_REGISTER:
-		if (duet_task_register(&ta->taskid[0], ta->task_names[0],
-				ta->blksize[0], ta->bmapsize[0],
-				ta->event_mask[0], NULL, NULL)) {
-			printk(KERN_ERR "duet: registration failed\n");
-			goto err;
-		}
-		if (copy_to_user(arg, ta, sizeof(*ta))) {
-			printk(KERN_ERR "duet: failed to copy out taskid\n");
-			goto err;
-		}
-#ifdef CONFIG_DUET_DEBUG
-		printk(KERN_INFO "duet: registered new task under ID %u\n",
-			ta->taskid[0]);
-#endif /* CONFIG_DUET_DEBUG */
+
+	case DUET_STOP:
+		ca->ret = duet_shutdown();
+
+		if (ca->ret)
+			printk(KERN_ERR "duet: failed to disable framework\n");
+		else
+			printk(KERN_INFO "duet: framework disabled\n");
+
 		break;
-	case DUET_TASKS_DEREGISTER:
-		if (duet_task_deregister(ta->taskid[0])) {
-			printk(KERN_ERR "duet: deregistration failed\n");
-			goto err;
-		}
-#ifdef CONFIG_DUET_DEBUG
-		printk(KERN_INFO "duet: deregistered task under ID %u\n",
-			ta->taskid[0]);
-#endif /* CONFIG_DUET_DEBUG */
+
+	case DUET_REGISTER:
+		/* TODO: Find the owner for the task */
+		ca->ret = duet_register(&ca->tid, ca->tname, ca->itmtype,
+					ca->bitrange, ca->evtmask, NULL);
 		break;
+
+	case DUET_DEREGISTER:
+		ca->ret = duet_deregister(ca->tid);
+		break;
+
+	case DUET_MARK:
+		ca->ret = duet_mark(ca->tid, ca->itmidx, ca->itmnum);
+		break;
+
+	case DUET_CHECK:
+		ca->ret = duet_check(ca->tid, ca->itmidx, ca->itmnum);
+		break;
+
+	case DUET_FETCH:
+		//ca->ret = duet_fetch(ca->tid, ca->itmnum, ca->items,
+		//		&ca->itmnum);
+		break;
+
+	case DUET_PRINTBIT:
+		ca->ret = duet_print_bittree(ca->tid);
+		break;
+
+	case DUET_PRINTITEM:
+		ca->ret = duet_print_itmtree(ca->tid);
+		break;
+
 	default:
 		printk(KERN_INFO "duet: unknown tasks command received\n");
 		goto err;
 		break;
 	}
 
-	kfree(ta);
+	if (copy_to_user(arg, ca, sizeof(*ca))) {
+		printk(KERN_ERR "duet: failed to copy out args\n");
+		goto err;
+	}
+
+	kfree(ca);
 	return 0;
 
 err:
-	kfree(ta);
+	kfree(ca);
 	return -EINVAL;
 }
 
-static int duet_ioctl_debug(void __user *arg)
+static int duet_ioctl_tlist(void __user *arg)
 {
-	struct duet_ioctl_debug_args *da;
+	int i=0;
+	struct duet_task *cur;
+	struct duet_ioctl_list_args *la;
 
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	da = memdup_user(arg, sizeof(*da));
-	if (IS_ERR(da))
-		return PTR_ERR(da);
+	la = memdup_user(arg, sizeof(*la));
+	if (IS_ERR(la))
+		return PTR_ERR(la);
 
-	switch (da->cmd_flags) {
-	case DUET_DEBUG_ADDBLK:
-		if (duet_debug_addblk(da)) {
-			printk(KERN_ERR "duet: failed to add block\n");
-			goto err;
-		}
-#ifdef CONFIG_DUET_DEBUG
-		printk(KERN_INFO "duet: block added\n");
-#endif /* CONFIG_DUET_DEBUG */
-		break;
-	case DUET_DEBUG_RMBLK:
-		if (duet_debug_rmblk(da)) {
-			printk(KERN_ERR "duet: failed to rm block\n");
-			goto err;
-		}
-#ifdef CONFIG_DUET_DEBUG
-		printk(KERN_INFO "duet: block removed\n");
-#endif /* CONFIG_DUET_DEBUG */
-		break;
-	case DUET_DEBUG_CHKBLK:
-		if (duet_debug_chkblk(da)) {
-			printk(KERN_ERR "duet: failed to chk block\n");
-			goto err;
-		}
-		if (copy_to_user(arg, da, sizeof(*da))) {
-			printk(KERN_ERR "duet: failed to copy out args\n");
-			goto err;
-		}
-#ifdef CONFIG_DUET_DEBUG
-		printk(KERN_INFO "duet: block chk complete\n");
-#endif /* CONFIG_DUET_DEBUG */
-		break;
-	case DUET_DEBUG_PRINTRBT:
-		if (duet_debug_printrbt(da)) {
-			printk(KERN_ERR "duet: failed to print RBT\n");
-			goto err;
-		}
-#ifdef CONFIG_DUET_DEBUG
-		printk(KERN_INFO "duet: RBT printed\n");
-#endif /* CONFIG_DUET_DEBUG */
-		break;
-	default:
-		printk(KERN_INFO "duet: unknown debug command received\n");
-		goto err;
-		break;
+	/* We will only send the first MAX_TASKS, and that's ok */
+	rcu_read_lock();
+	list_for_each_entry_rcu(cur, &duet_env.tasks, task_list) {
+		la->tid[i] = cur->id;
+		memcpy(la->tnames[i], cur->name, TASK_NAME_LEN);
+		la->bitrange[i] = cur->bitrange;
+		la->bmapsize[i] = cur->bmapsize;
+		la->evtmask[i] = cur->evtmask;
+		la->itmtype[i] = cur->itmtype;
+		i++;
+		if (i == MAX_TASKS)
+			break;
+        }
+        rcu_read_unlock();
+
+	if (copy_to_user(arg, la, sizeof(*la))) {
+		printk(KERN_ERR "duet: failed to copy out tasklist\n");
+		kfree(la);
+		return -EINVAL;
 	}
 
-	kfree(da);
-	return 0;
+	duet_dbg(KERN_INFO "duet: task list sent\n");
 
-err:
-	kfree(da);
-	return -EINVAL;
+	kfree(la);
+	return 0;
 }
 
 /* 
@@ -334,22 +236,18 @@ long duet_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	void __user *argp = (void __user *)arg;
 
 	/* If we're in the process of cleaning up, no ioctls (other
-	 * than the one that switches duet on/off) are allowed
-	 */
+	 * than the one that switches duet on/off) are allowed */
 	if (atomic_read(&duet_env.status) != DUET_STATUS_ON &&
-	    cmd != DUET_IOC_STATUS) {
-		printk(KERN_INFO "duet: non-status ioctls rejected while "
-			"duet is not online\n");
+	    cmd != DUET_IOC_CMD) {
+		printk(KERN_INFO "duet: ioctl rejected - duet is offline\n");
 		return -EINVAL;
 	}
 
 	switch (cmd) {
-	case DUET_IOC_STATUS:
-		return duet_ioctl_status(argp);
-	case DUET_IOC_TASKS:
-		return duet_ioctl_tasks(argp);
-	case DUET_IOC_DEBUG:
-		return duet_ioctl_debug(argp);
+	case DUET_IOC_CMD:
+		return duet_ioctl_cmd(argp);
+	case DUET_IOC_TLIST:
+		return duet_ioctl_tlist(argp);
 	}
 
 	return -EINVAL;

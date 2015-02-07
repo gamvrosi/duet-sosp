@@ -128,11 +128,9 @@ void __delete_from_page_cache(struct page *page)
 
 	/* TODO: Make sure that duet_hook doesn't sleep */
 	if (dhfp)
-		dhfp(DUET_EVENT_CACHE_REMOVE, DUET_SETUP_HOOK_PAGE,
-								(void *)page);
+		dhfp(DUET_EVT_CACHE_REMOVE, DUET_HOOK_PAGE, (void *)page);
 	rcu_read_unlock();
 #endif /* CONFIG_DUET_CACHE */
-
 
 	trace_mm_filemap_delete_from_page_cache(page);
 	/*
@@ -515,8 +513,7 @@ int add_to_page_cache_locked(struct page *page, struct address_space *mapping,
 	dhfp = rcu_dereference(duet_hook_cache_fp);
 
 	if (dhfp)
-		dhfp(DUET_EVENT_CACHE_INSERT, DUET_SETUP_HOOK_PAGE,
-								(void *)page);
+		dhfp(DUET_EVT_CACHE_INSERT, DUET_HOOK_PAGE, (void *)page);
 	rcu_read_unlock();
 #endif /* CONFIG_DUET_CACHE */
 

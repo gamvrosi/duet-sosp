@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 George Amvrosiadis.  All rights reserved.
+ * Copyright (C) 2014-2015 George Amvrosiadis.  All rights reserved.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public
@@ -15,47 +15,31 @@
  * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
  * Boston, MA 021110-1307, USA.
  */
-
 #ifndef _DUET_H
 #define _DUET_H
 
-/*
- * Task-specific event handling function. Should handle all event types
- * registered in the event mask. Arguments:
- *   __u8 taskid
- *   __u8 event_code
- *   void *owner: {struct block_device *bdev, struct inode *inode}
- *   __u64 offt: {p-offt, i-offt}
- *   __u32 len: {p-len, i-len}
- *   void *data: {struct bio *bio, struct page *page}
- *   int data_type: DUET_DATA_{BIO, PAGE}
- *   void *private
- */
-typedef void (duet_event_handler_t) (__u8, __u8, void *, __u64, __u32, void *,
-								int, void *);
-
-/*
- * Framework hook function. Should transmit hook information to the core of
- * the framework for passing to interested tasks. Arguments: __u8 event_type,
- * __u8 hook_type, void *hook_data
- */
-typedef void (duet_hook_t) (__u8, __u8, void *);
-
-/* Return data types: we need this to access the data at the handler */
+/* Event data types: passed to the framework to populate the NodeTree(s) */
 enum {
 	DUET_DATA_BIO = 1,		/* data points to a bio */
 	DUET_DATA_PAGE,			/* data points to a struct page */
 	DUET_DATA_BLKREQ,		/* data points to a struct request */
 };
 
-/* Hook types: these change depending on what we're hooking on */
+/* Item types: task processing granularity */
 enum {
-	DUET_SETUP_HOOK_BA = 1,		/* async: submit_bio */
-	DUET_SETUP_HOOK_BW_START,	/* sync: submit_bio_wait (before) */
-	DUET_SETUP_HOOK_BW_END,		/* sync: submit_bio_wait (after) */
-	DUET_SETUP_HOOK_PAGE,		/* struct page hook after the event */
-	DUET_SETUP_HOOK_BLKREQ_INIT,	/* block layer data request initiation */
-	DUET_SETUP_HOOK_BLKREQ_DONE,	/* block layer data request completion */
+	DUET_ITEM_INODE = 1,		/* will build a NodeTree of inodes */
+	DUET_ITEM_PAGE,			/* will build a NodeTree of pages */
+	DUET_ITEM_BLOCK,		/* will build a NodeTree of LBAs */
+};
+
+/* Hook types: tells framework where in the storage stack the event occurred */
+enum {
+	DUET_HOOK_BA = 1,		/* async: submit_bio */
+	DUET_HOOK_BW_START,		/* sync: submit_bio_wait (before) */
+	DUET_HOOK_BW_END,		/* sync: submit_bio_wait (after) */
+	DUET_HOOK_PAGE,			/* struct page hook after the event */
+	DUET_HOOK_SCHED_INIT,		/* scheduler data request initiation */
+	DUET_HOOK_SCHED_DONE,		/* scheduler data request completion */
 };
 
 /* The special hook data struct needed for the darned submit_bio_wait */
@@ -64,23 +48,29 @@ struct duet_bw_hook_data {
 	__u64		offset;
 };
 
+/* Item struct returned for processing */
+struct duet_item {
+	__u64	number;	/* inode, block, or page (addr >> size) number */
+	__u8	evt;	/* event that triggered item to be returned */
+	union {
+		struct inode	*inode;
+		struct page	*page;
+		struct bio	*bio;
+	};
+};
+
 /* bio flag */
 #define BIO_DUET        22      /* duet has seen this bio */
 
 /* Hook codes: basically, these determine the event type */
 #ifdef CONFIG_DUET_FS
 /*
- * FS_READ (resp. FS_WRITE) are expected to be triggered at the critical path of
- * filesystems, when a bio is sent as part of a read (resp. write). In the
- * case of the BW_START hook type, control is transferred to the framework
- * before the bio is dispatched. In the case of all the other hooks, control is
- * transferred to the handler after the bio callback completes, but while
- * interrupts are still raised. This is done to ensure that the bio will not be
- * freed while we operate on it, and it is suggested that intended work be
- * deferred using an appropriate mechanism (e.g. a work queue).
+ * FS_READ (resp. FS_WRITE) are triggered when a bio is sent as part of a read
+ * (resp. write), synchronously or asynchronously.
+ * Note: until bio callback completes, interrupts are raised.
  */
-#define DUET_EVENT_FS_READ	(1 << 0)
-#define DUET_EVENT_FS_WRITE	(1 << 1)
+#define DUET_EVT_FS_READ	(1 << 0)
+#define DUET_EVT_FS_WRITE	(1 << 1)
 #endif /* CONFIG_DUET_FS */
 
 #ifdef CONFIG_DUET_CACHE
@@ -91,43 +81,37 @@ struct duet_bw_hook_data {
  * restored. Note that the page will still be locked in the case of insertion,
  * as its data will not be current (until IO completes and unlocks it).
  */
-#define DUET_EVENT_CACHE_INSERT	(1 << 2)
-#define DUET_EVENT_CACHE_REMOVE	(1 << 3)
-#define DUET_EVENT_CACHE_MODIFY	(1 << 4)
+#define DUET_EVT_CACHE_INSERT	(1 << 2)
+#define DUET_EVT_CACHE_REMOVE	(1 << 3)
+#define DUET_EVT_CACHE_MODIFY	(1 << 4)
 #endif /* CONFIG_DUET_CACHE */
 
-#ifdef CONFIG_DUET_BLOCK
+#ifdef CONFIG_DUET_SCHED
 /*
- * BLOCK_READ and BLOCK_WRITE are expected to be triggered when a block request
- * is added to a device's dispatch queue. We replace the callback in the struct
- * request with a callback to Duet
+ * SCHED_INIT and SCHED_DONE are expected to be triggered when a block request
+ * or removed from a device's dispatch queue. We replace the callback in the
+ * struct request with a callback to the framework.
  */
-#define DUET_EVENT_BLKREQ_INIT	(1 << 5)
-#define DUET_EVENT_BLKREQ_DONE	(1 << 6)
-#endif /* CONFIG_DUET_BLOCK */
+#define DUET_EVT_SCHED_INIT	(1 << 5)
+#define DUET_EVT_SCHED_DONE	(1 << 6)
+#endif /* CONFIG_DUET_SCHED */
 
-/* Core interface functions */
-int duet_task_register(__u8 *taskid, const char *name, __u32 blksize,
-	__u32 bmapsize, __u8 event_mask, duet_event_handler_t event_handler,
-	void *privdata);
-int duet_task_deregister(__u8 taskid);
-int duet_is_online(void);
+/* Framework interface functions */
+int duet_register(__u8 *taskid, const char *name, __u8 itmtype, __u32 bitrange,
+						__u8 evtmask, void *owner);
+int duet_deregister(__u8 taskid);
+int duet_online(void);
+int duet_check(__u8 taskid, __u64 idx, __u32 num);
+int duet_mark(__u8 taskid, __u64 idx, __u32 num);
+int duet_fetch(__u8 taskid, __u8 itreq, struct duet_item *items, __u8 *itret);
+int duet_trim_trees(__u8 taskid, __u64 low, __u64 high);
 
-/*
- * For the following functions, start can be found from struct block_device
- * like so: bdev->bd_part->start_sect << 9
- */
-int duet_chk_done(__u8 taskid, __u64 start, __u64 lbn, __u32 len);
-int duet_chk_todo(__u8 taskid, __u64 start, __u64 lbn, __u32 len);
-int duet_mark_done(__u8 taskid, __u64 start, __u64 lbn, __u32 len);
-int duet_mark_todo(__u8 taskid, __u64 start, __u64 lbn, __u32 len);
-int duet_print_rbt(__u8 taskid);
+/* Framework debugging functions */
+int duet_print_bittree(__u8 taskid);
+int duet_print_itmtree(__u8 taskid);
 
-/* Hook-related functions */
+/* Hook functions that trasmit event info to the framework core */
 void duet_hook(__u8 event_type, __u8 hook_type, void *hook_data);
-
-#ifdef CONFIG_DUET_BMAP_STATS
-int duet_trim_rbbt(__u8 taskid, __u64 end);
-#endif /* CONFIG_DUET_BMAP_STATS */
+typedef void (duet_hook_t) (__u8, __u8, void *);
 
 #endif /* _DUET_H */

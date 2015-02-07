@@ -2251,8 +2251,7 @@ int set_page_dirty(struct page *page)
 
 	/* TODO: Make sure that duet_hook doesn't sleep */
 	if (dhfp)
-		dhfp(DUET_EVENT_CACHE_MODIFY, DUET_SETUP_HOOK_PAGE,
-								(void *)page);
+		dhfp(DUET_EVT_CACHE_MODIFY, DUET_HOOK_PAGE, (void *)page);
 	rcu_read_unlock();
 #endif /* CONFIG_DUET_CACHE */
 
