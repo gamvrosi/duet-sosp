@@ -50,12 +50,19 @@ struct duet_bw_hook_data {
 
 /* Item struct returned for processing */
 struct duet_item {
-	__u64	number;	/* inode, block, or page (addr >> size) number */
-	__u8	evt;	/* event that triggered item to be returned */
+	struct rb_node	node;
+	union {
+		__u64	ino;
+		__u64	lbn;
+	};
+	union {
+		__u8	evt;	/* last event that occurred on this item */
+		__u8	inmem;	/* ratio of inode pages currently in mem */
+	};
 	union {
 		struct inode	*inode;
-		struct page	*page;
 		struct bio	*bio;
+		struct page	*page;
 	};
 };
 
@@ -103,8 +110,10 @@ int duet_deregister(__u8 taskid);
 int duet_online(void);
 int duet_check(__u8 taskid, __u64 idx, __u32 num);
 int duet_mark(__u8 taskid, __u64 idx, __u32 num);
-int duet_fetch(__u8 taskid, __u8 itreq, struct duet_item *items, __u8 *itret);
-int duet_trim_trees(__u8 taskid, __u64 low, __u64 high);
+int duet_fetch(__u8 taskid, __u8 itreq, struct duet_item **items, __u8 *itret);
+#if 0
+int duet_trim_bittree(__u8 taskid, __u64 start, __u64 end);
+#endif /* 0 */
 
 /* Framework debugging functions */
 int duet_print_bittree(__u8 taskid);

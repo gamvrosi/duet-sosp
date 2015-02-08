@@ -41,10 +41,10 @@ static inline void mark_bio_seen(struct bio *bio)
 	set_bit(BIO_DUET, &bio->bi_flags);
 }
 
-static struct item_rbnode *tnode_init(struct duet_task *task, __u64 itmidx,
-	__u8 evt, void *data)
+struct duet_item *duet_item_init(struct duet_task *task, __u64 idx, __u8 evt,
+	void *data)
 {
-	struct item_rbnode *tnode = NULL;
+	struct duet_item *itm = NULL;
 
 #ifdef CONFIG_DUET_TREE_STATS
 	(task->stat_itm_cur)++;
@@ -55,76 +55,277 @@ static struct item_rbnode *tnode_init(struct duet_task *task, __u64 itmidx,
 	}
 #endif /* CONFIG_DUET_TREE_STATS */
 	
-	tnode = kzalloc(sizeof(*tnode), GFP_ATOMIC);
-	if (!tnode)
+	itm = kzalloc(sizeof(*itm), GFP_ATOMIC);
+	if (!itm)
 		return NULL;
 
-	RB_CLEAR_NODE(&tnode->node);
-	tnode->idx = itmidx;
+	RB_CLEAR_NODE(&itm->node);
 
 	if (task->itmtype == DUET_ITEM_BLOCK) {
-		tnode->bio = (struct bio *)data;
-		tnode->evt = evt;
+		itm->lbn = idx;
+		itm->bio = (struct bio *)data;
+		itm->evt = evt;
 	} else if (task->itmtype == DUET_ITEM_PAGE) {
-		tnode->page = (struct page *)data;
-		tnode->evt = evt;
+		itm->ino = idx;
+		itm->page = (struct page *)data;
+		itm->evt = evt;
 	} else if (task->itmtype == DUET_ITEM_INODE) {
-		tnode->inode = (struct inode *)data;
-		tnode->inmem = evt;
+		itm->ino = idx;
+		itm->inode = (struct inode *)data;
+		itm->inmem = evt;
 	}
 
-	return tnode;
+	return itm;
 }
 
 /*
- * Inserts a node in the item tree. Assumes the relevant locks have been
+ * removes and frees a node from the item tree. Assumes the relevant locks
+ * have been obtained.
+ */
+void duet_item_dispose(struct duet_item *itm, struct rb_node *rbnode,
+	struct rb_root *root)
+{
+	rb_erase(rbnode, root);
+	kfree(itm);
+}
+
+/*
+ * Fetches up to itreq items from the ItemTree. The number of items fetched is
+ * given by itret. Items are checked against the bitmap, and discarded if they
+ * have been marked; this is possible because an insertion could have happened
+ * between the last fetch and the last mark.
+ */
+int duet_fetch(__u8 taskid, __u8 itreq, struct duet_item **items, __u8 *itret)
+{
+	struct rb_node *rbnode;
+	struct duet_item *itm;
+	struct duet_task *task = duet_find_task(taskid);
+
+	if (!task) {
+		printk(KERN_ERR "duet: duet_fetch given non-existent taskid (%d)\n", taskid);
+		return 1;	
+	}
+
+	/*
+	 * We'll either run out of items, or grab itreq items.
+	 * We also skip the outer lock, because we're more important than
+	 * interrupts.
+	 */
+	*itret = 0;
+	spin_lock(&task->itmtree_inner_lock);
+	while (!RB_EMPTY_ROOT(&task->itmtree) && *itret < itreq) {
+		/* Grab the first and remove it from the tree */
+		rbnode = rb_first(&task->itmtree);
+		itm = rb_entry(rbnode, struct duet_item, node);
+		rb_erase(rbnode, &task->itmtree);
+
+		if (duet_check(taskid, itm->lbn, task->bitrange) == 1)
+			kfree(itm);
+		else {
+			items[*itret] = itm;
+			(*itret)++;
+		}
+	}
+	spin_unlock(&task->itmtree_inner_lock);
+
+	/* decref and wake up cleaner if needed */
+	if (atomic_dec_and_test(&task->refcount))
+		wake_up(&task->cleaner_queue);
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(duet_fetch);
+
+/*
+ * Inserts a node in an ItemTree of pages. Assumes the relevant locks have been
  * obtained. Returns 1 on failure.
  */
-static int tnode_insert(struct duet_task *task, struct item_rbnode *itn)
+static int duet_item_insert_page(struct duet_task *task, struct duet_item *itm)
 {
 	int found = 0;
 	struct rb_node **link, *parent = NULL;
-	struct item_rbnode *cur;
+	struct duet_item *cur;
 
 	link = &task->itmtree.rb_node;
 
 	while (*link) {
 		parent = *link;
-		cur = rb_entry(parent, struct item_rbnode, node);
+		cur = rb_entry(parent, struct duet_item, node);
 
-		/* We order based on index */
-		if (cur->idx > itn->idx) {
+		/* We order based on (inode, page index) */
+		if (cur->ino > itm->ino) {
 			link = &(*link)->rb_left;
-		} else if (cur->idx < itn->idx) {
+		} else if (cur->ino < itm->ino) {
 			link = &(*link)->rb_right;
 		} else {
-			found = 1;
-			break;
+			/* Found inode, look for index */
+			if (cur->page->index > itm->page->index) {
+				link = &(*link)->rb_left;
+			} else if (cur->page->index < itm->page->index) {
+				link = &(*link)->rb_right;
+			} else {
+				found = 1;
+				break;
+			}
 		}
 	}
 
-	duet_dbg(KERN_DEBUG "duet-defrag: %s node (#%llu, e%u, a%p)\n",
-		found ? "will not insert" : "will insert", itn->idx,
-		itn->evt, itn->bio);
+	duet_dbg(KERN_DEBUG "duet: %s page node (#%llu, e%u, a%p)\n",
+		found ? "will not insert" : "will insert", itm->ino,
+		itm->evt, itm->page);
 
 	if (found)
 		goto out;
 
-	/* Insert node in RBtree */
-	rb_link_node(&itn->node, parent, link);
-	rb_insert_color(&itn->node, &task->itmtree);
+	/* Insert node in tree */
+	rb_link_node(&itm->node, parent, link);
+	rb_insert_color(&itm->node, &task->itmtree);
 
 out:
 	return found;
 }
 
-/* This handles CACHE_INSERT, CACHE_MODIFY and CACHE_REMOVE */
+/*
+ * This handles CACHE_INSERT and CACHE_REMOVE events for a page tree.
+ * Indexing is based on the inode number, and the index of the page
+ * within said inode.
+ */
+static void duet_handle_page(struct duet_task *task, __u8 evtcode, __u64 idx,
+	struct page *page)
+{
+	int found = 0;
+	struct rb_node *node = NULL;
+	struct duet_item *itm = NULL;
+	struct inode *inode = page->mapping->host;
+
+	if (!(evtcode & (DUET_EVT_CACHE_INSERT | DUET_EVT_CACHE_REMOVE))) {
+		printk(KERN_ERR "duet: evtcode %d in duet_handle_page\n",
+			evtcode);
+		return;
+	}
+
+	/* Verify that the event refers to the fs we're interested in */
+	if (task->sb != inode->i_sb) {
+		duet_dbg(KERN_INFO "duet: event not on fs of interest\n");
+		return;
+	}
+
+	/* First, look up the node in the ItemTree */
+	spin_lock(&task->itmtree_outer_lock);
+	spin_lock(&task->itmtree_inner_lock);
+	node = task->itmtree.rb_node;
+
+	while (node) {
+		itm = rb_entry(node, struct duet_item, node);
+
+		/* We order based on (inode, page index) */
+		if (itm->ino > inode->i_ino) {
+			node = node->rb_left;
+		} else if (itm->ino < inode->i_ino) {
+			node = node->rb_right;
+		} else {
+			/* Found inode, look for index */
+			if (itm->page->index > page->index) {
+				node = node->rb_left;
+			} else if (itm->page->index < page->index) {
+				node = node->rb_right;
+			} else {
+				found = 1;
+				break;
+			}
+		}
+	}
+
+	duet_dbg(KERN_DEBUG "duet-page: %s node (#%llu, i%lu, e%u, a%p)\n",
+		found ? "found" : "didn't find",
+		found ? itm->ino : inode->i_ino,
+		found ? itm->page->index : page->index,
+		found ? itm->evt : evtcode,
+		found ? itm->page : page);
+
+	/* If we found it, we might have to remove it. Otherwise, insert. */
+	if (!found) {
+		itm = duet_item_init(task, inode->i_ino, evtcode, (void *)page);
+		if (!itm) {
+			printk(KERN_ERR "duet: itnode alloc failed\n");
+			goto out;
+		}
+
+		if (duet_item_insert_page(task, itm)) {
+			printk(KERN_ERR "duet: insert failed\n");
+			kfree(itm);
+		}
+	} else if (found && evtcode != itm->evt) {
+		/* If this event is different than the last we saw, it undoes
+		 * it, and we can remove the existing node. */
+		duet_item_dispose(itm, node, &task->itmtree);
+	}
+
+out:
+	spin_unlock(&task->itmtree_inner_lock);
+	spin_unlock(&task->itmtree_outer_lock);
+}
+
+/*
+ * Inserts a node in an ItemTree of inodes. Assumes relevant locks have been
+ * obtained. Returns 1 on failure.
+ */
+static int duet_item_insert_inode(struct duet_task *task, struct duet_item *itm)
+{
+	int found = 0;
+	struct rb_node **link, *parent = NULL;
+	struct duet_item *cur;
+
+	link = &task->itmtree.rb_node;
+
+	while (*link) {
+		parent = *link;
+		cur = rb_entry(parent, struct duet_item, node);
+
+		/* We order based on (inmem_ratio, inode) */
+		if (cur->inmem > itm->inmem) {
+			link = &(*link)->rb_left;
+		} else if (cur->inmem < itm->inmem) {
+			link = &(*link)->rb_right;
+		} else {
+			/* Found inmem_ratio, look for btrfs_ino */
+			if (cur->ino > itm->ino) {
+				link = &(*link)->rb_left;
+			} else if (cur->ino < itm->ino) {
+				link = &(*link)->rb_right;
+			} else {
+				found = 1;
+				break;
+			}
+		}
+	}
+
+	duet_dbg(KERN_DEBUG "duet: %s inode node (#%llu, r%u, a%p)\n",
+		found ? "will not insert" : "will insert", itm->ino,
+		itm->inmem, itm->inode);
+
+	if (found)
+		goto out;
+
+	/* Insert node in tree */
+	rb_link_node(&itm->node, parent, link);
+	rb_insert_color(&itm->node, &task->itmtree);
+
+out:
+	return found;
+}
+
+/*
+ * This handles CACHE_INSERT, CACHE_MODIFY and CACHE_REMOVE events for an inode
+ * tree. Indexing is based on the ratio of pages in memory, and the inode
+ * number as seen by VFS.
+ */
 static void duet_handle_inode(struct duet_task *task, __u8 evtcode, __u64 idx,
 	struct page *page)
 {
-	int ret=0, found=0;
+	int found = 0;
 	struct rb_node *node = NULL;
-	struct item_rbnode *itm = NULL;
+	struct duet_item *itm = NULL;
 	struct inode *inode = page->mapping->host;
 	u8 cur_inmem_ratio, new_inmem_ratio;
 	u64 inmem_pages, total_pages;
@@ -153,12 +354,13 @@ static void duet_handle_inode(struct duet_task *task, __u8 evtcode, __u64 idx,
 		inmem_pages + (evtcode == DUET_EVT_CACHE_INSERT ? 1 : -1),
 		total_pages);
 
-	/* First, look up the inode number in the ItemTree */
-	spin_lock(&task->itmtree_lock);
+	/* First, look up the node in the ItemTree */
+	spin_lock(&task->itmtree_outer_lock);
+	spin_lock(&task->itmtree_inner_lock);
 	node = task->itmtree.rb_node;
 
 	while (node) {
-		itm = rb_entry(node, struct item_rbnode, node);
+		itm = rb_entry(node, struct duet_item, node);
 
 		/* We order based on (inmem_ratio, inode) */
 		if (itm->inmem > cur_inmem_ratio) {
@@ -167,9 +369,9 @@ static void duet_handle_inode(struct duet_task *task, __u8 evtcode, __u64 idx,
 			node = node->rb_right;
 		} else {
 			/* Found inmem_ratio, look for btrfs_ino */
-			if (itm->idx > inode->i_ino) {
+			if (itm->ino > inode->i_ino) {
 				node = node->rb_left;
-			} else if (itm->idx < inode->i_ino) {
+			} else if (itm->ino < inode->i_ino) {
 				node = node->rb_right;
 			} else {
 				found = 1;
@@ -178,69 +380,101 @@ static void duet_handle_inode(struct duet_task *task, __u8 evtcode, __u64 idx,
 		}
 	}
 
-	defrag_dbg(KERN_DEBUG "d: %s node (#%llu, r%u, a%p)\n",
+	duet_dbg(KERN_DEBUG "d: %s node (#%llu, r%u, a%p)\n",
 		found ? "found" : "didn't find",
-		found ? itm->idx : inode->i_ino,
+		found ? itm->ino : inode->i_ino,
 		found ? itm->inmem : cur_inmem_ratio,
 		found ? itm->inode : inode);
 
 	/* If we found it, update it. If not, insert. */
 	if (!found && evtcode == DUET_EVT_CACHE_INSERT) {
-		itn = kzalloc(sizeof(*itn), GFP_NOFS);
-		if (!itn) {
-			printk(KERN_ERR "duet-defrag: itnode alloc failed\n");
-			ret = 1;
+		itm = duet_item_init(task, inode->i_ino, new_inmem_ratio,
+				(void *)inode);
+		if (!itm) {
+			printk(KERN_ERR "duet: itnode alloc failed\n");
 			goto out;
 		}
-		RB_CLEAR_NODE(&(itn->node));
 
-		/* Update the itnode */
-		itn->btrfs_ino = dwork->btrfs_ino;
-		itn->inmem_pages = dwork->inmem_pages + 1;
-		itn->total_pages = dwork->total_pages;
-		itn->inmem_ratio = new_inmem_ratio;
-
-		ret = insert_itnode(dwork, itn);
-		if (ret) {
-			printk(KERN_ERR "duet-defrag: insert failed\n");
-			kfree(itn);
+		if (duet_item_insert_inode(task, itm)) {
+			printk(KERN_ERR "duet: insert failed\n");
+			kfree(itm);
 		}
-	} else if (found) {
+	} else if (found && new_inmem_ratio != cur_inmem_ratio) {
 		/* Update the itnode */
-		itn->btrfs_ino = dwork->btrfs_ino;
-		itn->inmem_pages = dwork->inmem_pages +
-			(dwork->event_code == DUET_EVENT_CACHE_INSERT ? 1 : -1);
-		itn->total_pages = dwork->total_pages;
-		itn->inmem_ratio = new_inmem_ratio;
+		itm->inmem = new_inmem_ratio;
 
 		/* Did the number of pages reach zero? Then remove */
-		if (itn->inmem_pages == 0) {
-			rb_erase(node, &dwork->dctx->itree);
-			kfree(itn);
+		if (!itm->inmem) {
+			duet_item_dispose(itm, node, &task->itmtree);
 			goto out;
 		}
 
-		/* If the ratio has changed, erase and reinsert */
-		if (new_inmem_ratio != cur_inmem_ratio) {
-			rb_erase(node, &dwork->dctx->itree);
-			ret = insert_itnode(dwork, itn);
-			if (ret) {
-				printk(KERN_ERR "duet-defrag: insert failed\n");
-				kfree(itn);
-			}
+		/* The ratio has changed, so erase and reinsert */
+		rb_erase(node, &task->itmtree);
+		if (duet_item_insert_inode(task, itm)) {
+			printk(KERN_ERR "duet: insert failed\n");
+			kfree(itm);
 		}
 	}
 
+out:
+	spin_unlock(&task->itmtree_inner_lock);
+	spin_unlock(&task->itmtree_outer_lock);
 }
 
-/* This handles FS_READ and FS_WRITE events */
+/*
+ * Inserts a node in an ItemTree of blocks. Assumes relevant locks have been
+ * obtained. Returns 1 on failure.
+ */
+static int duet_item_insert_blk(struct duet_task *task, struct duet_item *itm)
+{
+	int found = 0;
+	struct rb_node **link, *parent = NULL;
+	struct duet_item *cur;
+
+	link = &task->itmtree.rb_node;
+
+	while (*link) {
+		parent = *link;
+		cur = rb_entry(parent, struct duet_item, node);
+
+		/* We order based on item number alone */
+		if (cur->lbn > itm->lbn) {
+			link = &(*link)->rb_left;
+		} else if (cur->lbn < itm->lbn) {
+			link = &(*link)->rb_right;
+		} else {
+			found = 1;
+			break;
+		}
+	}
+
+	duet_dbg(KERN_DEBUG "duet: %s block node (#%llu, e%u, a%p)\n",
+		found ? "will not insert" : "will insert", itm->lbn,
+		itm->inmem, itm->bio);
+
+	if (found)
+		goto out;
+
+	/* Insert node in tree */
+	rb_link_node(&itm->node, parent, link);
+	rb_insert_color(&itm->node, &task->itmtree);
+
+out:
+	return found;
+}
+
+/*
+ * This handles FS_READ and FS_WRITE events for a block tree. Indexing is based
+ * on logical block numbers alone, aligned by task->bitrange.
+ */
 static void duet_handle_blk(struct duet_task *task, __u8 evtcode, __u64 lbn,
 	__u32 len, struct bio *bio)
 {
 	__u64 curlbn;
 	int ret=0, found=0;
 	struct rb_node *node = NULL;
-	struct item_rbnode *itm = NULL;
+	struct duet_item *itm = NULL;
 
 	if (!(evtcode & (DUET_EVT_FS_READ | DUET_EVT_FS_WRITE))) {
 		printk(KERN_ERR "duet: evtcode %d in duet_handle_block\n",
@@ -266,16 +500,17 @@ static void duet_handle_blk(struct duet_task *task, __u8 evtcode, __u64 lbn,
 
 again:
 	/* First, look up the block number in the ItemTree */
-	spin_lock(&task->itmtree_lock);
+	spin_lock(&task->itmtree_outer_lock);
+	spin_lock(&task->itmtree_inner_lock);
 	node = task->itmtree.rb_node;
 
 	while (node) {
-		itm = rb_entry(node, struct item_rbnode, node);
+		itm = rb_entry(node, struct duet_item, node);
 
 		/* We order based on item number alone */
-		if (itm->idx > curlbn) {
+		if (itm->lbn > curlbn) {
 			node = node->rb_left;
-		} else if (itm->idx < curlbn) {
+		} else if (itm->lbn < curlbn) {
 			node = node->rb_right;
 		} else {
 			found = 1;
@@ -284,18 +519,18 @@ again:
 	}
 
 	duet_dbg(KERN_DEBUG "duet-defrag: %s node (#%llu, e%u, d%p)\n",
-		found ? "found" : "didn't find", found ? itm->idx : curlbn,
+		found ? "found" : "didn't find", found ? itm->lbn : curlbn,
 		found ? itm->evt : 0, found ? itm->bio : NULL);
 
 	/* If we didn't find it insert and return */
 	if (!found) {
-		itm = tnode_init(task, curlbn, evtcode, (void *)bio);
+		itm = duet_item_init(task, curlbn, evtcode, (void *)bio);
 		if (!itm) {
 			printk(KERN_ERR "duet: itmnode alloc failed\n");
 			goto out;
 		}
 
-		ret = tnode_insert(task, itm);
+		ret = duet_item_insert_blk(task, itm);
 		if (ret) {
 			printk(KERN_ERR "duet: item insert failed\n");
 			kfree(itm);
@@ -311,7 +546,8 @@ again:
 		goto again;
 
 out:
-	spin_unlock(&task->itmtree_lock);
+	spin_unlock(&task->itmtree_inner_lock);
+	spin_unlock(&task->itmtree_outer_lock);
 }
 
 /* We're finally here. Just find tasks that are interested in this event,
@@ -335,8 +571,8 @@ static void duet_handle_event(__u8 evtcode, __u64 idx, __u32 len, void *data)
 							(struct page *)data);
 				break;
 			case DUET_ITEM_PAGE:
-				//duet_handle_page(cur, evtcode, idx,
-				//			(struct page *)data);
+				duet_handle_page(cur, evtcode, idx,
+							(struct page *)data);
 				break;
 			case DUET_ITEM_BLOCK:
 				duet_handle_blk(cur, evtcode, idx, len,

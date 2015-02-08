@@ -181,7 +181,7 @@ static int duet_bmap_chk_bits(__u8 *bmap, __u32 start, __u32 num, __u8 set)
 
 		/* Check the intermediate byte blocks */
 		if (n_bytes) {
-			buf = kzalloc(n_bytes, GFP_NOFS);
+			buf = kzalloc(n_bytes, GFP_ATOMIC);
 			memset(buf, set ? 0xff : 0, n_bytes);
 			ret &= (1 - memcmp(&bmap[(start/8)+1], buf, n_bytes));
 			kfree(buf);

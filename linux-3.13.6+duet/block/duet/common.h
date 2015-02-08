@@ -58,20 +58,6 @@ struct bmap_rbnode {
 	__u8		*bmap;
 };
 
-struct item_rbnode {
-	__u64		idx;
-	struct rb_node	node;
-	union {
-		__u8	evt;	/* last event that occurred on this item */
-		__u8	inmem;	/* ratio of inode pages currently in mem */
-	};
-	union {
-		struct inode	*inode;
-		struct bio	*bio;
-		struct page	*page;
-	};
-};
-
 struct duet_task {
 	__u8			id;
 	char			name[TASK_NAME_LEN];
@@ -88,18 +74,21 @@ struct duet_task {
 	/* BitTree -- progress bitmap tree */
 	__u32			bitrange;	/* range per bmap bit */
 	__u32			bmapsize;	/* bytes per bmap */
-	struct mutex		bittree_lock;
+	spinlock_t		bittree_lock;
 	struct rb_root		bittree;
 #ifdef CONFIG_DUET_TREE_STATS
 	__u64			stat_bit_cur;	/* Cur # of BitTree nodes */
 	__u64			stat_bit_max;	/* Max # of BitTree nodes */
 #endif /* CONFIG_DUET_TREE_STATS */
-	__u64			first_inum;	/* First inum of interest */
-	__u64			last_inum;	/* Last inum of interest */
+#if 0
+	__u64			min_idx;	/* Min lbn/inode of interest */
+	__u64			max_idx;	/* Max lbn/inode of interest */
+#endif /* 0 */
 
 	/* ItemTree -- item events tree */
 	__u8			itmtype;
-	spinlock_t		itmtree_lock;
+	spinlock_t		itmtree_inner_lock;
+	spinlock_t		itmtree_outer_lock;
 	struct rb_root		itmtree;
 #ifdef CONFIG_DUET_TREE_STATS
 	__u64			stat_itm_cur;	/* Cur # of ItemTree nodes */
@@ -129,7 +118,14 @@ int duet_bmap_chk(__u8 *bmap, __u32 bmap_bytelen, __u64 first_byte,
 	__u32 blksize, __u64 req_byte, __u32 req_bytelen, __u8 set);
 
 /* task.c -- not in linux/duet.h */
+struct duet_task *duet_find_task(__u8 taskid);
 void duet_task_dispose(struct duet_task *task);
+
+/* hook.c */
+struct duet_item *duet_item_init(struct duet_task *task, __u64 idx, __u8 evt,
+	void *data);
+void duet_item_dispose(struct duet_item *itm, struct rb_node *rbnode,
+	struct rb_root *root);
 
 /* ioctl.c */
 int duet_bootstrap(void);
