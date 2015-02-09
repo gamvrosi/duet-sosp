@@ -3,8 +3,8 @@
 #include "ioctl.h"
 
 static unsigned long ioctls[] = {
-	DUET_IOC_STATUS,
-	DUET_IOC_TASKS,
+	DUET_IOC_CMD,
+	DUET_IOC_TLIST,
 	0 };
 
 int main(int ac, char **av)

@@ -22,6 +22,7 @@
 #include "common.h"
 
 #define MAX_TASKS 32
+#define MAX_ITEMS 128
 #define DUET_IOCTL_MAGIC 0xDE
 
 /* ioctl codes */
@@ -30,10 +31,16 @@
 #define DUET_REGISTER		3
 #define DUET_DEREGISTER		4
 #define DUET_MARK		5
-#define DUET_CHECK		6
-#define DUET_FETCH		7
-#define DUET_PRINTBIT		8
-#define DUET_PRINTITEM		9
+#define DUET_UNMARK		6
+#define DUET_CHECK		7
+#define DUET_FETCH		8
+#define DUET_PRINTBIT		9
+#define DUET_PRINTITEM		10
+
+/* item types */
+#define DUET_ITM_BLOCK		1
+#define DUET_ITM_PAGE		2
+#define DUET_ITM_INODE		3
 
 struct duet_ioctl_item {
 	__u64 itmnum;

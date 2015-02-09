@@ -27,7 +27,6 @@
 #include <linux/duet.h>
 
 #define TASK_NAME_LEN	128
-#define MAX_ITEMS	128
 
 #ifdef CONFIG_DUET_DEBUG
 #define duet_dbg(...)	printk(__VA_ARGS__)

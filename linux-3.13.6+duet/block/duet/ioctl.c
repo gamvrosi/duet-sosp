@@ -99,6 +99,7 @@ int duet_shutdown(void)
 
 static int duet_ioctl_cmd(void __user *arg)
 {
+	__u8 itmtype=0;
 	struct duet_ioctl_cmd_args *ca;
 
 	if (!capable(CAP_SYS_ADMIN))
@@ -139,7 +140,22 @@ static int duet_ioctl_cmd(void __user *arg)
 
 	case DUET_REGISTER:
 		/* TODO: Find the owner for the task */
-		ca->ret = duet_register(&ca->tid, ca->tname, ca->itmtype,
+		switch (ca->itmtype) {
+		case DUET_ITM_BLOCK:
+			itmtype = DUET_ITEM_BLOCK;
+			break;
+		case DUET_ITM_PAGE:
+			itmtype = DUET_ITEM_PAGE;
+			break;
+		case DUET_ITM_INODE:
+			itmtype = DUET_ITEM_INODE;
+			break;
+		default:
+			printk(KERN_ERR "duet: unknown itmtype\n");
+			goto err;
+		}
+
+		ca->ret = duet_register(&ca->tid, ca->tname, itmtype,
 					ca->bitrange, ca->evtmask, NULL);
 		break;
 
@@ -149,6 +165,10 @@ static int duet_ioctl_cmd(void __user *arg)
 
 	case DUET_MARK:
 		ca->ret = duet_mark(ca->tid, ca->itmidx, ca->itmnum);
+		break;
+
+	case DUET_UNMARK:
+		ca->ret = duet_unmark(ca->tid, ca->itmidx, ca->itmnum);
 		break;
 
 	case DUET_CHECK:
