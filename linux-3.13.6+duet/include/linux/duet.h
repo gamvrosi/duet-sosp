@@ -48,9 +48,18 @@ struct duet_bw_hook_data {
 	__u64		offset;
 };
 
+struct duet_bio_info {
+	u64	maxidx;
+	u32	len;
+	u32	*crc;
+};
+
 /* Item struct returned for processing */
 struct duet_item {
-	struct rb_node	node;
+	union {
+		struct rb_node		node;
+		struct list_head	lnode;
+	};
 	union {
 		__u64	ino;
 		__u64	lbn;
@@ -64,6 +73,7 @@ struct duet_item {
 		struct bio	*bio;
 		struct page	*page;
 	};
+	struct duet_bio_info	*binfo;
 };
 
 /* bio flag */
@@ -110,7 +120,9 @@ int duet_deregister(__u8 taskid);
 int duet_online(void);
 int duet_check(__u8 taskid, __u64 idx, __u32 num);
 int duet_mark(__u8 taskid, __u64 idx, __u32 num);
-int duet_fetch(__u8 taskid, __u8 itreq, struct duet_item **items, __u8 *itret);
+int duet_unmark(__u8 taskid, __u64 idx, __u32 num);
+int duet_fetch(__u8 taskid, __u16 itreq, struct duet_item **items, __u16 *itret);
+int duet_dispose_item(struct duet_item *item, __u8 type);
 #if 0
 int duet_trim_bittree(__u8 taskid, __u64 start, __u64 end);
 #endif /* 0 */

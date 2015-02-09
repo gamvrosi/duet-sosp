@@ -304,6 +304,7 @@ static int bittree_trim(struct duet_task *task)
 }
 #endif /* 0 */
 
+/* TODO */
 static int itmtree_print(struct duet_task *task)
 {
 	printk(KERN_INFO "duet: ItemTree printing not implemented\n");
@@ -335,7 +336,7 @@ static int bittree_print(struct duet_task *task)
 	return 0;
 }
 
-static int duet_mark_chkupd(__u8 taskid, __u64 itmidx, __u32 itmnum, __u8 chk)
+static int duet_mark_chkupd(__u8 taskid, __u64 idx, __u32 num, __u8 set, __u8 chk)
 {
 	int ret = 0;
 	struct duet_task *task;
@@ -360,10 +361,11 @@ static int duet_mark_chkupd(__u8 taskid, __u64 itmidx, __u32 itmnum, __u8 chk)
 		goto done;
 #endif /* 0 */
 
-	ret = bittree_chkupd(task, itmidx, itmnum, 1, chk);
+	ret = bittree_chkupd(task, idx, num, set, chk);
 	if (ret == -1)
-		printk(KERN_ERR "duet: blocks were not %s set for task %d\n",
-			chk ? "found" : "marked", task->id);
+		printk(KERN_ERR "duet: blocks were not %s %s for task %d\n",
+			chk ? "found" : "marked", set ? "set" : "unset",
+			task->id);
 
 #if 0
 done:
@@ -455,16 +457,25 @@ int duet_check(__u8 taskid, __u64 itmidx, __u32 itmnum)
 	if (!duet_online())
 		return -1;	
 
-	return duet_mark_chkupd(taskid, itmidx, itmnum, 1);
+	return duet_mark_chkupd(taskid, itmidx, itmnum, 1, 1);
 }
 EXPORT_SYMBOL_GPL(duet_check);
+
+/* Unmarks the blocks in the range from lbn to lbn+len as pending */
+int duet_unmark(__u8 taskid, __u64 itmidx, __u32 itmnum)
+{
+	if (!duet_online())
+		return -1;
+	return duet_mark_chkupd(taskid, itmidx, itmnum, 1, 0);
+}
+EXPORT_SYMBOL_GPL(duet_unmark);
 
 /* Marks the blocks in the range from lbn to lbn+len as done */
 int duet_mark(__u8 taskid, __u64 itmidx, __u32 itmnum)
 {
 	if (!duet_online())
 		return -1;
-	return duet_mark_chkupd(taskid, itmidx, itmnum, 0);
+	return duet_mark_chkupd(taskid, itmidx, itmnum, 0, 0);
 }
 EXPORT_SYMBOL_GPL(duet_mark);
 
@@ -490,18 +501,25 @@ static int duet_task_init(struct duet_task **task, const char *name,
 	/* We no longer expose this at registration. Fixed to 32KB. */
 	(*task)->bmapsize = 32768;
 
-	spin_lock_init(&(*task)->itmtree_inner_lock);
-	spin_lock_init(&(*task)->itmtree_outer_lock);
+	spin_lock_init(&(*task)->itm_inner_lock);
+	spin_lock_init(&(*task)->itm_outer_lock);
 	spin_lock_init(&(*task)->bittree_lock);
 	(*task)->bittree = RB_ROOT;
-	(*task)->itmtree = RB_ROOT;
 	(*task)->evtmask = evtmask;
 	(*task)->itmtype = itmtype;
 
-	if (owner && itmtype == DUET_ITEM_BLOCK)
-		(*task)->bdev = ((struct block_device *)owner)->bd_contains;
-	else if (owner && (itmtype == DUET_ITEM_INODE || itmtype == DUET_ITEM_PAGE))
+	switch (itmtype) {
+	case DUET_ITEM_BLOCK:
+		INIT_LIST_HEAD(&(*task)->itmlist);
+		if (owner)
+			(*task)->bdev = ((struct block_device *)owner)->bd_contains;
+		break;
+	case DUET_ITEM_PAGE:
+	case DUET_ITEM_INODE:
+		(*task)->itmtree = RB_ROOT;
 		(*task)->sb = (struct super_block *)owner;
+		break;
+	}
 
 	return 0;
 }
@@ -513,7 +531,7 @@ void duet_task_dispose(struct duet_task *task)
 {
 	struct rb_node *rbnode;
 	struct bmap_rbnode *bnode;
-	struct duet_item *itm;
+	struct duet_item *itm, *titm;
 
 	/* Dispose of the BitTree */
 	while (!RB_EMPTY_ROOT(&task->bittree)) {
@@ -522,11 +540,23 @@ void duet_task_dispose(struct duet_task *task)
 		bnode_dispose(bnode, rbnode, &task->bittree);
 	}
 
-	/* Dispose of the ItemTree */
-	while (!RB_EMPTY_ROOT(&task->itmtree)) {
-		rbnode = rb_first(&task->itmtree);
-		itm = rb_entry(rbnode, struct duet_item, node);
-		duet_item_dispose(itm, rbnode, &task->itmtree);
+	/* Dispose of the ItemTree or ItemList */
+	switch (task->itmtype) {
+	case DUET_ITEM_BLOCK:
+		list_for_each_entry_safe(itm, titm, &task->itmlist, lnode) {
+			list_del(&itm->lnode);
+			duet_dispose_item(itm, task->itmtype);
+		}
+		break;
+	case DUET_ITEM_PAGE:
+	case DUET_ITEM_INODE:
+		while (!RB_EMPTY_ROOT(&task->itmtree)) {
+			rbnode = rb_first(&task->itmtree);
+			itm = rb_entry(rbnode, struct duet_item, node);
+			rb_erase(rbnode, &task->itmtree);
+			duet_dispose_item(itm, task->itmtype);
+		}
+		break;
 	}
 
 	kfree(task);

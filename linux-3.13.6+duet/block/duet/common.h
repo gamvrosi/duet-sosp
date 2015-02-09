@@ -87,9 +87,12 @@ struct duet_task {
 
 	/* ItemTree -- item events tree */
 	__u8			itmtype;
-	spinlock_t		itmtree_inner_lock;
-	spinlock_t		itmtree_outer_lock;
-	struct rb_root		itmtree;
+	spinlock_t		itm_inner_lock;
+	spinlock_t		itm_outer_lock;
+	union {
+		struct rb_root		itmtree;	/* Page tree */
+		struct list_head	itmlist;	/* bio list */
+	};
 #ifdef CONFIG_DUET_TREE_STATS
 	__u64			stat_itm_cur;	/* Cur # of ItemTree nodes */
 	__u64			stat_itm_max;	/* Max # of ItemTree nodes */
@@ -122,10 +125,7 @@ struct duet_task *duet_find_task(__u8 taskid);
 void duet_task_dispose(struct duet_task *task);
 
 /* hook.c */
-struct duet_item *duet_item_init(struct duet_task *task, __u64 idx, __u8 evt,
-	void *data);
-void duet_item_dispose(struct duet_item *itm, struct rb_node *rbnode,
-	struct rb_root *root);
+int duet_dispose_item(struct duet_item *itm, __u8 type);
 
 /* ioctl.c */
 int duet_bootstrap(void);
