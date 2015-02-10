@@ -123,7 +123,7 @@ static int bittree_chkupd(struct duet_task *task, __u64 lbn, __u32 len,
 	 * flags), and only the calls that are required to add/remove nodes to
 	 * the tree will be costly
 	 */
-	spin_lock(&task->bittree_lock);
+	spin_lock_irq(&task->bittree_lock);
 
 	while (rem_len) {
 		/* Look up node_lbn */
@@ -258,7 +258,7 @@ static int bittree_chkupd(struct duet_task *task, __u64 lbn, __u32 len,
 		ret = 1;
 
 done:
-	spin_unlock(&task->bittree_lock);
+	spin_unlock_irq(&task->bittree_lock);
 	return ret;
 }
 
@@ -286,7 +286,7 @@ static int bittree_trim(struct duet_task *task)
         struct rb_node *rbnode;
         struct bmap_rbnode *bnode;
 
-	spin_lock(&task->bittree_lock);
+	spin_lock_irq(&task->bittree_lock);
         while (!RB_EMPTY_ROOT(&task->bittree)) {
                 rbnode = rb_first(&task->bittree);
                 bnode = rb_entry(rbnode, struct bmap_rbnode, node);
@@ -298,7 +298,7 @@ static int bittree_trim(struct duet_task *task)
 		else
 			break;
         }
-	spin_unlock(&task->bittree_lock);
+	spin_unlock_irq(&task->bittree_lock);
 
 	return 0;
 }
@@ -317,7 +317,7 @@ static int bittree_print(struct duet_task *task)
 	struct rb_node *node;
 	__u32 bits_on;
 
-	spin_lock(&task->bittree_lock);
+	spin_lock_irq(&task->bittree_lock);
 	printk(KERN_INFO "duet: Printing BitTree for task #%d\n", task->id);
 	node = rb_first(&task->bittree);
 	while (node) {
@@ -331,7 +331,7 @@ static int bittree_print(struct duet_task *task)
 
 		node = rb_next(node);
 	}
-	spin_unlock(&task->bittree_lock);
+	spin_unlock_irq(&task->bittree_lock);
 
 	return 0;
 }
@@ -502,7 +502,7 @@ static int duet_task_init(struct duet_task **task, const char *name,
 	(*task)->bmapsize = 32768;
 
 	spin_lock_init(&(*task)->itm_inner_lock);
-	spin_lock_init(&(*task)->itm_outer_lock);
+	//spin_lock_init(&(*task)->itm_outer_lock);
 	spin_lock_init(&(*task)->bittree_lock);
 	(*task)->bittree = RB_ROOT;
 	(*task)->evtmask = evtmask;

@@ -195,7 +195,7 @@ EXPORT_SYMBOL_GPL(duet_dispose_item);
 int duet_fetch(__u8 taskid, __u16 itreq, struct duet_item **items, __u16 *itret)
 {
 	struct rb_node *rbnode;
-	struct duet_item *itm, *titm;
+	struct duet_item *itm;
 	struct duet_task *task = duet_find_task(taskid);
 
 	if (!task) {
@@ -208,43 +208,57 @@ int duet_fetch(__u8 taskid, __u16 itreq, struct duet_item **items, __u16 *itret)
 	 * We also skip the outer lock. Suck it interrupts.
 	 */
 	*itret = 0;
-	spin_lock(&task->itm_inner_lock);
+
+again:
+	spin_lock_irq(&task->itm_inner_lock);
 	switch(task->itmtype) {
 	case DUET_ITEM_BLOCK:
-		list_for_each_entry_safe(itm, titm, &task->itmlist, lnode) {
-			/* Grab the first and remove it from the list */
-			list_del(&itm->lnode);
-
-			if (duet_check(taskid, itm->lbn, itm->binfo->len) == 1) {
-				duet_dispose_item(itm, task->itmtype);
-			} else {
-				items[*itret] = itm;
-				(*itret)++;
-			}
-
-			if (*itret == itreq)
-				break;
+		/* Grab the first and remove it from the list */
+		if (!list_empty(&task->itmlist)) {
+			itm = list_entry(task->itmlist.next, struct duet_item,
+					 lnode);
+			list_del_init(&itm->lnode);
+			spin_unlock_irq(&task->itm_inner_lock);
+		} else {
+			spin_unlock_irq(&task->itm_inner_lock);
+			break;
 		}
+
+		if (duet_check(taskid, itm->lbn, itm->binfo->len) == 1) {
+			duet_dispose_item(itm, task->itmtype);
+		} else {
+			items[*itret] = itm;
+			(*itret)++;
+		}
+
+		if (*itret < itreq)
+			goto again;
 		break;
 
 	case DUET_ITEM_PAGE:
 	case DUET_ITEM_INODE:
-		while (!RB_EMPTY_ROOT(&task->itmtree) && *itret < itreq) {
-			/* Grab the first and remove it from the tree */
+		/* Grab the first and remove it from the tree */
+		if (!RB_EMPTY_ROOT(&task->itmtree)) {
 			rbnode = rb_first(&task->itmtree);
 			itm = rb_entry(rbnode, struct duet_item, node);
 			rb_erase(rbnode, &task->itmtree);
-
-			if (duet_check(taskid, itm->lbn, 1) == 1) {
-				duet_dispose_item(itm, task->itmtype);
-			} else {
-				items[*itret] = itm;
-				(*itret)++;
-			}
+			spin_unlock_irq(&task->itm_inner_lock);
+		} else {
+			spin_unlock_irq(&task->itm_inner_lock);
+			break;
 		}
+
+		if (duet_check(taskid, itm->lbn, 1) == 1) {
+			duet_dispose_item(itm, task->itmtype);
+		} else {
+			items[*itret] = itm;
+			(*itret)++;
+		}
+
+		if (*itret < itreq)
+			goto again;
 		break;
 	}
-	spin_unlock(&task->itm_inner_lock);
 
 	/* decref and wake up cleaner if needed */
 	if (atomic_dec_and_test(&task->refcount))
@@ -329,8 +343,8 @@ static void duet_handle_page(struct duet_task *task, __u8 evtcode, __u64 idx,
 	}
 
 	/* First, look up the node in the ItemTree */
-	spin_lock(&task->itm_outer_lock);
-	spin_lock(&task->itm_inner_lock);
+	//spin_lock_irq(&task->itm_outer_lock);
+	spin_lock_irq(&task->itm_inner_lock);
 	node = task->itmtree.rb_node;
 
 	while (node) {
@@ -381,8 +395,8 @@ static void duet_handle_page(struct duet_task *task, __u8 evtcode, __u64 idx,
 	}
 
 out:
-	spin_unlock(&task->itm_inner_lock);
-	spin_unlock(&task->itm_outer_lock);
+	spin_unlock_irq(&task->itm_inner_lock);
+	//spin_unlock_irq(&task->itm_outer_lock);
 }
 
 /*
@@ -478,8 +492,8 @@ static void duet_handle_inode(struct duet_task *task, __u8 evtcode, __u64 idx,
 		total_pages);
 
 	/* First, look up the node in the ItemTree */
-	spin_lock(&task->itm_outer_lock);
-	spin_lock(&task->itm_inner_lock);
+	//spin_lock_irq(&task->itm_outer_lock);
+	spin_lock_irq(&task->itm_inner_lock);
 	node = task->itmtree.rb_node;
 
 	while (node) {
@@ -542,8 +556,8 @@ static void duet_handle_inode(struct duet_task *task, __u8 evtcode, __u64 idx,
 	}
 
 out:
-	spin_unlock(&task->itm_inner_lock);
-	spin_unlock(&task->itm_outer_lock);
+	spin_unlock_irq(&task->itm_inner_lock);
+	//spin_unlock_irq(&task->itm_outer_lock);
 }
 
 /*
@@ -578,10 +592,10 @@ static void duet_handle_blk(struct duet_task *task, __u8 evtcode, __u64 lbn,
 		return;
 
 	/* Add the event in the list, indexing by (lbn, len) */
-	spin_lock(&task->itm_outer_lock);
-	spin_lock(&task->itm_inner_lock);
+	//spin_lock_irq(&task->itm_outer_lock);
+	spin_lock_irq(&task->itm_inner_lock);
 
-	itm = duet_item_init(task, evtcode, lbn, len, (void *)bio);
+	itm = duet_item_init(task, lbn, len, evtcode, (void *)bio);
 	if (!itm) {
 		printk(KERN_ERR "duet: itm-block alloc failed\n");
 		goto out;
@@ -593,8 +607,8 @@ static void duet_handle_blk(struct duet_task *task, __u8 evtcode, __u64 lbn,
 		itm->lbn, itm->binfo->len, itm->evt, itm->bio);
 
 out:
-	spin_unlock(&task->itm_inner_lock);
-	spin_unlock(&task->itm_outer_lock);
+	spin_unlock_irq(&task->itm_inner_lock);
+	//spin_unlock_irq(&task->itm_outer_lock);
 }
 
 /* We're finally here. Just find tasks that are interested in this event,

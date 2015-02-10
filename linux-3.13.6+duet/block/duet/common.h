@@ -87,7 +87,7 @@ struct duet_task {
 	/* ItemTree -- item events tree */
 	__u8			itmtype;
 	spinlock_t		itm_inner_lock;
-	spinlock_t		itm_outer_lock;
+	//spinlock_t		itm_outer_lock;
 	union {
 		struct rb_root		itmtree;	/* Page tree */
 		struct list_head	itmlist;	/* bio list */
