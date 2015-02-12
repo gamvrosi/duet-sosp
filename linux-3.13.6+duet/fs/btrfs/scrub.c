@@ -642,9 +642,10 @@ out:
 /*
  * This is the core of the synergistic scrubber. We are passed the physical
  * range that was read or written, and we need to mark or unmark it
- * respectively.
+ * respectively. Returns 1 if fetch filled our buffer (so there's more to
+ * process).
  */
-static void process_duet_events(struct scrub_ctx *sctx)
+static int process_duet_events(struct scrub_ctx *sctx)
 {
 	u16 i, itret;
 	u64 start;
@@ -652,12 +653,12 @@ static void process_duet_events(struct scrub_ctx *sctx)
 
 	if (duet_fetch(sctx->taskid, sctx->max_events, sctx->events, &itret)) {
 		printk(KERN_ERR "duet-scrub: duet_fetch failed\n");
-		return;
+		return 0;
 	}
 
-	/* If there were no events, move on */
+	/* If there were no events, return 0 */
 	if (!itret)
-		return;
+		return 0;
 
 	for (i = 0; i < itret; i++) {
 		itm = sctx->events[i];
@@ -690,6 +691,8 @@ static void process_duet_events(struct scrub_ctx *sctx)
 
 		duet_dispose_item(itm, DUET_ITEM_BLOCK);
 	}
+
+	return (itret == sctx->max_events);
 }
 #endif /* CONFIG_BTRFS_DUET_SCRUB */
 
@@ -850,7 +853,7 @@ struct scrub_ctx *scrub_setup_ctx(struct btrfs_device *dev, u64 deadline,
 	}
 
 #ifdef CONFIG_BTRFS_DUET_SCRUB
-	sctx->max_events = 1024;
+	sctx->max_events = 32;
 	sctx->events = kzalloc(sctx->max_events * sizeof(struct duet_item *),
 				GFP_NOFS);
 	if (!sctx->events) {
@@ -3406,7 +3409,8 @@ back_to_paused:
 		}
 
 #ifdef CONFIG_BTRFS_DUET_SCRUB
-		process_duet_events(sctx);
+		if (process_duet_events(sctx))
+			continue;
 #endif /* CONFIG_BTRFS_DUET_SCRUB */
 
 #ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
