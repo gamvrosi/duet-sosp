@@ -44,10 +44,6 @@
 static DEFINE_SPINLOCK(elv_list_lock);
 static LIST_HEAD(elv_list);
 
-#ifdef CONFIG_DUET_SCHED
-extern duet_hook_t *duet_hook_blk_fp;
-#endif /* CONFIG_DUET_SCHED */
-
 /*
  * Merge hash stuff.
  */
@@ -754,25 +750,11 @@ EXPORT_SYMBOL(elv_abort_queue);
 void elv_completed_request(struct request_queue *q, struct request *rq)
 {
 	struct elevator_queue *e = q->elevator;
-#ifdef CONFIG_DUET_SCHED
-	duet_hook_t *dhfp = NULL;
-#endif /* CONFIG_DUET_SCHED */
 
 	/*
 	 * request is released from the driver, io must be done
 	 */
 	if (blk_account_rq(rq)) {
-#ifdef CONFIG_DUET_SCHED
-		/* Pass by duet first */
-		rcu_read_lock();
-		dhfp = rcu_dereference(duet_hook_blk_fp);
-
-		if (dhfp)
-			dhfp(DUET_EVT_SCHED_DONE, DUET_HOOK_SCHED_DONE,
-			     (void *)rq);
-
-		rcu_read_unlock();
-#endif /* CONFIG_DUET_SCHED */
 		q->in_flight[rq_is_sync(rq)]--;
 		if ((rq->cmd_flags & REQ_SORTED) &&
 		    e->type->ops.elevator_completed_req_fn)

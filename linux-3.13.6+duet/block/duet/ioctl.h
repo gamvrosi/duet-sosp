@@ -38,9 +38,7 @@
 #define DUET_PRINTITEM		10
 
 /* item types */
-#define DUET_ITM_BLOCK		1
-#define DUET_ITM_PAGE		2
-#define DUET_ITM_INODE		3
+#define DUET_ITM_INODE		1
 
 struct duet_ioctl_item {
 	__u64 itmnum;

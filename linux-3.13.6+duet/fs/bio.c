@@ -28,16 +28,9 @@
 #include <linux/mempool.h>
 #include <linux/workqueue.h>
 #include <linux/cgroup.h>
-#ifdef CONFIG_DUET_FS
-#include <linux/duet.h>
-#endif /* CONFIG_DUET_FS */
 #include <scsi/sg.h>		/* for struct sg_iovec */
 
 #include <trace/events/block.h>
-
-#ifdef CONFIG_DUET_FS
-extern duet_hook_t *duet_hook_fs_fp;
-#endif /* CONFIG_DUET_FS */
 
 /*
  * Test patch to inline a certain number of bi_io_vec's inside the bio
@@ -786,20 +779,6 @@ static void submit_bio_wait_endio(struct bio *bio, int error)
 int submit_bio_wait(int rw, struct bio *bio)
 {
 	struct submit_bio_ret ret;
-#ifdef CONFIG_DUET_FS
-	duet_hook_t *dhfp = NULL;
-	u64 bio_bytes = bio->bi_sector << 9;
-	struct duet_bw_hook_data hook_data;
-
-#ifdef CONFIG_DUET_DEBUG
-	printk(KERN_DEBUG "duet: hooking on submit_bio_wait\n");
-#endif /* CONFIG_DUET_DEBUG */
-	rcu_read_lock();
-	dhfp = rcu_dereference(duet_hook_fs_fp);
-	if (dhfp)
-		dhfp(0, DUET_HOOK_BW_START, (void *)bio);
-	rcu_read_unlock();
-#endif /* CONFIG_DUET_FS */
 
 	rw |= REQ_SYNC;
 	init_completion(&ret.event);
@@ -807,18 +786,6 @@ int submit_bio_wait(int rw, struct bio *bio)
 	bio->bi_end_io = submit_bio_wait_endio;
 	submit_bio(rw, bio);
 	wait_for_completion(&ret.event);
-
-#ifdef CONFIG_DUET_FS
-	hook_data.bio = bio;
-	hook_data.offset = bio_bytes;
-
-	rcu_read_lock();
-	dhfp = rcu_dereference(duet_hook_fs_fp);
-	if (dhfp)
-		dhfp(rw & WRITE ? DUET_EVT_FS_WRITE : DUET_EVT_FS_READ,
-			DUET_HOOK_BW_END, (void *)&hook_data);
-	rcu_read_unlock();
-#endif /* CONFIG_DUET_FS */
 
 	return ret.error;
 }

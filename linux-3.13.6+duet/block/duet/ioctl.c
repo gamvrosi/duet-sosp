@@ -39,15 +39,7 @@ int duet_bootstrap(void)
 	mutex_init(&duet_env.task_list_mutex);
 	atomic_set(&duet_env.status, DUET_STATUS_ON);
 
-#ifdef CONFIG_DUET_CACHE
 	rcu_assign_pointer(duet_hook_cache_fp, duet_hook);
-#endif /* CONFIG_DUET_CACHE */
-#ifdef CONFIG_DUET_SCHED
-	rcu_assign_pointer(duet_hook_blk_fp, duet_hook);
-#endif /* CONFIG_DUET_SCHED */
-#ifdef CONFIG_DUET_FS
-	rcu_assign_pointer(duet_hook_fs_fp, duet_hook);
-#endif /* CONFIG_DUET_FS */
 	synchronize_rcu();
 	return 0;
 }
@@ -62,15 +54,7 @@ int duet_shutdown(void)
 		return 1;
 	}
 
-#ifdef CONFIG_DUET_CACHE
 	rcu_assign_pointer(duet_hook_cache_fp, NULL);
-#endif /* CONFIG_DUET_CACHE */
-#ifdef CONFIG_DUET_SCHED
-	rcu_assign_pointer(duet_hook_blk_fp, NULL);
-#endif /* CONFIG_DUET_SCHED */
-#ifdef CONFIG_DUET_FS
-	rcu_assign_pointer(duet_hook_fs_fp, NULL);
-#endif /* CONFIG_DUET_FS */
 	synchronize_rcu();
 
 	/* Remove all tasks */
@@ -97,9 +81,9 @@ int duet_shutdown(void)
 	return 0;
 }
 
+/* TODO: fix fetch for userland */
 static int duet_ioctl_cmd(void __user *arg)
 {
-	__u8 itmtype=0;
 	struct duet_ioctl_cmd_args *ca;
 
 	if (!capable(CAP_SYS_ADMIN))
@@ -140,22 +124,7 @@ static int duet_ioctl_cmd(void __user *arg)
 
 	case DUET_REGISTER:
 		/* TODO: Find the owner for the task */
-		switch (ca->itmtype) {
-		case DUET_ITM_BLOCK:
-			itmtype = DUET_ITEM_BLOCK;
-			break;
-		case DUET_ITM_PAGE:
-			itmtype = DUET_ITEM_PAGE;
-			break;
-		case DUET_ITM_INODE:
-			itmtype = DUET_ITEM_INODE;
-			break;
-		default:
-			printk(KERN_ERR "duet: unknown itmtype\n");
-			goto err;
-		}
-
-		ca->ret = duet_register(&ca->tid, ca->tname, itmtype,
+		ca->ret = duet_register(&ca->tid, ca->tname, DUET_ITEM_INODE,
 					ca->bitrange, ca->evtmask, NULL);
 		break;
 

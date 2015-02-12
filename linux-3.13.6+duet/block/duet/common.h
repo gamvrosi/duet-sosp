@@ -19,9 +19,8 @@
 #define _COMMON_H
 
 #include <linux/fs.h>
-#include <linux/slab.h>
 #include <linux/sched.h>
-#include <linux/wait.h>
+#include <linux/slab.h>
 #include <linux/rbtree.h>
 #include <linux/rculist.h>
 #include <linux/duet.h>
@@ -33,16 +32,6 @@
 #else
 #define duet_dbg(...)
 #endif
-
-#ifdef CONFIG_DUET_CACHE
-extern void (*duet_hook_cache_fp)(__u8, __u8, void *);
-#endif /* CONFIG_DUET_CACHE */
-#ifdef CONFIG_DUET_SCHED
-extern void (*duet_hook_blk_fp)(__u8, __u8, void *);
-#endif /* CONFIG_DUET_SCHED */
-#ifdef CONFIG_DUET_FS
-extern void (*duet_hook_fs_fp)(__u8, __u8, void *);
-#endif /* CONFIG_DUET_FS */
 
 enum {
 	DUET_STATUS_OFF = 0,
@@ -64,11 +53,7 @@ struct duet_task {
 	wait_queue_head_t	cleaner_queue;
 	atomic_t		refcount;
 	__u8			evtmask;	/* Event codes of interest */
-	union {
-		/* Filesystem or device this task is operating on */
-		struct super_block	*sb;
-		struct block_device	*bdev;
-	};
+	struct super_block	*sb;		/* Filesystem of task (opt) */
 
 	/* BitTree -- progress bitmap tree */
 	__u32			bitrange;	/* range per bmap bit */
@@ -79,19 +64,12 @@ struct duet_task {
 	__u64			stat_bit_cur;	/* Cur # of BitTree nodes */
 	__u64			stat_bit_max;	/* Max # of BitTree nodes */
 #endif /* CONFIG_DUET_TREE_STATS */
-#if 0
-	__u64			min_idx;	/* Min lbn/inode of interest */
-	__u64			max_idx;	/* Max lbn/inode of interest */
-#endif /* 0 */
 
 	/* ItemTree -- item events tree */
-	__u8			itmtype;
-	spinlock_t		itm_inner_lock;
-	//spinlock_t		itm_outer_lock;
-	union {
-		struct rb_root		itmtree;	/* Page tree */
-		struct list_head	itmlist;	/* bio list */
-	};
+	__u8			itmtype;	/* pages or inodes? */
+	spinlock_t		itm_lock;
+	//spinlock_t		itm_hook_lock;
+	struct rb_root		itmtree;
 #ifdef CONFIG_DUET_TREE_STATS
 	__u64			stat_itm_cur;	/* Cur # of ItemTree nodes */
 	__u64			stat_itm_max;	/* Max # of ItemTree nodes */
@@ -110,6 +88,7 @@ struct duet_info {
 };
 
 extern struct duet_info duet_env;
+extern duet_hook_t *duet_hook_cache_fp;
 
 /* bmap.c */
 __u32 duet_bmap_count(__u8 *bmap, __u32 byte_len);
@@ -122,9 +101,6 @@ int duet_bmap_chk(__u8 *bmap, __u32 bmap_bytelen, __u64 first_byte,
 /* task.c -- not in linux/duet.h */
 struct duet_task *duet_find_task(__u8 taskid);
 void duet_task_dispose(struct duet_task *task);
-
-/* hook.c */
-int duet_dispose_item(struct duet_item *itm, __u8 type);
 
 /* ioctl.c */
 int duet_bootstrap(void);

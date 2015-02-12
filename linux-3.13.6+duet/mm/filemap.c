@@ -45,10 +45,10 @@
 
 #include <asm/mman.h>
 
-#ifdef CONFIG_DUET_CACHE
+#ifdef CONFIG_DUET
 duet_hook_t *duet_hook_cache_fp = NULL;
 EXPORT_SYMBOL(duet_hook_cache_fp);
-#endif /* CONFIG_DUET_CACHE */
+#endif /* CONFIG_DUET */
 
 /*
  * Shared mappings implemented 30.11.1994. It's not fully working yet,
@@ -120,7 +120,7 @@ EXPORT_SYMBOL(duet_hook_cache_fp);
 void __delete_from_page_cache(struct page *page)
 {
 	struct address_space *mapping = page->mapping;
-#ifdef CONFIG_DUET_CACHE
+#ifdef CONFIG_DUET
 	duet_hook_t *dhfp = NULL;
 
 	rcu_read_lock();
@@ -128,9 +128,9 @@ void __delete_from_page_cache(struct page *page)
 
 	/* TODO: Make sure that duet_hook doesn't sleep */
 	if (dhfp)
-		dhfp(DUET_EVT_CACHE_REMOVE, DUET_HOOK_PAGE, (void *)page);
+		dhfp(DUET_EVT_REM, (void *)page);
 	rcu_read_unlock();
-#endif /* CONFIG_DUET_CACHE */
+#endif /* CONFIG_DUET */
 
 	trace_mm_filemap_delete_from_page_cache(page);
 	/*
@@ -476,9 +476,9 @@ int add_to_page_cache_locked(struct page *page, struct address_space *mapping,
 		pgoff_t offset, gfp_t gfp_mask)
 {
 	int error;
-#ifdef CONFIG_DUET_CACHE
+#ifdef CONFIG_DUET
 	duet_hook_t *dhfp = NULL;
-#endif /* CONFIG_DUET_CACHE */
+#endif /* CONFIG_DUET */
 
 	VM_BUG_ON(!PageLocked(page));
 	VM_BUG_ON(PageSwapBacked(page));
@@ -508,14 +508,14 @@ int add_to_page_cache_locked(struct page *page, struct address_space *mapping,
 	spin_unlock_irq(&mapping->tree_lock);
 	trace_mm_filemap_add_to_page_cache(page);
 
-#ifdef CONFIG_DUET_CACHE
+#ifdef CONFIG_DUET
 	rcu_read_lock();
 	dhfp = rcu_dereference(duet_hook_cache_fp);
 
 	if (dhfp)
-		dhfp(DUET_EVT_CACHE_INSERT, DUET_HOOK_PAGE, (void *)page);
+		dhfp(DUET_EVT_ADD, (void *)page);
 	rcu_read_unlock();
-#endif /* CONFIG_DUET_CACHE */
+#endif /* CONFIG_DUET */
 
 	return 0;
 err_insert:
