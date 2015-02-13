@@ -188,8 +188,8 @@ struct scrub_ctx {
 
 #ifdef CONFIG_BTRFS_DUET_SCRUB
 	u8			taskid;
-	struct duet_item	**events;
-	u16			max_events;
+	struct block_device	*scrub_dev;
+	//struct list_head	*pending_pages;
 #endif /* CONFIG_BTRFS_DUET_SCRUB */
 };
 
@@ -398,9 +398,7 @@ static noinline_for_stack void scrub_free_ctx(struct scrub_ctx *sctx)
 #ifdef CONFIG_BTRFS_DUET_SCRUB
 	/* Deregister the task from the Duet framework */
 	if (duet_deregister(sctx->taskid))
-		printk(KERN_ERR "scrub: failed to deregister from duet framework\n");
-
-	kfree(sctx->events);
+		printk(KERN_ERR "scrub: failed to deregister with duet\n");
 #endif /* CONFIG_BTRFS_DUET_SCRUB */
 
 	/* this can happen when scrub is cancelled */
@@ -640,59 +638,134 @@ out:
 
 #ifdef CONFIG_BTRFS_DUET_SCRUB
 /*
- * This is the core of the synergistic scrubber. We are passed the physical
- * range that was read or written, and we need to mark or unmark it
- * respectively. Returns 1 if fetch filled our buffer (so there's more to
- * process).
+ * This is the core of the synergistic scrubber. We fetch page-related events,
+ * and mark or unmark the corresponding LBN range(s), depending on whether the
+ * event that occurred was an ADD or MOD of a page.
+ *
+ * Pages that are not found to have a logical/physical mapping yet, are enqueued
+ * until we receive another MOD or REM event for them. Then we check them again.
+ * TODO: Implement this functionality.
+ *
+ * We try to process up to 256 events at a time. However, we will stop if an
+ * event requires us to fetch metadata from disk. If all operations took place
+ * in memory, we return 0 so that the scrubber knows it can go ahead and queue
+ * bios. Otherwise we return >0, indicating that some IO already occurred and we
+ * need to give the foreground workload a chance.
  */
 static int process_duet_events(struct scrub_ctx *sctx)
 {
-	u16 i, itret;
-	u64 start;
+	int ret = 256, mret = 0, stop = 0;
+	u16 itret;
+	u64 start, pstart, dstart, mapped_length, len;
 	struct duet_item *itm;
+	struct extent_map_tree *em_tree;
+	struct extent_io_tree *io_tree;
+	struct extent_map *em;
+	struct inode *inode;
+	struct btrfs_bio *bbio = NULL;
+	struct btrfs_fs_info *fs_info = sctx->dev_root->fs_info;
+	struct btrfs_device *pdev;
 
-	if (duet_fetch(sctx->taskid, sctx->max_events, sctx->events, &itret)) {
-		printk(KERN_ERR "duet-scrub: duet_fetch failed\n");
-		return 0;
-	}
+	dstart = sctx->scrub_dev->bd_part->start_sect << 9;
 
-	/* If there were no events, return 0 */
-	if (!itret)
-		return 0;
+	while (ret) {
+		if (duet_fetch(sctx->taskid, 1, &itm, &itret)) {
+			printk(KERN_ERR "duet-scrub: duet_fetch failed\n");
+			return 0;
+		}
 
-	for (i = 0; i < itret; i++) {
-		itm = sctx->events[i];
-		start = itm->bio->bi_bdev->bd_part->start_sect << 9;
+		/* If there were no events, return 0 */
+		if (!itret)
+			return 0;
+
+		if (!(itm->evt & (DUET_EVT_ADD | DUET_EVT_MOD))) {
+			printk(KERN_ERR "duet-scrub: received unsupported event"
+				" (%d). This is a bug.\n", itm->evt);
+			goto done;
+		}
+
+		/* Get the LBN range(s) corresponding to this item */
+		start = itm->page->index << PAGE_CACHE_SHIFT;
+		len = PAGE_CACHE_SIZE;
+		inode = itm->page->mapping->host;
+		em_tree = &BTRFS_I(inode)->extent_tree;
+		io_tree = &BTRFS_I(inode)->io_tree;
+
+		/*
+		 * hopefully we have this extent in the tree already, try without
+		 * the full extent lock
+		 */
+		read_lock(&em_tree->lock);
+		em = lookup_extent_mapping(em_tree, start, len);
+		read_unlock(&em_tree->lock);
+
+		if (!em) {
+			stop = 1;
+
+			/* get the big lock and read metadata off disk */
+			lock_extent(io_tree, start, start + len - 1);
+			em = btrfs_get_extent(inode, NULL, 0, start, len, 0);
+			unlock_extent(io_tree, start, start + len - 1);
+
+			if (IS_ERR(em))
+				/* TODO: Put this page on the list of pending pages */
+				goto done;
+		}
+
+again:
+		bbio = NULL;
+		mapped_length = len;
+		mret = btrfs_map_block(fs_info, READ, em->start, &mapped_length,
+					&bbio, 0);
+		if (mret || !bbio || mapped_length < len ||
+			!bbio->stripes[0].dev->bdev) {
+			kfree(bbio);
+			goto done;
+		}
+
+		pstart = bbio->stripes[0].physical;
+		pdev = bbio->stripes[0].dev;
+		kfree(bbio);
+
+		if (pdev->bdev->bd_contains != sctx->scrub_dev) {
+			printk(KERN_INFO "duet-scrub: event refers to wrong "
+				"device\n");
+			goto done;
+		}
 
 		switch (itm->evt) {
-		case DUET_EVT_FS_WRITE:
-			if (duet_unmark(sctx->taskid, start + itm->lbn,
-			    itm->binfo->len) == -1)
+		case DUET_EVT_MOD:
+			if (duet_unmark(sctx->taskid, dstart + pstart,
+			    mapped_length) == -1)
 				printk(KERN_ERR "duet-scrub: failed to unmark"
 					" [%llu, %llu] range for task #%d\n",
-					start + itm->lbn,
-					start + itm->lbn + itm->binfo->len,
-					sctx->taskid);
+					dstart + pstart, dstart + pstart +
+					mapped_length, sctx->taskid);
 			break;
-		case DUET_EVT_FS_READ:
-			if (duet_mark(sctx->taskid, start + itm->lbn,
-			    itm->binfo->len) == -1)
+		case DUET_EVT_ADD:
+			if (duet_mark(sctx->taskid, dstart + pstart,
+			    mapped_length) == -1)
 				printk(KERN_ERR "duet-scrub: failed to mark"
 					" [%llu, %llu] range for task #%d\n",
-					start + itm->lbn,
-					start + itm->lbn + itm->binfo->len,
-					sctx->taskid);
-			break;
-		default:
-			printk(KERN_ERR "duet-scrub: received unsupported event "
-				"(%d). This is a bug.\n", itm->evt);
+					dstart + pstart, dstart + pstart +
+					mapped_length, sctx->taskid);
 			break;
 		}
 
-		duet_dispose_item(itm, DUET_ITEM_BLOCK);
+		if (len > mapped_length) {
+			len -= mapped_length;
+			goto again;
+		}
+
+done:
+		duet_dispose_item(itm);
+		ret--;
+
+		if (stop)
+			break;
 	}
 
-	return (itret == sctx->max_events);
+	return ret;
 }
 #endif /* CONFIG_BTRFS_DUET_SCRUB */
 
@@ -853,20 +926,12 @@ struct scrub_ctx *scrub_setup_ctx(struct btrfs_device *dev, u64 deadline,
 	}
 
 #ifdef CONFIG_BTRFS_DUET_SCRUB
-	sctx->max_events = 32;
-	sctx->events = kzalloc(sctx->max_events * sizeof(struct duet_item *),
-				GFP_NOFS);
-	if (!sctx->events) {
-		printk(KERN_ERR "scrub: failed to allocate event array\n");
-		return ERR_PTR(-EFAULT);
-	}
+	sctx->scrub_dev = dev->bdev->bd_contains;
 
 	/* Register the task with the Duet framework */
-	if (duet_register(&sctx->taskid, "btrfs-scrub", DUET_ITEM_BLOCK,
-	    fs_info->sb->s_blocksize, DUET_EVT_FS_READ | DUET_EVT_FS_WRITE,
-	    dev->bdev->bd_contains)) {
-		printk(KERN_ERR "scrub: failed to register with the duet framework\n");
-		kfree(sctx->events);
+	if (duet_register(&sctx->taskid, "btrfs-scrub", DUET_ITEM_PAGE,
+	    fs_info->sb->s_blocksize, DUET_EVT_ADD|DUET_EVT_MOD, fs_info->sb)) {
+		printk(KERN_ERR "scrub: failed to register with duet\n");
 		return ERR_PTR(-EFAULT);
 	}
 #endif /* CONFIG_BTRFS_DUET_SCRUB */
@@ -3047,8 +3112,8 @@ static int scrub_extent(struct scrub_ctx *sctx, u64 logical, u64 len,
 		 * that chk_done does not verify we're on the right device;
 		 * this should be de facto since we're calling it from here */
 		if (!sctx->is_dev_replace && (duet_check(sctx->taskid,
-		    (dev->bdev->bd_part->start_sect << 9) + physical /* lbn */,
-		    l /* len */) == 1)) {
+		    (sctx->scrub_dev->bd_part->start_sect << 9) +
+		    physical /* lbn */, l /* len */) == 1)) {
 			goto behind_scrub_pages;
 		} else if (!sctx->is_dev_replace) {
 			/* We're actually getting verified */
@@ -3203,7 +3268,7 @@ static noinline_for_stack int scrub_stripe(struct scrub_ctx *sctx,
 	wake_up(&fs_info->scrub_pause_wait);
 
 #ifdef CONFIG_BTRFS_FS_SCRUB_READA
-	if (!sctx->is_dev_replace || !duet_is_online()) {
+	if (!sctx->is_dev_replace || !duet_online()) {
 vanilla_reada:
 		printk(KERN_INFO "scrub: vanilla readahead started\n");
 #endif /* CONFIG_BTRFS_FS_SCRUB_READA */
@@ -3255,8 +3320,8 @@ vanilla_reada:
 			ret = 0;
 			while (logical < logic_end) {
 				/* Check if this stripe should be skipped */
-				if (!duet_chk_done(sctx->taskid,
-				    scrub_dev->bdev->bd_part->start_sect << 9,
+				if (!duet_check(sctx->taskid,
+				    scrub_dev->bdev->bd_part->start_sect << 9 +
 				    physical /*lbn*/, p_increment /*len*/)) {
 					ret = 1;
 					break;
@@ -3272,8 +3337,8 @@ vanilla_reada:
 
 			while (logical <= logic_end) {
 				/* Check if this stripe should _not_ be skipped */
-				if (!duet_chk_done(sctx->taskid,
-				    scrub_dev->bdev->bd_part->start_sect << 9,
+				if (!duet_check(sctx->taskid,
+				    scrub_dev->bdev->bd_part->start_sect << 9 +
 				    physical /*lbn*/, p_increment /*len*/)) {
 					break;
 				} else {
@@ -3537,8 +3602,8 @@ again:
 			 * tree. Criteria: if the entire extent portion can be
 			 * filtered out, skip. */
 			if (!is_dev_replace && (duet_check(sctx->taskid,
-			    (scrub_dev->bdev->bd_part->start_sect << 9) + extent_physical,
-			    extent_len) == 1)) {
+			    (sctx->scrub_dev->bd_part->start_sect << 9) +
+			    extent_physical, extent_len) == 1)) {
 				tot_skipped++;
 				if (flags & BTRFS_EXTENT_FLAG_DATA) {
 					spin_lock(&sctx->stat_lock);
