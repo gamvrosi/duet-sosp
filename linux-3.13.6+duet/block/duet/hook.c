@@ -45,13 +45,14 @@ static struct duet_item *duet_item_init(struct duet_task *task, __u64 idx,
 	switch (task->itmtype) {
 	case DUET_ITEM_PAGE:
 		RB_CLEAR_NODE(&itm->node);
-		itm->page = (struct page *)data;
+		itm->ino = ((struct page *)data)->mapping->host->i_ino;
+		itm->index = ((struct page *)data)->index;
 		itm->evt = evt;
 		break;
 
 	case DUET_ITEM_INODE:
 		RB_CLEAR_NODE(&itm->node);
-		itm->inode = (struct inode *)data;
+		itm->ino = ((struct inode *)data)->i_ino;
 		itm->inmem = evt;
 		break;
 	}
@@ -104,8 +105,7 @@ again:
 		goto done;
 	}
 
-	if (task->itmtype == DUET_ITEM_INODE &&
-	    duet_check(taskid, itm->inode->i_ino, 1) == 1) {
+	if (task->itmtype == DUET_ITEM_INODE && duet_check(taskid, itm->ino, 1) == 1) {
 		duet_dispose_item(itm);
 	} else {
 		items[*itret] = itm;
@@ -133,7 +133,6 @@ static int duet_item_insert_page(struct duet_task *task, struct duet_item *itm)
 	int found = 0;
 	struct rb_node **link, *parent = NULL;
 	struct duet_item *cur;
-	struct inode *inode = itm->page->mapping->host;
 
 	link = &task->itmtree.rb_node;
 
@@ -142,15 +141,15 @@ static int duet_item_insert_page(struct duet_task *task, struct duet_item *itm)
 		cur = rb_entry(parent, struct duet_item, node);
 
 		/* We order based on (inode, page index) */
-		if (cur->page->mapping->host->i_ino > inode->i_ino) {
+		if (cur->ino > itm->ino) {
 			link = &(*link)->rb_left;
-		} else if (cur->page->mapping->host->i_ino < inode->i_ino) {
+		} else if (cur->ino < itm->ino) {
 			link = &(*link)->rb_right;
 		} else {
 			/* Found inode, look for index */
-			if (cur->page->index > itm->page->index) {
+			if (cur->index > itm->index) {
 				link = &(*link)->rb_left;
-			} else if (cur->page->index < itm->page->index) {
+			} else if (cur->index < itm->index) {
 				link = &(*link)->rb_right;
 			} else {
 				found = 1;
@@ -159,10 +158,9 @@ static int duet_item_insert_page(struct duet_task *task, struct duet_item *itm)
 		}
 	}
 
-	duet_dbg(KERN_DEBUG "duet: %s page node (ino%lu, idx%lu, e%u, a%p)\n",
+	duet_dbg(KERN_DEBUG "duet: %s page node (ino%lu, idx%lu, e%u)\n",
 		found ? "will not insert" : "will insert",
-		itm->page->mapping->host->i_ino,
-		itm->page->index, itm->evt, itm->page);
+		itm->ino, itm->index, itm->evt);
 
 	if (found)
 		goto out;
@@ -208,15 +206,15 @@ static void duet_handle_page(struct duet_task *task, __u8 evtcode, __u64 idx,
 		itm = rb_entry(node, struct duet_item, node);
 
 		/* We order based on (inode, page index) */
-		if (itm->page->mapping->host->i_ino > inode->i_ino) {
+		if (itm->ino > inode->i_ino) {
 			node = node->rb_left;
-		} else if (itm->page->mapping->host->i_ino < inode->i_ino) {
+		} else if (itm->ino < inode->i_ino) {
 			node = node->rb_right;
 		} else {
 			/* Found inode, look for index */
-			if (itm->page->index > page->index) {
+			if (itm->index > page->index) {
 				node = node->rb_left;
-			} else if (itm->page->index < page->index) {
+			} else if (itm->index < page->index) {
 				node = node->rb_right;
 			} else {
 				found = 1;
@@ -225,12 +223,9 @@ static void duet_handle_page(struct duet_task *task, __u8 evtcode, __u64 idx,
 		}
 	}
 
-	duet_dbg(KERN_DEBUG "duet-page: %s node (#%lu, i%lu, e%u, a%p)\n",
-		found ? "found" : "didn't find",
-		found ? itm->page->mapping->host->i_ino : inode->i_ino,
-		found ? itm->page->index : page->index,
-		found ? itm->evt : evtcode,
-		found ? itm->page : page);
+	duet_dbg(KERN_DEBUG "duet-page: %s node (#%lu, i%lu, e%u)\n",
+		found ? "found" : "didn't find", found ? itm->ino : inode->i_ino,
+		found ? itm->index : page->index, found ? itm->evt : evtcode);
 
 	/* If we found it, we might have to remove it. Otherwise, insert. */
 	if (!found) {
@@ -284,9 +279,9 @@ static int duet_item_insert_inode(struct duet_task *task, struct duet_item *itm)
 			link = &(*link)->rb_right;
 		} else {
 			/* Found inmem_ratio, look for btrfs_ino */
-			if (cur->inode->i_ino > itm->inode->i_ino) {
+			if (cur->ino > itm->ino) {
 				link = &(*link)->rb_left;
-			} else if (cur->inode->i_ino < itm->inode->i_ino) {
+			} else if (cur->ino < itm->ino) {
 				link = &(*link)->rb_right;
 			} else {
 				found = 1;
@@ -295,9 +290,8 @@ static int duet_item_insert_inode(struct duet_task *task, struct duet_item *itm)
 		}
 	}
 
-	duet_dbg(KERN_DEBUG "duet: %s inode node (ino%lu, r%u, a%p)\n",
-		found ? "will not insert" : "will insert", itm->inode->i_ino,
-		itm->inmem, itm->inode);
+	duet_dbg(KERN_DEBUG "duet: %s insert inode (ino%lu, r%u)\n",
+		found ? "won't" : "will", itm->ino, itm->inmem);
 
 	if (found)
 		goto out;
@@ -369,9 +363,9 @@ static void duet_handle_inode(struct duet_task *task, __u8 evtcode, __u64 idx,
 			node = node->rb_right;
 		} else {
 			/* Found inmem_ratio, look for ino */
-			if (itm->inode->i_ino > inode->i_ino) {
+			if (itm->ino > inode->i_ino) {
 				node = node->rb_left;
-			} else if (itm->inode->i_ino < inode->i_ino) {
+			} else if (itm->ino < inode->i_ino) {
 				node = node->rb_right;
 			} else {
 				found = 1;
@@ -380,11 +374,9 @@ static void duet_handle_inode(struct duet_task *task, __u8 evtcode, __u64 idx,
 		}
 	}
 
-	duet_dbg(KERN_DEBUG "d: %s node (ino%lu, r%u, a%p)\n",
-		found ? "found" : "didn't find",
-		found ? itm->inode->i_ino : inode->i_ino,
-		found ? itm->inmem : cur_inmem_ratio,
-		found ? itm->inode : inode);
+	duet_dbg(KERN_DEBUG "d: %s node (ino%lu, r%u)\n",
+		found ? "found" : "didn't find", found ? itm->ino : inode->i_ino,
+		found ? itm->inmem : cur_inmem_ratio);
 
 	/* If we found it, update it. If not, insert. */
 	if (!found && evtcode == DUET_EVT_ADD) {

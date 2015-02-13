@@ -27,13 +27,11 @@ enum {
 /* Item struct returned for processing */
 struct duet_item {
 	struct rb_node node;
+	unsigned long ino;
+	unsigned long index;
 	union {
-		__u8 evt;		/* pages: added, removed, modified? */
 		__u8 inmem;		/* inodes: ratio of pages in memory */
-	};
-	union {
-		struct inode *inode;
-		struct page *page;
+		__u8 evt;		/* pages: added, removed, modified? */
 	};
 };
 
