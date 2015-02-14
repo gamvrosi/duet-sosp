@@ -37,21 +37,27 @@ static const char * const cmd_task_list_usage[] = {
 	NULL
 };
 
+static const char * const cmd_task_fetch_usage[] = {
+	"duet task fetch [-i taskid] [-n num]",
+	"Fetched up to num items for task with ID taskid, and prints them.",
+	"",
+	"-i	task ID used to find the task",
+	"-n	number of events, up to MAX_ITEMS (check ioctl.h)",
+	NULL
+};
+
 static const char * const cmd_task_reg_usage[] = {
-	"duet task register [-n name] [-b bitrange] [-t itemtype] [-h mask]",
+	"duet task register [-n name] [-b bitrange] [-m nmodel]",
 	"Registers a new task with the currently active framework. The task",
 	"will be assigned an ID, and will be registered under the provided",
 	"name. The bitmaps that keep information on what has been processed",
-	"can be customized with a specific block size per bit, and a specific",
-	"size for each bitmap kept. Small (but not too small) bitmaps can",
-	"save space by being omitted when not needed. The default echo event",
-	"handler will be used for the task, with the event type mask provided",
-	"This command is mainly used for debugging purposes.",
+	"can be customized to store a given range of numbers per bit. The",
+	"notification model must also be specified as one from:",
+	"'add', 'rem', 'both', 'diff', 'axs'.",
 	"",
 	"-n     name under which to register the task",
 	"-b     range of items/bytes per bitmap bit",
-	"-t     type of items expected by task (e.g. 'block', 'inode', 'page')",
-	"-h     event type mask describing the codes wired to the handler",
+	"-m     notification model for task",
 	NULL
 };
 
@@ -101,6 +107,56 @@ static const char * const cmd_task_check_usage[] = {
 	NULL
 };
 
+static int cmd_task_fetch(int fd, int argc, char **argv)
+{
+	int i, c, ret=0;
+	struct duet_ioctl_fetch_args args;
+
+	memset(&args, 0, sizeof(args));
+
+	optind = 1;
+	while ((c = getopt(argc, argv, "i:")) != -1) {
+		switch (c) {
+		case 'i':
+			errno = 0;
+			args.tid = (int)strtol(optarg, NULL, 10);
+			if (errno) {
+				perror("strtol: invalid ID");
+				usage(cmd_task_fetch_usage);
+			}
+			break;
+		default:
+			fprintf(stderr, "Unknown option %c\n", (char)c);
+			usage(cmd_task_fetch_usage);
+		}
+	}
+
+	if (!args.tid || argc != optind)
+		usage(cmd_task_fetch_usage);
+
+	ret = ioctl(fd, DUET_IOC_FETCH, &args);
+	if (ret < 0) {
+		perror("tasks list ioctl error");
+		usage(cmd_task_fetch_usage);
+	}
+
+	if (args.num == 0) {
+		fprintf(stdout, "Received no items.\n");
+		return ret;
+	}
+
+	/* Print out the list we received */
+	fprintf(stdout, "Inode number\tOffset      \tEvent   \n"
+			"------------\t------------\t--------\n");
+	for (i=0; i<args.num; i++) {
+		fprintf(stdout, "%12lu\t%12lu\t%8x\n",
+			args.itm[i].ino, args.itm[i].idx << 12,
+			args.itm[i].evt);
+	}
+
+	return ret;
+}
+
 static int cmd_task_list(int fd, int argc, char **argv)
 {
 	int i, ret=0;
@@ -115,15 +171,15 @@ static int cmd_task_list(int fd, int argc, char **argv)
 	}
 
 	/* Print out the list we received */
-	fprintf(stdout, "ID\tTask Name\tBit range\tBmap size\tEvent mask\tItem type\n"
-			"--\t---------\t---------\t---------\t----------\t---------\n");
+	fprintf(stdout, "ID\tTask Name\tBit range\tNot. model\n"
+			"--\t---------\t---------\t----------\n");
 	for (i=0; i<MAX_TASKS; i++) {
 		if (!args.tid[i])
 			break;
 
-		fprintf(stdout, "%2d\t%9s\t%9u\t%9u\t  %08x\t%9u\n",
+		fprintf(stdout, "%2d\t%9s\t%9u\t%10u\n",
 			args.tid[i], args.tnames[i], args.bitrange[i],
-			args.bmapsize[i], args.evtmask[i], args.itmtype[i]);
+			args.nmodel[i]);
 	}
 
 	return ret;
@@ -138,16 +194,16 @@ static int cmd_task_reg(int fd, int argc, char **argv)
 	args.cmd_flags = DUET_REGISTER;
 
 	optind = 1;
-	while ((c = getopt(argc, argv, "n:b:t:h:")) != -1) {
+	while ((c = getopt(argc, argv, "n:b:m:")) != -1) {
 		switch (c) {
 		case 'n':
-			len = strnlen(optarg, TASK_NAME_LEN);
-			if (len == TASK_NAME_LEN || !len) {
+			len = strnlen(optarg, MAX_NAME);
+			if (len == MAX_NAME || !len) {
 				fprintf(stderr, "Invalid name (%d)\n", len);
 				usage(cmd_task_reg_usage);
 			}
 
-			memcpy(args.tname, optarg, TASK_NAME_LEN);
+			memcpy(args.name, optarg, MAX_NAME);
 			break;
 		case 'b':
 			errno = 0;
@@ -157,24 +213,20 @@ static int cmd_task_reg(int fd, int argc, char **argv)
 				usage(cmd_task_reg_usage);
 			}
 			break;
-		case 't':
-			if (!strncmp(optarg, "block", 5))
-				args.itmtype = DUET_ITM_BLOCK;
-			else if (!strncmp(optarg, "inode", 5))
-				args.itmtype = DUET_ITM_INODE;
-			else if (!strncmp(optarg, "page", 4))
-				args.itmtype = DUET_ITM_PAGE;
+		case 'm':
+			if (!strncmp(optarg, "add", 3))
+				args.nmodel = MODEL_ADD;
+			else if (!strncmp(optarg, "rem", 3))
+				args.nmodel = MODEL_REM;
+			else if (!strncmp(optarg, "both", 4))
+				args.nmodel = MODEL_BOTH;
+			else if (!strncmp(optarg, "diff", 4))
+				args.nmodel = MODEL_DIFF;
+			else if (!strncmp(optarg, "axs", 3))
+				args.nmodel = MODEL_AXS;
 			else {
-				fprintf(stderr, "error: invalid item type '%s'\n",
+				fprintf(stderr, "error: invalid model '%s'\n",
 					optarg);
-				usage(cmd_task_reg_usage);
-			}
-			break;
-		case 'h':
-			errno = 0;
-			args.evtmask = (__u8)strtol(optarg, NULL, 10);
-			if (errno) {
-				perror("strtol: invalid event mask");
 				usage(cmd_task_reg_usage);
 			}
 			break;
@@ -184,7 +236,7 @@ static int cmd_task_reg(int fd, int argc, char **argv)
 		}
 	}
 
-	if (!args.tname[0] || argc != optind)
+	if (!args.name[0] || argc != optind)
 		usage(cmd_task_reg_usage);
 
 	ret = ioctl(fd, DUET_IOC_CMD, &args);
@@ -194,7 +246,7 @@ static int cmd_task_reg(int fd, int argc, char **argv)
 	}
 
 	fprintf(stdout, "Task '%s' registered successfully under ID %d.\n",
-		args.tname, args.tid);
+		args.name, args.tid);
 	return ret;
 }
 
@@ -411,6 +463,7 @@ const struct cmd_group task_cmd_group = {
 		{ "mark", cmd_task_mark, cmd_task_mark_usage, NULL, 0 },
 		{ "unmark", cmd_task_unmark, cmd_task_unmark_usage, NULL, 0 },
 		{ "check", cmd_task_check, cmd_task_check_usage, NULL, 0 },
+		{ "fetch", cmd_task_fetch, cmd_task_fetch_usage, NULL, 0 },
 	}
 };
 

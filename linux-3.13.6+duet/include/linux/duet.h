@@ -21,10 +21,10 @@
 /* Notification models */
 enum {
 	DUET_MODEL_ADD = 1,		/* only ADD events */
-	DUET_MODEL_REM,			/* only REM events */
-	DUET_MODEL_BOTH,		/* both ADD/REM events */
-	DUET_MODEL_DIFF,		/* difference of ADD/REM events */
-	DUET_MODEL_AXS,			/* data accesses based on ADD/MOD */
+	DUET_MODEL_REM = 2,		/* only REM events */
+	DUET_MODEL_BOTH = 3,		/* both ADD/REM events */
+	DUET_MODEL_DIFF = 4,		/* difference of ADD/REM events */
+	DUET_MODEL_AXS = 5,		/* data accesses based on ADD/MOD */
 };
 
 /* Item struct returned for processing */
