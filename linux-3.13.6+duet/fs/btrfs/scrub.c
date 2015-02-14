@@ -643,8 +643,8 @@ out:
  * event that occurred was an ADD or MOD of a page.
  *
  * Pages that are not found to have a logical/physical mapping yet, are enqueued
- * until we receive another MOD or REM event for them. Then we check them again.
- * TODO: Implement this functionality.
+ * until we receive another event for them. Then we check them again.
+ * TODO: Implement this functionality. It's not that important for scrubbing.
  *
  * We try to process up to 256 events at a time. However, we will stop if an
  * event requires us to fetch metadata from disk. If all operations took place
@@ -657,7 +657,7 @@ static int process_duet_events(struct scrub_ctx *sctx)
 	int ret = 256, mret = 0, stop = 0;
 	u16 itret;
 	u64 start, pstart, dstart, mapped_length, len;
-	struct duet_item *itm;
+	struct duet_item itm;
 	struct extent_map_tree *em_tree;
 	struct extent_io_tree *io_tree;
 	struct extent_map *em;
@@ -678,16 +678,22 @@ static int process_duet_events(struct scrub_ctx *sctx)
 		if (!itret)
 			return 0;
 
-		if (!(itm->evt & (DUET_EVT_ADD | DUET_EVT_MOD))) {
+		if (!(itm.evt & (DUET_EVT_ADD | DUET_EVT_MOD))) {
 			printk(KERN_ERR "duet-scrub: received unsupported event"
-				" (%d). This is a bug.\n", itm->evt);
+				" (%d). This is a bug.\n", itm.evt);
+			goto done;
+		}
+
+		/* Get the inode */
+		inode = ilookup(fs_info->sb, itm.ino);
+		if (!inode) {
+			printk(KERN_ERR "duet-scrub: failed to find inode\n");
 			goto done;
 		}
 
 		/* Get the LBN range(s) corresponding to this item */
-		start = itm->page->index << PAGE_CACHE_SHIFT;
+		start = itm.idx << PAGE_CACHE_SHIFT;
 		len = PAGE_CACHE_SIZE;
-		inode = itm->page->mapping->host;
 		em_tree = &BTRFS_I(inode)->extent_tree;
 		io_tree = &BTRFS_I(inode)->io_tree;
 
@@ -707,9 +713,10 @@ static int process_duet_events(struct scrub_ctx *sctx)
 			em = btrfs_get_extent(inode, NULL, 0, start, len, 0);
 			unlock_extent(io_tree, start, start + len - 1);
 
-			if (IS_ERR(em))
-				/* TODO: Put this page on the list of pending pages */
-				goto done;
+			if (IS_ERR(em)) {
+				/* TODO: Put in the list of pending pages */
+				goto idone;
+			}
 		}
 
 again:
@@ -720,7 +727,7 @@ again:
 		if (mret || !bbio || mapped_length < len ||
 			!bbio->stripes[0].dev->bdev) {
 			kfree(bbio);
-			goto done;
+			goto idone;
 		}
 
 		pstart = bbio->stripes[0].physical;
@@ -730,10 +737,10 @@ again:
 		if (pdev->bdev->bd_contains != sctx->scrub_dev) {
 			printk(KERN_INFO "duet-scrub: event refers to wrong "
 				"device\n");
-			goto done;
+			goto idone;
 		}
 
-		switch (itm->evt) {
+		switch (itm.evt) {
 		case DUET_EVT_MOD:
 			if (duet_unmark(sctx->taskid, dstart + pstart,
 			    mapped_length) == -1)
@@ -757,10 +764,10 @@ again:
 			goto again;
 		}
 
+idone:
+		iput(inode);
 done:
-		duet_dispose_item(itm);
 		ret--;
-
 		if (stop)
 			break;
 	}
@@ -929,8 +936,8 @@ struct scrub_ctx *scrub_setup_ctx(struct btrfs_device *dev, u64 deadline,
 	sctx->scrub_dev = dev->bdev->bd_contains;
 
 	/* Register the task with the Duet framework */
-	if (duet_register(&sctx->taskid, "btrfs-scrub", DUET_ITEM_PAGE,
-	    fs_info->sb->s_blocksize, DUET_EVT_ADD|DUET_EVT_MOD, fs_info->sb)) {
+	if (duet_register(&sctx->taskid, "btrfs-scrub", DUET_MODEL_AXS,
+	    fs_info->sb->s_blocksize, fs_info->sb)) {
 		printk(KERN_ERR "scrub: failed to register with duet\n");
 		return ERR_PTR(-EFAULT);
 	}
