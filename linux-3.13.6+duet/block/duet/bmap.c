@@ -138,9 +138,9 @@ static int duet_bmap_chk_bits(__u8 *bmap, __u32 start, __u32 num, __u8 set)
 	int *buf, ret = 1;
 
 	/*
-	 * We are asked to check an arbitrary number of bits, and it may look like
-	 * the following diagram, and we don't want to loop here; we'd rather
-	 * memcmp bytes if we can:
+	 * We are asked to check an arbitrary number of bits, and it may look
+	 * like the following diagram, and we don't want to loop here; we'd
+	 * rather memcmp bytes if we can:
 	 *             01234567     01234567           01234567 
 	 *           +----------+ +----------+       +----------+
 	 *           | *****sss | | ssssssss |  ...  | ssss**** |

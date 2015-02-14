@@ -18,21 +18,20 @@
 #ifndef _DUET_H
 #define _DUET_H
 
-/* Item types */
+/* Notification models */
 enum {
-	DUET_ITEM_INODE = 1,		/* will build a NodeTree of inodes */
-	DUET_ITEM_PAGE,			/* will build a NodeTree of pages */
+	DUET_MODEL_ADD = 1,		/* only ADD events */
+	DUET_MODEL_REM,			/* only REM events */
+	DUET_MODEL_BOTH,		/* both ADD/REM events */
+	DUET_MODEL_DIFF,		/* difference of ADD/REM events */
+	DUET_MODEL_AXS,			/* data accesses based on ADD/MOD */
 };
 
 /* Item struct returned for processing */
 struct duet_item {
-	struct rb_node node;
 	unsigned long ino;
-	unsigned long index;
-	union {
-		__u8 inmem;		/* inodes: ratio of pages in memory */
-		__u8 evt;		/* pages: added, removed, modified? */
-	};
+	unsigned long idx;
+	__u8 evt;			/* added, removed, modified? */
 };
 
 /*
@@ -45,15 +44,19 @@ struct duet_item {
 #define DUET_EVT_MOD	(1 << 2)
 
 /* Framework interface functions */
-int duet_register(__u8 *taskid, const char *name, __u8 itmtype, __u32 bitrange,
-		  __u8 evtmask, void *owner);
+int duet_register(__u8 *taskid, const char *name, __u8 nmodel, __u32 bitrange,
+		  void *owner);
 int duet_deregister(__u8 taskid);
 int duet_online(void);
 int duet_check(__u8 taskid, __u64 idx, __u32 num);
 int duet_mark(__u8 taskid, __u64 idx, __u32 num);
 int duet_unmark(__u8 taskid, __u64 idx, __u32 num);
-int duet_fetch(__u8 taskid, __u16 itreq, struct duet_item **items, __u16 *itret);
-int duet_dispose_item(struct duet_item *item);
+int duet_fetch(__u8 taskid, __u16 req, struct duet_item *items, __u16 *ret);
+
+/* InodeTree interface functions */
+// TODO: int create_itree
+// TODO: int update_itree
+// TODO: int teardown_itree
 
 /* Framework debugging functions */
 int duet_print_bittree(__u8 taskid);

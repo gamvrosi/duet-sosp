@@ -25,7 +25,7 @@
 #include <linux/rculist.h>
 #include <linux/duet.h>
 
-#define TASK_NAME_LEN	128
+#define MAX_NAME	128
 
 #ifdef CONFIG_DUET_DEBUG
 #define duet_dbg(...)	printk(__VA_ARGS__)
@@ -41,18 +41,30 @@ enum {
 };
 
 struct bmap_rbnode {
-	__u64		idx;
-	struct rb_node	node;
-	__u8		*bmap;
+	__u64			idx;
+	struct rb_node		node;
+	__u8			*bmap;
 };
+
+struct item_rbnode {
+	struct rb_node		node;
+	struct duet_item	*item;
+};
+
+/* Notification model masks */
+#define DUET_MODEL_ADD_MASK	(DUET_EVT_ADD)
+#define DUET_MODEL_REM_MASK	(DUET_EVT_REM)
+#define DUET_MODEL_BOTH_MASK	(DUET_EVT_ADD | DUET_EVT_REM)
+#define DUET_MODEL_DIFF_MASK	(DUET_EVT_ADD | DUET_EVT_REM)
+#define DUET_MODEL_AXS_MASK	(DUET_EVT_ADD | DUET_EVT_MOD)
 
 struct duet_task {
 	__u8			id;
-	char			name[TASK_NAME_LEN];
+	char			name[MAX_NAME];
 	struct list_head	task_list;
 	wait_queue_head_t	cleaner_queue;
 	atomic_t		refcount;
-	__u8			evtmask;	/* Event codes of interest */
+	__u8			nmodel;		/* Notification model */
 	struct super_block	*sb;		/* Filesystem of task (opt) */
 
 	/* BitTree -- progress bitmap tree */
@@ -106,5 +118,14 @@ void duet_task_dispose(struct duet_task *task);
 int duet_bootstrap(void);
 int duet_shutdown(void);
 long duet_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
+
+/* rbtrees.c */
+struct bmap_rbnode *bnode_init(struct duet_task *task, __u64 idx);
+void bnode_dispose(struct bmap_rbnode *bnode, struct rb_node *rbnode,
+	struct rb_root *root);
+struct item_rbnode *tnode_init(struct duet_task *task, unsigned long ino,
+	unsigned long idx, __u8 evt);
+void tnode_dispose(struct item_rbnode *tnode, struct rb_node *rbnode,
+	struct rb_root *root);
 
 #endif /* _COMMON_H */

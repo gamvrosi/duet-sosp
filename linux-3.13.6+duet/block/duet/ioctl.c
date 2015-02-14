@@ -50,7 +50,7 @@ int duet_shutdown(void)
 
 	if (atomic_cmpxchg(&duet_env.status, DUET_STATUS_ON, DUET_STATUS_CLEAN)
 	    != DUET_STATUS_ON) {
-		printk(KERN_WARNING "duet: framework not on, shutdown aborted\n");
+		printk(KERN_WARNING "duet: framework off, shutdown aborted\n");
 		return 1;
 	}
 
@@ -81,7 +81,38 @@ int duet_shutdown(void)
 	return 0;
 }
 
-/* TODO: fix fetch for userland */
+static int duet_ioctl_fetch(void __user *arg)
+{
+	struct duet_ioctl_fetch_args *fa;
+
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
+	fa = memdup_user(arg, sizeof(*fa));
+	if (IS_ERR(fa))
+		return PTR_ERR(fa);
+
+	if (fa->num > MAX_ITEMS)
+		fa->num = MAX_ITEMS;
+
+	if (duet_fetch(fa->tid, fa->num, fa->itm, &fa->num)) {
+		printk(KERN_ERR "duet: failed to fetch for user\n");
+		goto err;
+	}
+
+	if (copy_to_user(arg, fa, sizeof(*fa))) {
+		printk(KERN_ERR "duet: failed to copy out args\n");
+		goto err;
+	}
+
+	kfree(fa);
+	return 0;
+
+err:
+	kfree(fa);
+	return -EINVAL;
+}
+
 static int duet_ioctl_cmd(void __user *arg)
 {
 	struct duet_ioctl_cmd_args *ca;
@@ -123,9 +154,9 @@ static int duet_ioctl_cmd(void __user *arg)
 		break;
 
 	case DUET_REGISTER:
-		/* TODO: Find the owner for the task */
-		ca->ret = duet_register(&ca->tid, ca->tname, DUET_ITEM_INODE,
-					ca->bitrange, ca->evtmask, NULL);
+		/* XXX: We do not pass an owner for this one. Future work. */
+		ca->ret = duet_register(&ca->tid, ca->name, ca->nmodel,
+					ca->bitrange, NULL);
 		break;
 
 	case DUET_DEREGISTER:
@@ -142,11 +173,6 @@ static int duet_ioctl_cmd(void __user *arg)
 
 	case DUET_CHECK:
 		ca->ret = duet_check(ca->tid, ca->itmidx, ca->itmnum);
-		break;
-
-	case DUET_FETCH:
-		//ca->ret = duet_fetch(ca->tid, ca->itmnum, ca->items,
-		//		&ca->itmnum);
 		break;
 
 	case DUET_PRINTBIT:
@@ -193,11 +219,9 @@ static int duet_ioctl_tlist(void __user *arg)
 	rcu_read_lock();
 	list_for_each_entry_rcu(cur, &duet_env.tasks, task_list) {
 		la->tid[i] = cur->id;
-		memcpy(la->tnames[i], cur->name, TASK_NAME_LEN);
+		memcpy(la->tnames[i], cur->name, MAX_NAME);
 		la->bitrange[i] = cur->bitrange;
-		la->bmapsize[i] = cur->bmapsize;
-		la->evtmask[i] = cur->evtmask;
-		la->itmtype[i] = cur->itmtype;
+		la->nmodel[i] = cur->nmodel;
 		i++;
 		if (i == MAX_TASKS)
 			break;
@@ -237,6 +261,8 @@ long duet_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		return duet_ioctl_cmd(argp);
 	case DUET_IOC_TLIST:
 		return duet_ioctl_tlist(argp);
+	case DUET_IOC_FETCH:
+		return duet_ioctl_fetch(argp);
 	}
 
 	return -EINVAL;

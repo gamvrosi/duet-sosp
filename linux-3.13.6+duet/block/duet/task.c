@@ -44,43 +44,6 @@
  * Insertion functions such as duet_register are fine as is
  */
 
-static struct bmap_rbnode *bnode_init(struct duet_task *task, __u64 itmidx)
-{
-	struct bmap_rbnode *bnode = NULL;
-
-#ifdef CONFIG_DUET_TREE_STATS
-	(task->stat_bit_cur)++;
-	if (task->stat_bit_cur > task->stat_bit_max) {
-		task->stat_bit_max = task->stat_bit_cur;
-		printk(KERN_INFO "duet: Task #%d (%s) has %llu nodes in its BitTree.\n"
-			"      That's %llu bytes.\n", task->id, task->name,
-			task->stat_bit_max, task->stat_bit_max * task->bmapsize);
-	}
-#endif /* CONFIG_DUET_TREE_STATS */
-	
-	bnode = kzalloc(sizeof(*bnode), GFP_ATOMIC);
-	if (!bnode)
-		return NULL;
-
-	bnode->bmap = kzalloc(task->bmapsize, GFP_ATOMIC);
-	if (!bnode->bmap) {
-		kfree(bnode);
-		return NULL;
-	}
-
-	RB_CLEAR_NODE(&bnode->node);
-	bnode->idx = itmidx;
-	return bnode;
-}
-
-static void bnode_dispose(struct bmap_rbnode *bnode, struct rb_node *rbnode,
-	struct rb_root *root)
-{
-	rb_erase(rbnode, root);
-	kfree(bnode->bmap);
-	kfree(bnode);
-}
-
 /*
  * Looks through the bmaptree for the node that should be responsible for
  * the given LBN. Starting from that node, it marks all LBNs until lbn+len
@@ -381,72 +344,65 @@ int duet_print_itmtree(__u8 taskid)
 }
 EXPORT_SYMBOL_GPL(duet_print_itmtree);
 
-/* Checks the blocks in the range from lbn to lbn+len are done */
-int duet_check(__u8 taskid, __u64 itmidx, __u32 itmnum)
+/* Checks the blocks in the range from idx to idx+num are done */
+int duet_check(__u8 taskid, __u64 idx, __u32 num)
 {
 	if (!duet_online())
 		return -1;	
 
-	return duet_mark_chkupd(taskid, itmidx, itmnum, 1, 1);
+	return duet_mark_chkupd(taskid, idx, num, 1, 1);
 }
 EXPORT_SYMBOL_GPL(duet_check);
 
-/* Unmarks the blocks in the range from lbn to lbn+len as pending */
-int duet_unmark(__u8 taskid, __u64 itmidx, __u32 itmnum)
+/* Unmarks the blocks in the range from idx to idx+num as pending */
+int duet_unmark(__u8 taskid, __u64 idx, __u32 num)
 {
 	if (!duet_online())
 		return -1;
-	return duet_mark_chkupd(taskid, itmidx, itmnum, 1, 0);
+	return duet_mark_chkupd(taskid, idx, num, 1, 0);
 }
 EXPORT_SYMBOL_GPL(duet_unmark);
 
-/* Marks the blocks in the range from lbn to lbn+len as done */
-int duet_mark(__u8 taskid, __u64 itmidx, __u32 itmnum)
+/* Marks the blocks in the range from idx to idx+num as done */
+int duet_mark(__u8 taskid, __u64 idx, __u32 num)
 {
 	if (!duet_online())
 		return -1;
-	return duet_mark_chkupd(taskid, itmidx, itmnum, 0, 0);
+	return duet_mark_chkupd(taskid, idx, num, 0, 0);
 }
 EXPORT_SYMBOL_GPL(duet_mark);
 
 /* Properly allocate and initialize a task struct */
 static int duet_task_init(struct duet_task **task, const char *name,
-	__u8 itmtype, __u32 bitrange, __u8 evtmask, void *owner)
+	__u8 nmodel, __u32 bitrange, void *owner)
 {
 	*task = kzalloc(sizeof(**task), GFP_NOFS);
 	if (!(*task))
 		return -ENOMEM;
 
 	(*task)->id = 1;
-	memcpy((*task)->name, name, TASK_NAME_LEN);
-	INIT_LIST_HEAD(&(*task)->task_list);
-	init_waitqueue_head(&(*task)->cleaner_queue);
+	memcpy((*task)->name, name, MAX_NAME);
+
 	atomic_set(&(*task)->refcount, 0);
-
-	if (bitrange)
-		(*task)->bitrange = bitrange;
-	else
-		(*task)->bitrange = 4096;
-
-	/* We no longer expose this at registration. Fixed to 32KB. */
-	(*task)->bmapsize = 32768;
 
 	spin_lock_init(&(*task)->itm_lock);
 	//spin_lock_init(&(*task)->itm_outer_lock);
 	spin_lock_init(&(*task)->bittree_lock);
-	(*task)->bittree = RB_ROOT;
-	(*task)->itmtype = itmtype;
-	(*task)->itmtree = RB_ROOT;
-	(*task)->sb = (struct super_block *)owner;
 
-	switch (itmtype) {
-	case DUET_ITEM_PAGE:
-		(*task)->evtmask = evtmask;
-		break;
-	case DUET_ITEM_INODE:
-		(*task)->evtmask = DUET_EVT_ADD | DUET_EVT_REM;
-		break;
-	}
+	INIT_LIST_HEAD(&(*task)->task_list);
+	init_waitqueue_head(&(*task)->cleaner_queue);
+	(*task)->bittree = RB_ROOT;
+	(*task)->itmtree = RB_ROOT;
+
+	/* We no longer expose this at registration. Fixed to 32KB. */
+	(*task)->bmapsize = 32768;
+
+	(*task)->nmodel = nmodel;
+	(*task)->sb = (struct super_block *)owner;
+	if (bitrange)
+		(*task)->bitrange = bitrange;
+	else
+		(*task)->bitrange = 4096;
 
 	return 0;
 }
@@ -458,7 +414,7 @@ void duet_task_dispose(struct duet_task *task)
 {
 	struct rb_node *rbnode;
 	struct bmap_rbnode *bnode;
-	struct duet_item *itm;
+	struct item_rbnode *tnode;
 
 	/* Dispose of the BitTree */
 	while (!RB_EMPTY_ROOT(&task->bittree)) {
@@ -470,27 +426,26 @@ void duet_task_dispose(struct duet_task *task)
 	/* Dispose of the ItemTree */
 	while (!RB_EMPTY_ROOT(&task->itmtree)) {
 		rbnode = rb_first(&task->itmtree);
-		itm = rb_entry(rbnode, struct duet_item, node);
-		rb_erase(rbnode, &task->itmtree);
-		duet_dispose_item(itm);
+		tnode = rb_entry(rbnode, struct item_rbnode, node);
+		tnode_dispose(tnode, rbnode, &task->itmtree);
 	}
 
 	kfree(task);
 }
 
-int duet_register(__u8 *taskid, const char *name, __u8 itmtype, __u32 bitrange,
-	__u8 evtmask, void *owner)
+int duet_register(__u8 *taskid, const char *name, __u8 nmodel, __u32 bitrange,
+	void *owner)
 {
 	int ret;
 	struct list_head *last;
 	struct duet_task *cur, *task = NULL;
 
-	if (strnlen(name, TASK_NAME_LEN) == TASK_NAME_LEN) {
+	if (strnlen(name, MAX_NAME) == MAX_NAME) {
 		printk(KERN_ERR "duet: error -- task name too long\n");
 		return -EINVAL;
 	}
 
-	ret = duet_task_init(&task, name, itmtype, bitrange, evtmask, owner);
+	ret = duet_task_init(&task, name, nmodel, bitrange, owner);
 	if (ret) {
 		printk(KERN_ERR "duet: failed to initialize task\n");
 		return ret;

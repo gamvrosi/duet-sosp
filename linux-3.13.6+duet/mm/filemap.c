@@ -126,7 +126,6 @@ void __delete_from_page_cache(struct page *page)
 	rcu_read_lock();
 	dhfp = rcu_dereference(duet_hook_cache_fp);
 
-	/* TODO: Make sure that duet_hook doesn't sleep */
 	if (dhfp)
 		dhfp(DUET_EVT_REM, (void *)page);
 	rcu_read_unlock();

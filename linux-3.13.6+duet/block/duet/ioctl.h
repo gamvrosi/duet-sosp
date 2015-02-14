@@ -21,9 +21,10 @@
 #include <linux/ioctl.h>
 #include "common.h"
 
-#define MAX_TASKS 32
-#define MAX_ITEMS 128
-#define DUET_IOCTL_MAGIC 0xDE
+#define MAX_TASKS	32
+#define MAX_ITEMS	256
+#define MAX_NAME	128
+#define DUET_IOC_MAGIC	0xDE
 
 /* ioctl codes */
 #define DUET_START		1
@@ -33,42 +34,44 @@
 #define DUET_MARK		5
 #define DUET_UNMARK		6
 #define DUET_CHECK		7
-#define DUET_FETCH		8
-#define DUET_PRINTBIT		9
-#define DUET_PRINTITEM		10
+#define DUET_PRINTBIT		8
+#define DUET_PRINTITEM		9
 
-/* item types */
-#define DUET_ITM_INODE		1
-
-struct duet_ioctl_item {
-	__u64 itmnum;
-	__u8 evttype;	
+/* We return up to MAX_ITEMS at a time (9b each). */
+struct duet_ioctl_fetch_args {
+	__u8 			tid;		/* in */
+	__u16 			num;		/* in/out */
+	struct duet_item	itm[MAX_ITEMS];	/* out */
 };
 
 struct duet_ioctl_list_args {
-	__u8 tid[MAX_TASKS];			/* out */
-	char tnames[MAX_TASKS][TASK_NAME_LEN];	/* out */
-	__u32 bitrange[MAX_TASKS];		/* out */
-	__u32 bmapsize[MAX_TASKS];		/* out */
-	__u8 evtmask[MAX_TASKS];		/* out */
-	__u8 itmtype[MAX_TASKS];		/* out */
+	__u8 	tid[MAX_TASKS];			/* out */
+	char 	tnames[MAX_TASKS][MAX_NAME];	/* out */
+	__u32 	bitrange[MAX_TASKS];		/* out */
+	__u8	nmodel[MAX_TASKS];		/* out */
 };
 
 struct duet_ioctl_cmd_args {
-	__u8 cmd_flags;					/* in */
-	__u8 tid;					/* in/out */
-	__u8 ret;					/* out */
-
-	__u8 evtmask;					/* in */
-	__u8 itmtype;					/* in */
-	__u32 bitrange;					/* in */
-	__u32 itmnum;					/* in/out */
-	__u64 itmidx;					/* in */
-	char tname[TASK_NAME_LEN];			/* in */
-	struct duet_ioctl_item items[MAX_ITEMS];	/* out */
+	__u8 	cmd_flags;			/* in */
+	__u8 	tid;				/* in/out */
+	__u8 	ret;				/* out */
+	union {
+		/* Registration args */
+		struct {
+			__u8 	nmodel;		/* in */
+			__u32 	bitrange;	/* in */
+			char 	name[MAX_NAME];	/* in */
+		};
+		/* (Un)marking and checking args */
+		struct {
+			__u32 	itmnum;		/* in */
+			__u64 	itmidx;		/* in */
+		};
+	};	
 };
 
-#define DUET_IOC_CMD	_IOWR(DUET_IOCTL_MAGIC, 1, struct duet_ioctl_cmd_args)
-#define DUET_IOC_TLIST	_IOWR(DUET_IOCTL_MAGIC, 2, struct duet_ioctl_list_args)
+#define DUET_IOC_CMD	_IOWR(DUET_IOC_MAGIC, 1, struct duet_ioctl_cmd_args)
+#define DUET_IOC_TLIST	_IOWR(DUET_IOC_MAGIC, 2, struct duet_ioctl_list_args)
+#define DUET_IOC_FETCH	_IOWR(DUET_IOC_MAGIC, 3, struct duet_ioctl_fetch_args)
 
 #endif /* _DUET_IOCTL_H */
