@@ -759,6 +759,7 @@ static int process_duet_events(struct scrub_ctx *sctx)
 			&mapped_length, &bbio, 0);
 		if (mret || !bbio || mapped_length < len ||
 			!bbio->stripes[0].dev->bdev) {
+			duet_dbg(KERN_INFO "duet-scrub: btrfs_map_block failed\n");
 			kfree(bbio);
 			goto idone;
 		}
@@ -3121,6 +3122,7 @@ static int scrub_extent(struct scrub_ctx *sctx, u64 logical, u64 len,
 	int ret=0;
 	u8 csum[BTRFS_CSUM_SIZE];
 	u32 blocksize;
+	u64 dstart = sctx->scrub_dev->bd_part->start_sect << 9;
 
 	if (flags & BTRFS_EXTENT_FLAG_DATA) {
 		blocksize = sctx->sectorsize;
@@ -3150,8 +3152,7 @@ static int scrub_extent(struct scrub_ctx *sctx, u64 logical, u64 len,
 		 * that chk_done does not verify we're on the right device;
 		 * this should be de facto since we're calling it from here */
 		if (!sctx->is_dev_replace && (duet_check(sctx->taskid,
-		    (sctx->scrub_dev->bd_part->start_sect << 9) +
-		    physical /* lbn */, l /* len */) == 1)) {
+		    dstart + physical, l) == 1)) {
 			goto behind_scrub_pages;
 		} else if (!sctx->is_dev_replace) {
 			/* We're actually getting verified */
@@ -3249,6 +3250,7 @@ static noinline_for_stack int scrub_stripe(struct scrub_ctx *sctx,
 #endif /* CONFIG_BTRFS_FS_SCRUB_READA */
 #ifdef CONFIG_BTRFS_DUET_SCRUB
 	u64 tot_skipped = 0;
+	u64 dstart = scrub_dev->bdev->bd_part->start_sect << 9;
 #endif /* CONFIG_BTRFS_DUET_SCRUB */
 
 	if (map->type & (BTRFS_BLOCK_GROUP_RAID5 |
@@ -3358,9 +3360,8 @@ vanilla_reada:
 			ret = 0;
 			while (logical < logic_end) {
 				/* Check if this stripe should be skipped */
-				if (!duet_check(sctx->taskid,
-				    (scrub_dev->bdev->bd_part->start_sect << 9) +
-				    physical /*lbn*/, p_increment /*len*/)) {
+				if (!duet_check(sctx->taskid, dstart + physical,
+				    p_increment)) {
 					ret = 1;
 					break;
 				} else {
@@ -3375,9 +3376,8 @@ vanilla_reada:
 
 			while (logical <= logic_end) {
 				/* Check if this stripe should _not_ be skipped */
-				if (!duet_check(sctx->taskid,
-				    scrub_dev->bdev->bd_part->start_sect << 9 +
-				    physical /*lbn*/, p_increment /*len*/)) {
+				if (!duet_check(sctx->taskid, dstart + physical,
+				    p_increment)) {
 					break;
 				} else {
 					logical += increment;
@@ -3640,8 +3640,7 @@ again:
 			 * tree. Criteria: if the entire extent portion can be
 			 * filtered out, skip. */
 			if (!is_dev_replace && (duet_check(sctx->taskid,
-			    (sctx->scrub_dev->bd_part->start_sect << 9) +
-			    extent_physical, extent_len) == 1)) {
+			    dstart + extent_physical, extent_len) == 1)) {
 				tot_skipped++;
 				if (flags & BTRFS_EXTENT_FLAG_DATA) {
 					spin_lock(&sctx->stat_lock);

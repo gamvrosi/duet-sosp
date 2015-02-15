@@ -36,10 +36,12 @@ while getopts ":dci" opt; do
 
 		# ...and (re)compile the btrfs tools
 		cd ../btrfs-progs-3.12+duet
+		#make clean
 		make
 
 		# ...and (re)compile the duet tools
 		cd ../duet-progs
+		make clean
 		make
 
 		cd ..
