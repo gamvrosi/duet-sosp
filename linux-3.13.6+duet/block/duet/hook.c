@@ -16,6 +16,7 @@
  * Boston, MA 021110-1307, USA.
  */
 #include <linux/fs.h>
+#include <linux/mm.h>
 #include "common.h"
 
 /*
@@ -87,7 +88,6 @@
  * given by itret. Items are checked against the bitmap, and discarded if they
  * have been marked; this is possible because an insertion could have happened
  * between the last fetch and the last mark.
- * TODO
  */
 int duet_fetch(__u8 taskid, __u16 itreq, struct duet_item *items, __u16 *itret)
 {
@@ -124,8 +124,13 @@ again:
 	items[*itret].ino = tnode->item->ino;
 	items[*itret].idx = tnode->item->idx;
 	items[*itret].evt = tnode->item->evt;
-	tnode_dispose(tnode, NULL, NULL);
 
+	duet_dbg(KERN_INFO "duet_fetch: sending item (ino%lu, idx%lu, evt%u) "
+		"=> (ino%lu, idx%lu, evt%u)\n",
+		tnode->item->ino, tnode->item->idx, tnode->item->evt,
+		items[*itret].ino, items[*itret].idx, items[*itret].evt);
+
+	tnode_dispose(tnode, NULL, NULL);
 	(*itret)++;
 	if (*itret < itreq)
 		goto again;
@@ -198,11 +203,27 @@ static void duet_handle_page(struct duet_task *task, __u8 evtcode,
 	int found = 0;
 	struct rb_node *node = NULL;
 	struct item_rbnode *tnode = NULL;
-	struct inode *inode = page->mapping->host;
+	struct inode *inode;
+
+	BUG_ON(!page_mapping(page));
+
+	inode = page_mapping(page)->host;
+
+	if (!inode) {
+		duet_dbg(KERN_INFO "duet: address mapping host is NULL\n");
+		return;
+	}
 
 	/* Verify that the event refers to the fs we're interested in */
 	if (task->sb && task->sb != inode->i_sb) {
 		duet_dbg(KERN_INFO "duet: event not on fs of interest\n");
+		return;
+	}
+
+	/* Verify that the inode does not belong to a special file */
+	/* XXX: Is this absolutely necessary? */
+	if (!S_ISREG(inode->i_mode) && !S_ISDIR(inode->i_mode)) {
+		duet_dbg(KERN_INFO "duet: event not on regular file\n");
 		return;
 	}
 
@@ -284,14 +305,12 @@ void duet_hook(__u8 evtcode, void *data)
 	struct page *page = (struct page *)data;
 	struct duet_task *cur;
 
-	if (!duet_online())
+	/* Duet must be online, and the page must belong to a valid mapping */
+	if (!duet_online() || !page || !page_mapping(page))
 		return;
 
-	BUG_ON(!page);
-	BUG_ON(!page->mapping);
-
 	/* We're in RCU context so whatever happens, stay awake! */
-	duet_dbg(KERN_INFO "duet hook: evt %u, data %p\n", evtcode, data);
+	//duet_dbg(KERN_INFO "duet hook: evt %u, data %p\n", evtcode, data);
 
 	/* Look for tasks interested in this event type and invoke callbacks */
 	rcu_read_lock();

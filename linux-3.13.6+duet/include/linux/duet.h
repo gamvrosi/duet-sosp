@@ -18,6 +18,12 @@
 #ifndef _DUET_H
 #define _DUET_H
 
+#ifdef CONFIG_DUET_DEBUG
+#define duet_dbg(...)	printk(__VA_ARGS__)
+#else
+#define duet_dbg(...)
+#endif
+
 /* Notification models */
 enum {
 	DUET_MODEL_ADD = 1,		/* only ADD events */

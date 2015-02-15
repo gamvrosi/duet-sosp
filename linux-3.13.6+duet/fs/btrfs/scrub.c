@@ -43,6 +43,12 @@
 #define BTRFS_SCRUB_MAX_READA	20 /* Max concurrent readahead sessions */
 #endif /* CONFIG_BTRFS_FS_SCRUB_READA */
 
+#ifdef CONFIG_BTRFS_DUET_SCRUB_DEBUG
+#define duet_dbg(...)	printk(__VA_ARGS__)
+#else
+#define duet_dbg(...)
+#endif
+
 /*
  * This is only the first step towards a full-features scrub. It reads all
  * extent and super block and verifies the checksums. In case a bad checksum
@@ -654,7 +660,7 @@ out:
  */
 static int process_duet_events(struct scrub_ctx *sctx)
 {
-	int ret = 256, mret = 0, stop = 0;
+	int new = 0, ret = 256, mret = 0, stop = 0;
 	u16 itret;
 	u64 start, pstart, dstart, mapped_length, len;
 	struct duet_item itm;
@@ -665,6 +671,7 @@ static int process_duet_events(struct scrub_ctx *sctx)
 	struct btrfs_bio *bbio = NULL;
 	struct btrfs_fs_info *fs_info = sctx->dev_root->fs_info;
 	struct btrfs_device *pdev;
+	struct btrfs_key key;
 
 	dstart = sctx->scrub_dev->bd_part->start_sect << 9;
 
@@ -685,11 +692,22 @@ static int process_duet_events(struct scrub_ctx *sctx)
 		}
 
 		/* Get the inode */
-		inode = ilookup(fs_info->sb, itm.ino);
-		if (!inode) {
-			printk(KERN_ERR "duet-scrub: failed to find inode\n");
+		key.objectid = itm.ino;
+		key.type = BTRFS_INODE_ITEM_KEY;
+		key.offset = 0;
+		inode = btrfs_iget(fs_info->sb, &key, fs_info->fs_root, &new);
+		if (IS_ERR(inode)) {
+			printk(KERN_ERR "duet-scrub: failed to get inode %lu\n",
+				itm.ino);
 			goto done;
 		}
+
+		duet_dbg(KERN_INFO "duet-scrub: got inode %lu\n", inode->i_ino);
+
+		/* If this inode came from disk, remember to stop and give the
+		 * other processes a chance */
+		if (new)
+			stop = 1;
 
 		/* Get the LBN range(s) corresponding to this item */
 		start = itm.idx << PAGE_CACHE_SHIFT;
@@ -701,6 +719,8 @@ static int process_duet_events(struct scrub_ctx *sctx)
 		 * hopefully we have this extent in the tree already, try without
 		 * the full extent lock
 		 */
+		duet_dbg(KERN_INFO "duet-scrub: file offt %llu, len %llu\n",
+			start, len);
 		read_lock(&em_tree->lock);
 		em = lookup_extent_mapping(em_tree, start, len);
 		read_unlock(&em_tree->lock);
@@ -719,20 +739,37 @@ static int process_duet_events(struct scrub_ctx *sctx)
 			}
 		}
 
-again:
+		duet_dbg(KERN_INFO "duet-scrub: struct extent_map contents:\n"
+			"\tstart = %llu, len = %llu\n"
+			"\tmod_start = %llu, mod_len = %llu\n"
+			"\torig_start = %llu, orig_block_len = %llu, ram_bytes = %llu\n"
+			"\tblock_start = %llu, block_len = %llu, generation = %llu\n",
+			em->start, em->len,
+			em->mod_start, em->mod_len,
+			em->orig_start, em->orig_block_len, em->ram_bytes,
+			em->block_start, em->block_len, em->generation);
+
+		/* We won't bother with holes, inline extents, delallocs etc. */
+		if (em->block_start >= EXTENT_MAP_LAST_BYTE)
+			goto idone;
+
 		bbio = NULL;
 		mapped_length = len;
-		mret = btrfs_map_block(fs_info, READ, em->start, &mapped_length,
-					&bbio, 0);
+		mret = btrfs_map_block(fs_info, READ, em->block_start,
+			&mapped_length, &bbio, 0);
 		if (mret || !bbio || mapped_length < len ||
 			!bbio->stripes[0].dev->bdev) {
 			kfree(bbio);
 			goto idone;
 		}
 
-		pstart = bbio->stripes[0].physical;
+		pstart = bbio->stripes[0].physical + (start - em->start);
 		pdev = bbio->stripes[0].dev;
 		kfree(bbio);
+
+		duet_dbg(KERN_INFO "duet-scrub: dev offt %llu\n", dstart);
+		duet_dbg(KERN_INFO "duet-scrub: phys offt %llu, len %llu\n",
+			pstart, len);
 
 		if (pdev->bdev->bd_contains != sctx->scrub_dev) {
 			printk(KERN_INFO "duet-scrub: event refers to wrong "
@@ -742,16 +779,14 @@ again:
 
 		switch (itm.evt) {
 		case DUET_EVT_MOD:
-			if (duet_unmark(sctx->taskid, dstart + pstart,
-			    mapped_length) == -1)
+			if (duet_unmark(sctx->taskid, dstart+pstart, len) == -1)
 				printk(KERN_ERR "duet-scrub: failed to unmark"
 					" [%llu, %llu] range for task #%d\n",
 					dstart + pstart, dstart + pstart +
 					mapped_length, sctx->taskid);
 			break;
 		case DUET_EVT_ADD:
-			if (duet_mark(sctx->taskid, dstart + pstart,
-			    mapped_length) == -1)
+			if (duet_mark(sctx->taskid, dstart+pstart, len) == -1)
 				printk(KERN_ERR "duet-scrub: failed to mark"
 					" [%llu, %llu] range for task #%d\n",
 					dstart + pstart, dstart + pstart +
@@ -759,12 +794,8 @@ again:
 			break;
 		}
 
-		if (len > mapped_length) {
-			len -= mapped_length;
-			goto again;
-		}
-
 idone:
+		free_extent_map(em);
 		iput(inode);
 done:
 		ret--;
@@ -3328,7 +3359,7 @@ vanilla_reada:
 			while (logical < logic_end) {
 				/* Check if this stripe should be skipped */
 				if (!duet_check(sctx->taskid,
-				    scrub_dev->bdev->bd_part->start_sect << 9 +
+				    (scrub_dev->bdev->bd_part->start_sect << 9) +
 				    physical /*lbn*/, p_increment /*len*/)) {
 					ret = 1;
 					break;

@@ -27,12 +27,6 @@
 
 #define MAX_NAME	128
 
-#ifdef CONFIG_DUET_DEBUG
-#define duet_dbg(...)	printk(__VA_ARGS__)
-#else
-#define duet_dbg(...)
-#endif
-
 enum {
 	DUET_STATUS_OFF = 0,
 	DUET_STATUS_ON,

@@ -99,6 +99,15 @@ config BTRFS_DUET_SCRUB
 	  Adds support for the btrfs scrubber to collaborate with other tasks
 	  through the duet framework
 
+config BTRFS_DUET_SCRUB_DEBUG
+	bool "Debugging support for the opportunistic btrfs scrubber"
+	depends on BTRFS_FS
+	select DUET
+	select DUET_FS
+	select BTRFS_DUET_SCRUB
+	help
+	  Adds debugging support for the opportunistic btrfs scrubber
+
 config BTRFS_FS_SCRUB_BOOST
 	bool "Btrfs scrubbing boost capability (EXPERIMENTAL)"
 	depends on BTRFS_FS_SCRUB_ADAPT

@@ -69,8 +69,9 @@ static int bittree_chkupd(struct duet_task *task, __u64 lbn, __u32 len,
 
 	rlbn = lbn;
 
-	duet_dbg(KERN_INFO "duet: chkupd on task #%d for range [%llu, %llu] "
-		"(set=%u, chk=%u)\n", task->id, rlbn, rlbn+len-1, set, chk);
+	duet_dbg(KERN_INFO "duet: task #%d %s%s: lbn%llu, len%llu\n",
+		task->id, chk ? "checking if " : "marking as ",
+		set ? "set" : "cleared", rlbn, len);
 
 	cur_lbn = rlbn;
 	rem_len = len;
@@ -359,7 +360,7 @@ int duet_unmark(__u8 taskid, __u64 idx, __u32 num)
 {
 	if (!duet_online())
 		return -1;
-	return duet_mark_chkupd(taskid, idx, num, 1, 0);
+	return duet_mark_chkupd(taskid, idx, num, 0, 0);
 }
 EXPORT_SYMBOL_GPL(duet_unmark);
 
@@ -368,7 +369,7 @@ int duet_mark(__u8 taskid, __u64 idx, __u32 num)
 {
 	if (!duet_online())
 		return -1;
-	return duet_mark_chkupd(taskid, idx, num, 0, 0);
+	return duet_mark_chkupd(taskid, idx, num, 1, 0);
 }
 EXPORT_SYMBOL_GPL(duet_mark);
 
