@@ -64,7 +64,7 @@ struct duet_task {
 	/* BitTree -- progress bitmap tree */
 	__u32			bitrange;	/* range per bmap bit */
 	__u32			bmapsize;	/* bytes per bmap */
-	spinlock_t		bittree_lock;
+	struct mutex		bittree_lock;
 	struct rb_root		bittree;
 #ifdef CONFIG_DUET_TREE_STATS
 	__u64			stat_bit_cur;	/* Cur # of BitTree nodes */
