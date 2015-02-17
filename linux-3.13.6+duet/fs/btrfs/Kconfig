@@ -90,11 +90,31 @@ config BTRFS_FS_SCRUB_ADAPT
 	  foreground workload requests.
 endchoice
 
+config BTRFS_FS_MAPPING
+	bool "Btrfs mapping code"
+	depends on BTRFS_FS
+	help
+	  Enables mapping of physical address ranges to logical ones.
+	  Also enables mapping of logical address ranges to physical ones.
+	  Supports discontiguous physical spaces, such as those caused by
+	  RAID arrays. Does not account for compression (yet).
+
+config BTRFS_FS_MAPPING_DEBUG
+	bool "Btrfs mapping code debug messages"
+	depends on BTRFS_FS
+	depends on BTRFS_FS_MAPPING
+	help
+	  Enables debugging messages for the btrfs mapping code from
+	  logical-to-physical and physical-to-logical.
+
+	  If unsure/not a developer, say N here.
+
 config BTRFS_DUET_SCRUB
 	bool "Duet framework support for the btrfs scrubber"
 	depends on BTRFS_FS
 	select DUET
 	select DUET_FS
+	select BTRFS_FS_MAPPING
 	help
 	  Adds support for the btrfs scrubber to collaborate with other tasks
 	  through the duet framework
@@ -127,25 +147,6 @@ config BTRFS_FS_SCRUB_DEBUG
 	depends on BTRFS_FS
 	help
 	  Enables debugging messages for the btrfs scrubber.
-
-	  If unsure/not a developer, say N here.
-
-config BTRFS_FS_MAPPING
-	bool "Btrfs mapping code"
-	depends on BTRFS_FS
-	help
-	  Enables mapping of physical address ranges to logical ones.
-	  Also enables mapping of logical address ranges to physical ones.
-	  Supports discontiguous physical spaces, such as those caused by
-	  RAID arrays. Does not account for compression (yet).
-
-config BTRFS_FS_MAPPING_DEBUG
-	bool "Btrfs mapping code debug messages"
-	depends on BTRFS_FS
-	depends on BTRFS_FS_MAPPING
-	help
-	  Enables debugging messages for the btrfs mapping code from
-	  logical-to-physical and physical-to-logical.
 
 	  If unsure/not a developer, say N here.
 

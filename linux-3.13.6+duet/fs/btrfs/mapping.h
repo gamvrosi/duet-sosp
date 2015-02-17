@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 George Amvrosiadis.  All rights reserved.
+ * Copyright (C) 2014-2015 George Amvrosiadis.  All rights reserved.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public
@@ -21,24 +21,9 @@
 
 #include "ctree.h"
 
-struct btrfs_dev_extent_ctx {
-	u64 pstart;	/* Physical starting address in device */
-	u64 vstart;	/* Virtual starting address */
-	u64 len;	/* Length of dev extent in bytes */
-};
+int btrfs_iget_ino(struct btrfs_fs_info *fs_info, unsigned long ino,
+	struct inode **inode, int *ondisk);
+int btrfs_get_logical(struct inode *inode, unsigned long index,
+	struct extent_map **em, int *ondisk);
 
-/*
- * Used by both ino-to-phy and phy-to-ino mappers to iterate through
- * discovered contiguous ranges:
- * - file-to-physical args: pstart, plength, bdev ptr, and original privdata
- * - physical-to-file args: istart, ilength, ino, and original privdata
- */
-typedef int (*iterate_ranges_t)(u64, u64, void *, void *);
-
-int btrfs_phy_to_ino(struct btrfs_fs_info *fs_info, struct block_device *bdev,
-			u64 p_start, u64 len, struct btrfs_root *root,
-			iterate_ranges_t iterate, void *privdata);
-int btrfs_ino_to_phy(struct btrfs_fs_info *fs_info, struct btrfs_root *root,
-			u64 ino, u64 iofft, u64 ilen, iterate_ranges_t iterate,
-			void *privdata);
 #endif /* __BTRFS_MAPPING_ */

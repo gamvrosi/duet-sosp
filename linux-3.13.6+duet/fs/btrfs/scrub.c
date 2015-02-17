@@ -30,6 +30,7 @@
 #include "rcu-string.h"
 #include "raid56.h"
 #ifdef CONFIG_BTRFS_DUET_SCRUB
+#include "mapping.h"
 #include <linux/duet.h>
 #include <linux/genhd.h>
 #endif /* CONFIG_BTRFS_DUET_SCRUB */
@@ -195,7 +196,6 @@ struct scrub_ctx {
 #ifdef CONFIG_BTRFS_DUET_SCRUB
 	u8			taskid;
 	struct block_device	*scrub_dev;
-	//struct list_head	*pending_pages;
 #endif /* CONFIG_BTRFS_DUET_SCRUB */
 };
 
@@ -662,20 +662,17 @@ out:
  */
 static int process_duet_events(struct scrub_ctx *sctx)
 {
-	int new = 0, ret = 256, mret = 0, stop = 0;
+	int ret = 256, mret = 0, stop = 0;
 	u16 itret;
-	u64 start, pstart, dstart, mapped_length, len;
+	u64 pstart, mapped_length;
+	u64 len = PAGE_CACHE_SIZE;
+	u64 dstart = sctx->scrub_dev->bd_part->start_sect << 9;
 	struct duet_item itm;
-	struct extent_map_tree *em_tree;
-	struct extent_io_tree *io_tree;
 	struct extent_map *em;
 	struct inode *inode;
 	struct btrfs_bio *bbio = NULL;
 	struct btrfs_fs_info *fs_info = sctx->dev_root->fs_info;
 	struct btrfs_device *pdev;
-	struct btrfs_key key;
-
-	dstart = sctx->scrub_dev->bd_part->start_sect << 9;
 
 	while (ret) {
 		if (duet_fetch(sctx->taskid, 1, &itm, &itret)) {
@@ -687,76 +684,17 @@ static int process_duet_events(struct scrub_ctx *sctx)
 		if (!itret)
 			return 0;
 
-		if (!(itm.evt & (DUET_EVT_ADD | DUET_EVT_MOD))) {
-			printk(KERN_ERR "duet-scrub: received unsupported event"
-				" (%d). This is a bug.\n", itm.evt);
-			goto done;
-		}
-
-		/* Get the inode */
-		key.objectid = itm.ino;
-		key.type = BTRFS_INODE_ITEM_KEY;
-		key.offset = 0;
-		inode = btrfs_iget(fs_info->sb, &key, fs_info->fs_root, &new);
-		if (IS_ERR(inode)) {
-			printk(KERN_ERR "duet-scrub: failed to get inode %lu\n",
-				itm.ino);
-			goto done;
-		}
-
-		scrub_dbg(KERN_INFO "duet-scrub: got inode %lu\n", inode->i_ino);
-
 		/* If this inode came from disk, remember to stop and give the
 		 * other processes a chance */
-		if (new)
-			stop = 1;
+		if (btrfs_iget_ino(fs_info, itm.ino, &inode, &stop))
+			goto done;
 
-		/* Get the LBN range(s) corresponding to this item */
-		start = itm.idx << PAGE_CACHE_SHIFT;
-		len = PAGE_CACHE_SIZE;
-		em_tree = &BTRFS_I(inode)->extent_tree;
-		io_tree = &BTRFS_I(inode)->io_tree;
-
-		/*
-		 * hopefully we have this extent in the tree already, try without
-		 * the full extent lock
-		 */
-		scrub_dbg(KERN_INFO "duet-scrub: file offt %llu, len %llu\n",
-			start, len);
-		read_lock(&em_tree->lock);
-		em = lookup_extent_mapping(em_tree, start, len);
-		read_unlock(&em_tree->lock);
-
-		if (!em) {
-			stop = 1;
-
-			/* get the big lock and read metadata off disk */
-			lock_extent(io_tree, start, start + len - 1);
-			em = btrfs_get_extent(inode, NULL, 0, start, len, 0);
-			unlock_extent(io_tree, start, start + len - 1);
-
-			if (IS_ERR(em)) {
-				/* TODO: Put in the list of pending pages */
-				goto idone;
-			}
-		}
-
-		scrub_dbg(KERN_INFO "duet-scrub: struct extent_map contents:\n"
-			"\tstart = %llu, len = %llu\n"
-			"\tmod_start = %llu, mod_len = %llu\n"
-			"\torig_start = %llu, orig_block_len = %llu, ram_bytes = %llu\n"
-			"\tblock_start = %llu, block_len = %llu, generation = %llu\n",
-			em->start, em->len,
-			em->mod_start, em->mod_len,
-			em->orig_start, em->orig_block_len, em->ram_bytes,
-			em->block_start, em->block_len, em->generation);
-
-		/* We won't bother with holes, inline extents, delallocs etc. */
-		if (em->block_start >= EXTENT_MAP_LAST_BYTE)
+		if (btrfs_get_logical(inode, itm.idx, &em, &stop))
 			goto idone;
 
+		/* Get the LBN range(s) corresponding to this item */
 		bbio = NULL;
-		mapped_length = len;
+		mapped_length = PAGE_CACHE_SIZE;
 		mret = btrfs_map_block(fs_info, READ, em->block_start,
 			&mapped_length, &bbio, 0);
 		if (mret || !bbio || mapped_length < len ||
@@ -766,7 +704,8 @@ static int process_duet_events(struct scrub_ctx *sctx)
 			goto idone;
 		}
 
-		pstart = bbio->stripes[0].physical + (start - em->start);
+		pstart = bbio->stripes[0].physical +
+			 ((itm.idx << PAGE_CACHE_SHIFT) - em->start);
 		pdev = bbio->stripes[0].dev;
 		kfree(bbio);
 
