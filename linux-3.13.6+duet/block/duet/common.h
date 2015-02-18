@@ -45,20 +45,13 @@ struct item_rbnode {
 	struct duet_item	*item;
 };
 
-/* Notification model masks */
-#define DUET_MODEL_ADD_MASK	(DUET_EVT_ADD)
-#define DUET_MODEL_REM_MASK	(DUET_EVT_REM)
-#define DUET_MODEL_BOTH_MASK	(DUET_EVT_ADD | DUET_EVT_REM)
-#define DUET_MODEL_DIFF_MASK	(DUET_EVT_ADD | DUET_EVT_REM)
-#define DUET_MODEL_AXS_MASK	(DUET_EVT_ADD | DUET_EVT_MOD)
-
 struct duet_task {
 	__u8			id;
 	char			name[MAX_NAME];
 	struct list_head	task_list;
 	wait_queue_head_t	cleaner_queue;
 	atomic_t		refcount;
-	__u8			nmodel;		/* Notification model */
+	__u8			evtmask;	/* Mask of subscribed events */
 	struct super_block	*sb;		/* Filesystem of task (opt) */
 
 	/* BitTree -- progress bitmap tree */
@@ -117,19 +110,17 @@ int duet_shutdown(void);
 long duet_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 
 /* rbtrees.c */
+void bnode_dispose(struct bmap_rbnode *bnode, struct rb_node *rbnode,
+	struct rb_root *root, struct duet_task *task);
 inline int bittree_check(struct rb_root *bittree, __u32 range, __u32 bmapsize,
 	__u64 idx, __u32 num, struct duet_task *task);
 inline int bittree_mark(struct rb_root *bittree, __u32 range, __u32 bmapsize,
 	__u64 idx, __u32 num, struct duet_task *task);
 inline int bittree_unmark(struct rb_root *bittree, __u32 range, __u32 bmapsize,
 	__u64 idx, __u32 num, struct duet_task *task);
-void bnode_dispose(struct bmap_rbnode *bnode, struct rb_node *rbnode,
-	struct rb_root *root, struct duet_task *task);
-struct item_rbnode *tnode_init(struct duet_task *task, unsigned long ino,
-	unsigned long idx, __u8 evt);
 void tnode_dispose(struct item_rbnode *tnode, struct rb_node *rbnode,
 	struct rb_root *root);
 int itmtree_insert(struct duet_task *task, unsigned long ino,
-	unsigned long index, __u8 evtcode, __u8 replace);
+	unsigned long index, __u8 state, __u8 replace);
 
 #endif /* _COMMON_H */

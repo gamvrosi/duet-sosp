@@ -155,7 +155,7 @@ static int duet_ioctl_cmd(void __user *arg)
 
 	case DUET_REGISTER:
 		/* XXX: We do not pass an owner for this one. Future work. */
-		ca->ret = duet_register(&ca->tid, ca->name, ca->nmodel,
+		ca->ret = duet_register(&ca->tid, ca->name, ca->evtmask,
 					ca->bitrange, NULL);
 		break;
 
@@ -221,7 +221,7 @@ static int duet_ioctl_tlist(void __user *arg)
 		la->tid[i] = cur->id;
 		memcpy(la->tnames[i], cur->name, MAX_NAME);
 		la->bitrange[i] = cur->bitrange;
-		la->nmodel[i] = cur->nmodel;
+		la->evtmask[i] = cur->evtmask;
 		i++;
 		if (i == MAX_TASKS)
 			break;

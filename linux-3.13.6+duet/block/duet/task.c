@@ -49,7 +49,7 @@ static int process_inode(struct duet_task *task, struct inode *inode)
 {
 	struct radix_tree_iter iter;
 	void **slot;
-	__u8 evtcode;
+	__u8 state;
 
 	/* Go through all pages of this inode */
 	rcu_read_lock();
@@ -62,10 +62,10 @@ static int process_inode(struct duet_task *task, struct inode *inode)
 
 		lock_page(page);
 		spin_lock_irq(&task->itm_lock);
-		evtcode = DUET_EVT_ADD;
+		state = DUET_PAGE_ADDED;
 		if (PageDirty(page))
-			evtcode |= DUET_EVT_MOD;
-		itmtree_insert(task, inode->i_ino, page->index, evtcode, 1);
+			state = DUET_PAGE_ADDED_MODIFIED;
+		itmtree_insert(task, inode->i_ino, page->index, state, 1);
 		spin_unlock_irq(&task->itm_lock);
 		unlock_page(page);
 	}
@@ -84,7 +84,7 @@ static int scan_page_cache(struct duet_task *task)
 	struct inode *inode = NULL;
 	struct rb_root inodetree = RB_ROOT;
 
-	duet_dbg(KERN_INFO "duet: page cache scan started\n");
+	printk(KERN_INFO "duet: page cache scan started\n");
 again:
 	for (loop = 0; loop < (1U << *duet_i_hash_shift); loop++) {
 		head = *duet_inode_hashtable + loop;
@@ -123,7 +123,7 @@ again:
 		bnode_dispose(bnode, rbnode, &inodetree, NULL);
 	}
 
-	duet_dbg(KERN_INFO "duet: page cache scan finished\n");
+	printk(KERN_INFO "duet: page cache scan finished\n");
 
 	return 0;
 }
@@ -329,7 +329,7 @@ EXPORT_SYMBOL_GPL(duet_mark);
 
 /* Properly allocate and initialize a task struct */
 static int duet_task_init(struct duet_task **task, const char *name,
-	__u8 nmodel, __u32 bitrange, void *owner)
+	__u8 evtmask, __u32 bitrange, void *owner)
 {
 	*task = kzalloc(sizeof(**task), GFP_NOFS);
 	if (!(*task))
@@ -352,7 +352,7 @@ static int duet_task_init(struct duet_task **task, const char *name,
 	/* We no longer expose this at registration. Fixed to 32KB. */
 	(*task)->bmapsize = 32768;
 
-	(*task)->nmodel = nmodel;
+	(*task)->evtmask = evtmask;
 	(*task)->sb = (struct super_block *)owner;
 	if (bitrange)
 		(*task)->bitrange = bitrange;
@@ -388,7 +388,7 @@ void duet_task_dispose(struct duet_task *task)
 	kfree(task);
 }
 
-int duet_register(__u8 *taskid, const char *name, __u8 nmodel, __u32 bitrange,
+int duet_register(__u8 *taskid, const char *name, __u8 evtmask, __u32 bitrange,
 	void *owner)
 {
 	int ret;
@@ -400,7 +400,7 @@ int duet_register(__u8 *taskid, const char *name, __u8 nmodel, __u32 bitrange,
 		return -EINVAL;
 	}
 
-	ret = duet_task_init(&task, name, nmodel, bitrange, owner);
+	ret = duet_task_init(&task, name, evtmask, bitrange, owner);
 	if (ret) {
 		printk(KERN_ERR "duet: failed to initialize task\n");
 		return ret;

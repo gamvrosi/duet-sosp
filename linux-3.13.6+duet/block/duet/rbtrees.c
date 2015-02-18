@@ -251,8 +251,8 @@ inline int bittree_unmark(struct rb_root *bittree, __u32 range, __u32 bmapsize,
 	return bittree_chkupd(bittree, range, bmapsize, idx, num, 0, 0, task);
 }
 
-struct item_rbnode *tnode_init(struct duet_task *task, unsigned long ino,
-	unsigned long idx, __u8 evt)
+static struct item_rbnode *tnode_init(struct duet_task *task, unsigned long ino,
+	unsigned long idx, __u8 state)
 {
 	struct item_rbnode *tnode = NULL;
 
@@ -278,7 +278,7 @@ struct item_rbnode *tnode_init(struct duet_task *task, unsigned long ino,
 	RB_CLEAR_NODE(&tnode->node);
 	tnode->item->ino = ino;
 	tnode->item->idx = idx;
-	tnode->item->evt = evt;
+	tnode->item->state = state;
 	return tnode;
 }
 
@@ -296,14 +296,14 @@ void tnode_dispose(struct item_rbnode *tnode, struct rb_node *rbnode,
  * been obtained. Returns 1 on failure.
  */
 int itmtree_insert(struct duet_task *task, unsigned long ino,
-	unsigned long index, __u8 evtcode, __u8 replace)
+	unsigned long index, __u8 state, __u8 replace)
 {
 	int found = 0;
 	struct rb_node **link, *parent = NULL;
 	struct item_rbnode *cur, *tnode;
 
 	/* Create the node */
-	tnode = tnode_init(task, ino, index, evtcode);
+	tnode = tnode_init(task, ino, index, state);
 	if (!tnode) {
 		printk(KERN_ERR "duet: tnode alloc failed\n");
 		return 1;
@@ -333,23 +333,20 @@ int itmtree_insert(struct duet_task *task, unsigned long ino,
 		}
 	}
 
-	duet_dbg(KERN_DEBUG "duet: %s page node (ino%lu, idx%lu, e%u)\n",
+	duet_dbg(KERN_DEBUG "duet: %s page node (ino%lu, idx%lu)\n",
 		found ? "will not insert" : "will insert",
-		tnode->item->ino, tnode->item->idx, tnode->item->evt);
+		tnode->item->ino, tnode->item->idx);
 
-	if (found && replace) {
-		cur->item->evt = evtcode;
-		goto out;
-	} else if (found) {
-		tnode_dispose(tnode, NULL, NULL);
-		goto out;
+	if (found) {
+		if (replace)
+			cur->item->state = state;
+		else
+			tnode_dispose(tnode, NULL, NULL);
+	} else {
+		/* Insert node in tree */
+		rb_link_node(&tnode->node, parent, link);
+		rb_insert_color(&tnode->node, &task->itmtree);
 	}
 
-	/* Insert node in tree */
-	rb_link_node(&tnode->node, parent, link);
-	rb_insert_color(&tnode->node, &task->itmtree);
-
-out:
 	return found;
 }
-

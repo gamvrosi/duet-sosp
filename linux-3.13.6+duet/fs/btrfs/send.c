@@ -5129,7 +5129,7 @@ long btrfs_ioctl_send(struct file *mnt_file, void __user *arg_)
 	}
 
 	/* Register the task with the Duet framework */
-	if (duet_register(&sctx->taskid, "btrfs-send", DUET_MODEL_ADD,
+	if (duet_register(&sctx->taskid, "btrfs-send", DUET_EVT_ADD,
 		fs_info->sb->s_blocksize, fs_info->sb)) {
 		printk(KERN_ERR "duet-send: registration with duet failed\n");
 		ret = -EFAULT;

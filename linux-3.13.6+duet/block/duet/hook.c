@@ -20,70 +20,6 @@
 #include "common.h"
 
 /*
- * Notification models are models defining the behaviour of the framework when a
- * new page event happens. Tasks can subscribe for a specific notification model
- * at session registration time. Each state in the model represents the page
- * status that is returned by the fetch call.
- *
- *
- * Differential model (DUET_PAGE_DIFF): Notify on page status changes (additions
- * or removals) that have occurred in the cache, that the task has not been
- * informed about.
- * Example users: rsync, defrag, garbage collection, backup.
- *
- *  +---------+  fetch,ADD  +------------+     ADD     +-------+
- *  | Page    | ----------> |  Page is   | ----------> | Page  |
- *  | removed | <---------- | up-to-date | <---------- | added |
- *  +---------+     REM     +------------+  fetch,REM  +-------+
- *
- * Access model (DUET_PAGE_AXS): Notify on page data accesses (additions or
- * modifications) that have taken place in the cache, that the task has not been
- * informed about.
- * Example users: scrubbing, any inotify-based application.
- *
- *  +----------+      ADD       +-------+
- *  | Page     |--------------->| Page  |---+ ADD
- *  | uptodate |<---------------| added |<--+
- *  +----------+     fetch      +-------+
- *     | ^                         ^ |
- *     | |                         | |
- *     | | fetch  +----------+ ADD | |
- *     | +--------| Page     |-----+ |
- *     +--------->| modified |<------+
- *       MOD      +----------+   MOD
- *                    | ^
- *                    | | MOD
- *                    +-+
- *
- * Other possible models:
- * Insertion model (DUET_PAGE_ADD): Only notify on page insertion events.
- *
- * +------------+    DUET_EVT_ADD     +-------+
- * |  Page is   | ------------------> | Page  | ---+
- * | up-to-date | <------------------ | added | <--+ PAGE_EVT_ADD
- * +------------+       fetch()       +-------+
- *
- * Removal model (DUET_PAGE_REM): Only notify on page removal events.
- *
- * +------------+    DUET_EVT_REM     +---------+
- * |  Page is   | ------------------> | Page    | ---+
- * | up-to-date | <------------------ | removed | <--+ PAGE_EVT_REM
- * +------------+       fetch()       +---------+
- *
- * Union model (DUET_PAGE_BOTH): Notify on all insertion/removal events.
- *
- *  REM +---------+  fetch  +------------+   ADD   +-------+ ADD
- * +--- | Page    | ------> |  Page is   | ------> | Page  | ---+
- * +--> | removed | <------ | up-to-date | <------ | added | <--+
- *      +---------+   REM   +------------+  fetch  +-------+
- *           |                     ^                   |
- *           |                     | fetch             |
- *           |  ADD   +----------------------+    REM  |
- *           +------->| Page added & removed |<--------+
- *                    +----------------------+
- */
-
-/*
  * Fetches up to itreq items from the ItemTree. The number of items fetched is
  * given by itret. Items are checked against the bitmap, and discarded if they
  * have been marked; this is possible because an insertion could have happened
@@ -120,18 +56,20 @@ again:
 		goto done;
 	}
 
-	/* Copy fields off to items array */
-	items[*itret].ino = tnode->item->ino;
-	items[*itret].idx = tnode->item->idx;
-	items[*itret].evt = tnode->item->evt;
+	/* Copy fields off to items array, if we've subscribed to this item */
+	if (task->evtmask & tnode->item->state) {
+		items[*itret].ino = tnode->item->ino;
+		items[*itret].idx = tnode->item->idx;
+		items[*itret].state = tnode->item->state;
 
-	duet_dbg(KERN_INFO "duet_fetch: sending item (ino%lu, idx%lu, evt%u) "
-		"=> (ino%lu, idx%lu, evt%u)\n",
-		tnode->item->ino, tnode->item->idx, tnode->item->evt,
-		items[*itret].ino, items[*itret].idx, items[*itret].evt);
+		duet_dbg(KERN_INFO "duet_fetch: sending (ino%lu, idx%lu, %x)\n",
+			items[*itret].ino, items[*itret].idx,
+			items[*itret].state);
+
+		(*itret)++;
+	}
 
 	tnode_dispose(tnode, NULL, NULL);
-	(*itret)++;
 	if (*itret < itreq)
 		goto again;
 
@@ -145,10 +83,36 @@ done:
 EXPORT_SYMBOL_GPL(duet_fetch);
 
 /*
- * This handles page events of interest for an ItemTree. Indexing is based on
- * the inode number, and the index of the page within said inode.
+ * The framework implements an event model that defines how we update the page
+ * state when a new event happens. The state of the page is returned by fetch,
+ * which returns the page back to the up-to-date state. Note that this model
+ * relies on the basic assumption that when the session starts, we know the
+ * initial state of each page in the cache (but haven't told the task). We
+ * achieve that by scanning the page cache at registration time (check task.c).
+ * Although we implement this model for all tasks, different tasks can subscribe
+ * to only a subset of the events (ADD, MOD, or REM).
+ *
+ *  +---------+  fetch,ADD  +------------+     ADD       +-------+   Page
+ *  | Page    |------------>| Page       |-------------->| Page  |<- - - - -
+ *  | removed |<------------| up-to-date |<--------------| added |  Scanner
+ *  +---------+     REM     +------------+  fetch,REM    +-------+
+ *       ^                     ^ |      ^                    |
+ *       |               fetch | | MOD  | fetch,REM          | MOD
+ *       |                     | v      +------+             v
+ *       |   REM             +----------+      |      +--------------+   Page
+ *       +-------------------| Page     |      +------| Page added   |<- - - - -
+ *                           | modified |             | and modified |  Scanner
+ *                           +----------+             +--------------+
+ *                               ^ |                        ^ |
+ *                               | | MOD                    | | MOD
+ *                               +-+                        +-+
+ *
+ * Pages that are not up-to-date are put in a red-black tree, so that we can
+ * find them in O(logn) time. Indexing is based on inode number (good enough
+ * when we look at one file system at a time), and the index of the page within
+ * said inode.
  */
-static void duet_handle_page(struct duet_task *task, __u8 evtcode,
+static void duet_handle_event(struct duet_task *task, __u8 evtcode,
 	struct page *page)
 {
 	int found = 0;
@@ -204,35 +168,77 @@ static void duet_handle_page(struct duet_task *task, __u8 evtcode,
 		}
 	}
 
-	duet_dbg(KERN_DEBUG "duet-page: %s node (#%lu, i%lu, e%u)\n",
+	duet_dbg(KERN_DEBUG "duet-page: %s node (ino%lu, idx%lu)\n",
 		found ? "found" : "didn't find",
 		found ? tnode->item->ino : inode->i_ino,
-		found ? tnode->item->idx : page->index,
-		found ? tnode->item->evt : evtcode);
+		found ? tnode->item->idx : page->index);
 
-	/* If we found it, we might have to remove it. Otherwise, insert. */
+	/* If we found it, update according to our model. Otherwise, insert. */
 	if (!found) {
+		/* This is easy. The event code coincides with the state we're
+		 * transitioning to. */
 		if (itmtree_insert(task, inode->i_ino, page->index, evtcode, 0))
 			printk(KERN_ERR "duet: itmtree insert failed\n");
 	} else if (found) {
-		switch (task->nmodel) {
-		case DUET_MODEL_DIFF:
-			/* A different event code negates the current one */
-			if (evtcode != tnode->item->evt)
+		/* What we do depends on what we found */
+		switch (tnode->item->state) {
+		case DUET_PAGE_ADDED:
+			switch (evtcode) {
+			case DUET_EVT_ADD:
+				printk(KERN_ERR "We got an A event while at the"
+						" A state. This is a bug!\n");
+				break;
+			case DUET_EVT_MOD:
+				tnode->item->state = DUET_PAGE_ADDED_MODIFIED;
+				break;
+			case DUET_EVT_REM:
 				tnode_dispose(tnode, node, &task->itmtree);
+				break;
+			}
 			break;
-		case DUET_MODEL_AXS:
-			/* A different event code just changes the state */
-			if (evtcode != tnode->item->evt)
-				tnode->item->evt = evtcode;
+
+		case DUET_PAGE_REMOVED:
+			switch (evtcode) {
+			case DUET_EVT_ADD:
+				tnode_dispose(tnode, node, &task->itmtree);
+				break;
+			case DUET_EVT_MOD:
+			case DUET_EVT_REM:
+				printk(KERN_ERR "We got an %s event while at "
+						"the R state. This is a bug!\n",
+					evtcode == DUET_EVT_MOD ? "M" : "R");
+				break;
+			}
 			break;
-		case DUET_MODEL_ADD:
-		case DUET_MODEL_REM:
-			/* Nothing to do here */
+
+		case DUET_PAGE_ADDED_MODIFIED:
+			switch (evtcode) {
+			case DUET_EVT_ADD:
+				printk(KERN_ERR "We got an A event while at the"
+						" A+M state. This is a bug!\n");
+				break;
+			case DUET_EVT_MOD:
+				/* Nothing changes */
+				break;
+			case DUET_EVT_REM:
+				tnode_dispose(tnode, node, &task->itmtree);
+				break;
+			}
 			break;
-		case DUET_MODEL_BOTH:
-			/* Just unify the event codes */
-			tnode->item->evt |= evtcode;
+
+		case DUET_PAGE_MODIFIED:
+			switch (evtcode) {
+			case DUET_EVT_ADD:
+				printk(KERN_ERR "We got an A event while at the"
+						" M state. This is a bug!\n");
+				break;
+			case DUET_EVT_MOD:
+				/* Nothing changes */
+				break;
+			case DUET_EVT_REM:
+				tnode->item->state = DUET_PAGE_REMOVED;
+				break;
+			}
 			break;
 		}
 	}
@@ -243,7 +249,6 @@ static void duet_handle_page(struct duet_task *task, __u8 evtcode,
 
 void duet_hook(__u8 evtcode, void *data)
 {
-	__u8 evtmask = 0;
 	struct page *page = (struct page *)data;
 	struct duet_task *cur;
 
@@ -256,28 +261,8 @@ void duet_hook(__u8 evtcode, void *data)
 
 	/* Look for tasks interested in this event type and invoke callbacks */
 	rcu_read_lock();
-	list_for_each_entry_rcu(cur, &duet_env.tasks, task_list) {
-		switch(cur->nmodel) {
-		case DUET_MODEL_ADD:
-			evtmask = DUET_MODEL_ADD_MASK;
-			break;
-		case DUET_MODEL_REM:
-			evtmask = DUET_MODEL_REM_MASK;
-			break;
-		case DUET_MODEL_BOTH:
-			evtmask = DUET_MODEL_BOTH_MASK;
-			break;
-		case DUET_MODEL_DIFF:
-			evtmask = DUET_MODEL_DIFF_MASK;
-			break;
-		case DUET_MODEL_AXS:
-			evtmask = DUET_MODEL_AXS_MASK;
-			break;
-		}
-
-		if (evtmask & evtcode)
-			duet_handle_page(cur, evtcode, page);
-	}
+	list_for_each_entry_rcu(cur, &duet_env.tasks, task_list)
+		duet_handle_event(cur, evtcode, page);
 	rcu_read_unlock();
 }
 EXPORT_SYMBOL_GPL(duet_hook);

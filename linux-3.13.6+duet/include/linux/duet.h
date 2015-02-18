@@ -24,30 +24,29 @@
 #define duet_dbg(...)
 #endif
 
-/* Notification models */
+/*
+ * Event types: ADD (resp. REM) are triggered when a page __descriptor__ is
+ * inserted in (resp. about to be removed from) the page cache. MOD is produced
+ * when the page is dirtied (nb: during writes, pages are added, then dirtied).
+ */
+#define DUET_EVT_ADD	(1 << 0)
+#define DUET_EVT_REM	(1 << 1)
+#define DUET_EVT_MOD	(1 << 2)
+
+/* Page states. Up-to-date is implied by absence. */
 enum {
-	DUET_MODEL_ADD = 1,		/* only ADD events */
-	DUET_MODEL_REM = 2,		/* only REM events */
-	DUET_MODEL_BOTH = 3,		/* both ADD/REM events */
-	DUET_MODEL_DIFF = 4,		/* difference of ADD/REM events */
-	DUET_MODEL_AXS = 5,		/* data accesses based on ADD/MOD */
+	DUET_PAGE_ADDED		 = DUET_EVT_ADD,
+	DUET_PAGE_REMOVED	 = DUET_EVT_REM,
+	DUET_PAGE_ADDED_MODIFIED = DUET_EVT_ADD | DUET_EVT_MOD,
+	DUET_PAGE_MODIFIED	 = DUET_EVT_MOD,
 };
 
 /* Item struct returned for processing */
 struct duet_item {
 	unsigned long ino;
 	unsigned long idx;
-	__u8 evt;			/* added, removed, modified? */
+	__u8 state;
 };
-
-/*
- * Event types: ADD (resp. REM) are triggered when a page __descriptor__ is
- * inserted in (resp. about to be removed from) the page cache. MOD is produced
- * when the page is dirtied (nb: no event is produced when a page is cleaned).
- */
-#define DUET_EVT_ADD	(1 << 0)
-#define DUET_EVT_REM	(1 << 1)
-#define DUET_EVT_MOD	(1 << 2)
 
 /* Framework interface functions */
 int duet_register(__u8 *taskid, const char *name, __u8 nmodel, __u32 bitrange,

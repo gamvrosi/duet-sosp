@@ -37,6 +37,11 @@
 #define DUET_PRINTBIT		8
 #define DUET_PRINTITEM		9
 
+/* event types: only necessary at user-level ioctl.h */
+//#define DUET_EVT_ADD	(1 << 0)
+//#define DUET_EVT_REM	(1 << 1)
+//#define DUET_EVT_MOD	(1 << 2)
+
 /* We return up to MAX_ITEMS at a time (9b each). */
 struct duet_ioctl_fetch_args {
 	__u8 			tid;		/* in */
@@ -48,7 +53,7 @@ struct duet_ioctl_list_args {
 	__u8 	tid[MAX_TASKS];			/* out */
 	char 	tnames[MAX_TASKS][MAX_NAME];	/* out */
 	__u32 	bitrange[MAX_TASKS];		/* out */
-	__u8	nmodel[MAX_TASKS];		/* out */
+	__u8	evtmask[MAX_TASKS];		/* out */
 };
 
 struct duet_ioctl_cmd_args {
@@ -58,7 +63,7 @@ struct duet_ioctl_cmd_args {
 	union {
 		/* Registration args */
 		struct {
-			__u8 	nmodel;		/* in */
+			__u8 	evtmask;	/* in */
 			__u32 	bitrange;	/* in */
 			char 	name[MAX_NAME];	/* in */
 		};

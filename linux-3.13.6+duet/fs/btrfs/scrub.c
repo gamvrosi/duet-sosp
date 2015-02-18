@@ -719,8 +719,9 @@ static int process_duet_events(struct scrub_ctx *sctx)
 			goto idone;
 		}
 
-		switch (itm.evt) {
-		case DUET_EVT_MOD:
+		switch (itm.state) {
+		case DUET_PAGE_MODIFIED:
+		case DUET_PAGE_ADDED_MODIFIED:
 			scrub_dbg(KERN_INFO "duet-scrub: clearing [%llu, %llu] --"
 				" dstart = %llu\n",
 				dstart+pstart, dstart+pstart+len, dstart);
@@ -730,7 +731,7 @@ static int process_duet_events(struct scrub_ctx *sctx)
 					dstart + pstart, dstart + pstart +
 					mapped_length, sctx->taskid);
 			break;
-		case DUET_EVT_ADD:
+		case DUET_PAGE_ADDED:
 			scrub_dbg(KERN_INFO "duet-scrub: marking [%llu, %llu] --"
 				" dstart = %llu\n",
 				dstart+pstart, dstart+pstart+len, dstart);
@@ -923,8 +924,8 @@ struct scrub_ctx *scrub_setup_ctx(struct btrfs_device *dev, u64 deadline,
 	sctx->scrub_dev = dev->bdev;
 
 	/* Register the task with the Duet framework */
-	if (duet_register(&sctx->taskid, "btrfs-scrub", DUET_MODEL_AXS,
-	    fs_info->sb->s_blocksize, fs_info->sb)) {
+	if (duet_register(&sctx->taskid, "btrfs-scrub",
+	    DUET_EVT_ADD|DUET_EVT_MOD, fs_info->sb->s_blocksize, fs_info->sb)) {
 		printk(KERN_ERR "scrub: failed to register with duet\n");
 		return ERR_PTR(-EFAULT);
 	}
