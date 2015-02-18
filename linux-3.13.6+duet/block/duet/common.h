@@ -95,6 +95,9 @@ struct duet_info {
 
 extern struct duet_info duet_env;
 extern duet_hook_t *duet_hook_cache_fp;
+extern unsigned int *duet_i_hash_shift;
+extern struct hlist_head **duet_inode_hashtable;
+extern spinlock_t *duet_inode_hash_lock;
 
 /* bmap.c */
 __u32 duet_bmap_count(__u8 *bmap, __u32 byte_len);
@@ -114,12 +117,19 @@ int duet_shutdown(void);
 long duet_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 
 /* rbtrees.c */
-struct bmap_rbnode *bnode_init(struct duet_task *task, __u64 idx);
+inline int bittree_check(struct rb_root *bittree, __u32 range, __u32 bmapsize,
+	__u64 idx, __u32 num, struct duet_task *task);
+inline int bittree_mark(struct rb_root *bittree, __u32 range, __u32 bmapsize,
+	__u64 idx, __u32 num, struct duet_task *task);
+inline int bittree_unmark(struct rb_root *bittree, __u32 range, __u32 bmapsize,
+	__u64 idx, __u32 num, struct duet_task *task);
 void bnode_dispose(struct bmap_rbnode *bnode, struct rb_node *rbnode,
-	struct rb_root *root);
+	struct rb_root *root, struct duet_task *task);
 struct item_rbnode *tnode_init(struct duet_task *task, unsigned long ino,
 	unsigned long idx, __u8 evt);
 void tnode_dispose(struct item_rbnode *tnode, struct rb_node *rbnode,
 	struct rb_root *root);
+int itmtree_insert(struct duet_task *task, unsigned long ino,
+	unsigned long index, __u8 evtcode, __u8 replace);
 
 #endif /* _COMMON_H */

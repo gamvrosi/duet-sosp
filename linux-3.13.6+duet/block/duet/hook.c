@@ -145,55 +145,6 @@ done:
 EXPORT_SYMBOL_GPL(duet_fetch);
 
 /*
- * Inserts a node in an ItemTree of pages. Assumes the relevant locks have been
- * obtained. Returns 1 on failure.
- */
-static int itmtree_insert(struct duet_task *task, struct item_rbnode *tnode)
-{
-	int found = 0;
-	struct rb_node **link, *parent = NULL;
-	struct item_rbnode *cur;
-
-	link = &task->itmtree.rb_node;
-
-	while (*link) {
-		parent = *link;
-		cur = rb_entry(parent, struct item_rbnode, node);
-
-		/* We order based on (inode, page index) */
-		if (cur->item->ino > tnode->item->ino) {
-			link = &(*link)->rb_left;
-		} else if (cur->item->ino < tnode->item->ino) {
-			link = &(*link)->rb_right;
-		} else {
-			/* Found inode, look for index */
-			if (cur->item->idx > tnode->item->idx) {
-				link = &(*link)->rb_left;
-			} else if (cur->item->idx < tnode->item->idx) {
-				link = &(*link)->rb_right;
-			} else {
-				found = 1;
-				break;
-			}
-		}
-	}
-
-	duet_dbg(KERN_DEBUG "duet: %s page node (ino%lu, idx%lu, e%u)\n",
-		found ? "will not insert" : "will insert",
-		tnode->item->ino, tnode->item->idx, tnode->item->evt);
-
-	if (found)
-		goto out;
-
-	/* Insert node in tree */
-	rb_link_node(&tnode->node, parent, link);
-	rb_insert_color(&tnode->node, &task->itmtree);
-
-out:
-	return found;
-}
-
-/*
  * This handles page events of interest for an ItemTree. Indexing is based on
  * the inode number, and the index of the page within said inode.
  */
@@ -261,16 +212,8 @@ static void duet_handle_page(struct duet_task *task, __u8 evtcode,
 
 	/* If we found it, we might have to remove it. Otherwise, insert. */
 	if (!found) {
-		tnode = tnode_init(task, inode->i_ino, page->index, evtcode);
-		if (!tnode) {
-			printk(KERN_ERR "duet: tnode alloc failed\n");
-			goto out;
-		}
-
-		if (itmtree_insert(task, tnode)) {
+		if (itmtree_insert(task, inode->i_ino, page->index, evtcode, 0))
 			printk(KERN_ERR "duet: itmtree insert failed\n");
-			tnode_dispose(tnode, NULL, NULL);
-		}
 	} else if (found) {
 		switch (task->nmodel) {
 		case DUET_MODEL_DIFF:
@@ -294,7 +237,6 @@ static void duet_handle_page(struct duet_task *task, __u8 evtcode,
 		}
 	}
 
-out:
 	spin_unlock_irq(&task->itm_lock);
 	//spin_unlock_irq(&task->itm_outer_lock);
 }

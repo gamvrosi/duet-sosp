@@ -15,6 +15,7 @@
  * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
  * Boston, MA 021110-1307, USA.
  */
+#include <linux/pagemap.h>
 #include "common.h"
 
 /*
@@ -44,186 +45,87 @@
  * Insertion functions such as duet_register are fine as is
  */
 
-/*
- * Looks through the bmaptree for the node that should be responsible for
- * the given LBN. Starting from that node, it marks all LBNs until lbn+len
- * (or unmarks them depending on the value of set, or just checks whether
- * they are set or not based on the value of chk), spilling over to
- * subsequent nodes and inserting them if needed.
- * If chk is set then:
- * - a return value of 1 means all relevant LBNs are marked as expected
- * - a return value of 0 means some of the LBNs were not marked as expected
- * - a return value of -1 denotes the occurrence of an error
- * If chk is not set then:
- * - a return value of 0 means all LBNs were marked properly
- * - a return value of -1 denotes the occurrence of an error
- */
-static int bittree_chkupd(struct duet_task *task, __u64 lbn, __u32 len,
-	__u8 set, __u8 chk)
+static int process_inode(struct duet_task *task, struct inode *inode)
 {
-	int ret, found;
-	__u64 cur_lbn, node_lbn, lbn_gran, cur_len, rlbn, div_rem;
-	__u32 i, rem_len;
-	struct rb_node **link, *parent;
-	struct bmap_rbnode *bnode = NULL;
+	struct radix_tree_iter iter;
+	void **slot;
+	__u8 evtcode;
 
-	rlbn = lbn;
+	/* Go through all pages of this inode */
+	rcu_read_lock();
+	radix_tree_for_each_slot(slot, &inode->i_mapping->page_tree, &iter, 0) {
+		struct page *page;
 
-	duet_dbg(KERN_INFO "duet: task #%d %s%s: lbn%llu, len%u\n",
-		task->id, chk ? "checking if " : "marking as ",
-		set ? "set" : "cleared", rlbn, len);
+		page = radix_tree_deref_slot(slot);
+		if (unlikely(!page))
+			continue;
 
-	cur_lbn = rlbn;
-	rem_len = len;
-	lbn_gran = task->bitrange * task->bmapsize * 8;
-	div64_u64_rem(rlbn, lbn_gran, &div_rem);
-	node_lbn = rlbn - div_rem;
+		lock_page(page);
+		spin_lock_irq(&task->itm_lock);
+		evtcode = DUET_EVT_ADD;
+		if (PageDirty(page))
+			evtcode |= DUET_EVT_MOD;
+		itmtree_insert(task, inode->i_ino, page->index, evtcode, 1);
+		spin_unlock_irq(&task->itm_lock);
+		unlock_page(page);
+	}
+	rcu_read_unlock();
 
-	/*
-	 * Obtain RBBT lock. This will slow us down, but only the work queue
-	 * items and the maintenance threads should get here, so the foreground
-	 * workload should not be affected. Additionally, only a quarter of the
-	 * code will be executed at any call (depending on the set, chk, found
-	 * flags), and only the calls that are required to add/remove nodes to
-	 * the tree will be costly
-	 */
-	mutex_lock(&task->bittree_lock);
+	return 0;
+}
 
-	while (rem_len) {
-		/* Look up node_lbn */
-		found = 0;
-		link = &task->bittree.rb_node;
-		parent = NULL;
+/* Scan through the page cache, and populate the task's tree. */
+static int scan_page_cache(struct duet_task *task)
+{
+	unsigned int loop;
+	struct rb_node *rbnode;
+	struct hlist_head *head;
+	struct bmap_rbnode *bnode;
+	struct inode *inode = NULL;
+	struct rb_root inodetree = RB_ROOT;
 
-		while (*link) {
-			parent = *link;
-			bnode = rb_entry(parent, struct bmap_rbnode, node);
+	duet_dbg(KERN_INFO "duet: page cache scan started\n");
+again:
+	for (loop = 0; loop < (1U << *duet_i_hash_shift); loop++) {
+		head = *duet_inode_hashtable + loop;
+		spin_lock(duet_inode_hash_lock);
 
-			if (bnode->idx > node_lbn) {
-				link = &(*link)->rb_left;
-			} else if (bnode->idx < node_lbn) {
-				link = &(*link)->rb_right;
-			} else {
-				found = 1;
-				break;
+		/* Process this hash bucket */
+		hlist_for_each_entry(inode, head, i_hash) {
+			if (inode->i_sb != task->sb)
+				continue;
+
+			spin_lock(&inode->i_lock);
+			__iget(inode);
+			spin_unlock(&inode->i_lock);
+
+			/* If we haven't seen this inode before, process it. */
+			if (bittree_check(&inodetree, 1, 32768, inode->i_ino, 1,
+			    NULL) != 1) {
+				spin_unlock(duet_inode_hash_lock);
+				process_inode(task, inode);
+				bittree_mark(&inodetree, 1, 32768, inode->i_ino,
+						1, NULL);
+				iput(inode);
+				goto again;
 			}
+
+			iput(inode);
 		}
 
-		duet_dbg(KERN_DEBUG "duet: node with LBN %llu %sfound\n",
-			node_lbn, found ? "" : "not ");
-
-		/*
-		 * Take appropriate action based on whether we found the node
-		 * (found), and whether we plan to mark or unmark (set), and
-		 * whether we are only checking the values (chk).
-		 *
-		 *   !Chk  |       Found            !Found      |
-		 *  -------+------------------------------------+
-		 *    Set  |     Set Bits     |  Init new node  |
-		 *         |------------------+-----------------|
-		 *   !Set  | Clear (dispose?) |     Nothing     |
-		 *  -------+------------------------------------+
-		 *
-		 *    Chk  |       Found            !Found      |
-		 *  -------+------------------------------------+
-		 *    Set  |    Check Bits    |  Return false   |
-		 *         |------------------+-----------------|
-		 *   !Set  |    Check Bits    |    Continue     |
-		 *  -------+------------------------------------+
-		 */
-
-		/* Find the last LBN on this node */
-		cur_len = min(cur_lbn + rem_len,
-			node_lbn + lbn_gran) - cur_lbn;
-
-		if (set) {
-			if (!found && !chk) {
-				/* Insert the new node */
-				bnode = bnode_init(task, node_lbn);
-				if (!bnode) {
-					ret = -1;
-					goto done;
-				}
-
-				rb_link_node(&bnode->node, parent, link);
-				rb_insert_color(&bnode->node, &task->bittree);
-			} else if (!found && chk) {
-				/* Looking for set bits, node didn't exist */
-				ret = 0;
-				goto done;
-			}
-
-			/* Set the bits */
-			if (!chk && duet_bmap_set(bnode->bmap, task->bmapsize,
-			    bnode->idx, task->bitrange, cur_lbn, cur_len, 1)) {
-				/* We got -1, something went wrong */
-				ret = -1;
-				goto done;
-			/* Check the bits */
-			} else if (chk) {
-				ret = duet_bmap_chk(bnode->bmap, task->bmapsize,
-					bnode->idx, task->bitrange, cur_lbn,
-					cur_len, 1);
-				/* Check if we failed, or found a bit set/unset
-				 * when it shouldn't be */
-				if (ret != 1)
-					goto done;
-			}
-
-		} else if (found) {
-			/* Clear the bits */
-			if (!chk && duet_bmap_set(bnode->bmap, task->bmapsize,
-			    bnode->idx, task->bitrange, cur_lbn, cur_len, 0)) {
-				/* We got -1, something went wrong */
-				ret = -1;
-				goto done;
-			/* Check the bits */
-			} else if (chk) {
-				ret = duet_bmap_chk(bnode->bmap, task->bmapsize,
-					bnode->idx, task->bitrange, cur_lbn,
-					cur_len, 0);
-				/* Check if we failed, or found a bit set/unset
-				 * when it shouldn't be */
-				if (ret != 1)
-					goto done;
-			}
-
-			if (!chk) {
-				/* Dispose of the node? */
-				ret = 0;
-				for (i=0; i<task->bmapsize; i++) {
-					if (bnode->bmap[i]) {
-						ret = 1;
-						break;
-					}
-				}
-
-				if (!ret) {
-					bnode_dispose(bnode, parent,
-						&task->bittree);
-#ifdef CONFIG_DUET_BMAP_STATS
-				        (task->stat_bit_cur)--;
-#endif /* CONFIG_DUET_BMAP_STATS */
-				}
-			}
-		}
-
-		rem_len -= cur_len;
-		cur_lbn += cur_len;
-		node_lbn = cur_lbn;
+		spin_unlock(duet_inode_hash_lock);
 	}
 
-	/* If we managed to get here, then everything worked as planned.
-	 * Return 0 for success in the case that chk is not set, or 1 for
-	 * success when chk is set. */
-	if (!chk)
-		ret = 0;
-	else
-		ret = 1;
+	/* Dispose of the BitTree */
+	while (!RB_EMPTY_ROOT(&inodetree)) {
+		rbnode = rb_first(&inodetree);
+		bnode = rb_entry(rbnode, struct bmap_rbnode, node);
+		bnode_dispose(bnode, rbnode, &inodetree, NULL);
+	}
 
-done:
-	mutex_unlock(&task->bittree_lock);
-	return ret;
+	duet_dbg(KERN_INFO "duet: page cache scan finished\n");
+
+	return 0;
 }
 
 /* Find task and increment its refcount */
@@ -276,29 +178,6 @@ static int bittree_print(struct duet_task *task)
 	return 0;
 }
 
-static int duet_mark_chkupd(__u8 taskid, __u64 idx, __u32 num, __u8 set,
-	__u8 chk)
-{
-	int ret = 0;
-	struct duet_task *task;
-
-	task = duet_find_task(taskid);
-	if (!task)
-		return -ENOENT;
-
-	ret = bittree_chkupd(task, idx, num, set, chk);
-	if (ret == -1)
-		printk(KERN_ERR "duet: blocks were not %s %s for task %d\n",
-			chk ? "found" : "marked", set ? "set" : "unset",
-			task->id);
-
-	/* decref and wake up cleaner if needed */
-	if (atomic_dec_and_test(&task->refcount))
-		wake_up(&task->cleaner_queue);
-
-	return ret;
-}
-
 /* Do a preorder print of the BitTree */
 int duet_print_bittree(__u8 taskid)
 {
@@ -348,28 +227,103 @@ EXPORT_SYMBOL_GPL(duet_print_itmtree);
 /* Checks the blocks in the range from idx to idx+num are done */
 int duet_check(__u8 taskid, __u64 idx, __u32 num)
 {
+	int ret = 0;
+	struct duet_task *task;
+
 	if (!duet_online())
 		return -1;	
 
-	return duet_mark_chkupd(taskid, idx, num, 1, 1);
+
+	task = duet_find_task(taskid);
+	if (!task)
+		return -ENOENT;
+
+	/*
+	 * Obtain RBBT lock. This will slow us down, but only the work queue
+	 * items and the maintenance threads should get here, so the foreground
+	 * workload should not be affected. Additionally, only a quarter of the
+	 * code will be executed at any call (depending on the set, chk, found
+	 * flags), and only the calls that are required to add/remove nodes to
+	 * the tree will be costly
+	 */
+	mutex_lock(&task->bittree_lock);
+	ret = bittree_check(&task->bittree, task->bitrange, task->bmapsize,
+		idx, num, task);
+	mutex_unlock(&task->bittree_lock);
+
+	/* decref and wake up cleaner if needed */
+	if (atomic_dec_and_test(&task->refcount))
+		wake_up(&task->cleaner_queue);
+
+	return ret;
 }
 EXPORT_SYMBOL_GPL(duet_check);
 
 /* Unmarks the blocks in the range from idx to idx+num as pending */
 int duet_unmark(__u8 taskid, __u64 idx, __u32 num)
 {
+	int ret = 0;
+	struct duet_task *task;
+
 	if (!duet_online())
 		return -1;
-	return duet_mark_chkupd(taskid, idx, num, 0, 0);
+
+	task = duet_find_task(taskid);
+	if (!task)
+		return -ENOENT;
+
+	/*
+	 * Obtain RBBT lock. This will slow us down, but only the work queue
+	 * items and the maintenance threads should get here, so the foreground
+	 * workload should not be affected. Additionally, only a quarter of the
+	 * code will be executed at any call (depending on the set, chk, found
+	 * flags), and only the calls that are required to add/remove nodes to
+	 * the tree will be costly
+	 */
+	mutex_lock(&task->bittree_lock);
+	ret = bittree_unmark(&task->bittree, task->bitrange, task->bmapsize,
+		idx, num, task);
+	mutex_unlock(&task->bittree_lock);
+
+	/* decref and wake up cleaner if needed */
+	if (atomic_dec_and_test(&task->refcount))
+		wake_up(&task->cleaner_queue);
+
+	return ret;
 }
 EXPORT_SYMBOL_GPL(duet_unmark);
 
 /* Marks the blocks in the range from idx to idx+num as done */
 int duet_mark(__u8 taskid, __u64 idx, __u32 num)
 {
+	int ret = 0;
+	struct duet_task *task;
+
 	if (!duet_online())
 		return -1;
-	return duet_mark_chkupd(taskid, idx, num, 1, 0);
+
+	task = duet_find_task(taskid);
+	if (!task)
+		return -ENOENT;
+
+	/*
+	 * Obtain RBBT lock. This will slow us down, but only the work queue
+	 * items and the maintenance threads should get here, so the foreground
+	 * workload should not be affected. Additionally, only a quarter of the
+	 * code will be executed at any call (depending on the set, chk, found
+	 * flags), and only the calls that are required to add/remove nodes to
+	 * the tree will be costly
+	 */
+	mutex_lock(&task->bittree_lock);
+	ret = bittree_mark(&task->bittree, task->bitrange, task->bmapsize,
+		idx, num, task);
+	mutex_unlock(&task->bittree_lock);
+
+	/* decref and wake up cleaner if needed */
+	if (atomic_dec_and_test(&task->refcount))
+		wake_up(&task->cleaner_queue);
+
+	return ret;
 }
 EXPORT_SYMBOL_GPL(duet_mark);
 
@@ -421,7 +375,7 @@ void duet_task_dispose(struct duet_task *task)
 	while (!RB_EMPTY_ROOT(&task->bittree)) {
 		rbnode = rb_first(&task->bittree);
 		bnode = rb_entry(rbnode, struct bmap_rbnode, node);
-		bnode_dispose(bnode, rbnode, &task->bittree);
+		bnode_dispose(bnode, rbnode, &task->bittree, NULL);
 	}
 
 	/* Dispose of the ItemTree */
@@ -468,6 +422,10 @@ int duet_register(__u8 *taskid, const char *name, __u8 nmodel, __u32 bitrange,
 	}
 	list_add_rcu(&task->task_list, last);
 	mutex_unlock(&duet_env.task_list_mutex);
+
+	/* Now that the task is receiving events, scan the page cache and
+	 * populate its ItemTree. */
+	scan_page_cache(task);
 
 	*taskid = task->id;
 	return 0;

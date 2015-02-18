@@ -56,6 +56,15 @@ static unsigned int i_hash_shift __read_mostly;
 static struct hlist_head *inode_hashtable __read_mostly;
 static __cacheline_aligned_in_smp DEFINE_SPINLOCK(inode_hash_lock);
 
+#ifdef CONFIG_DUET
+unsigned int *duet_i_hash_shift = &i_hash_shift;
+struct hlist_head **duet_inode_hashtable = &inode_hashtable;
+spinlock_t *duet_inode_hash_lock = &inode_hash_lock;
+EXPORT_SYMBOL(duet_i_hash_shift);
+EXPORT_SYMBOL(duet_inode_hashtable);
+EXPORT_SYMBOL(duet_inode_hash_lock);
+#endif /* CONFIG_DUET */
+
 __cacheline_aligned_in_smp DEFINE_SPINLOCK(inode_sb_list_lock);
 EXPORT_SYMBOL(inode_sb_list_lock);
 
