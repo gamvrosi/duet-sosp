@@ -340,8 +340,7 @@ int itmtree_insert(struct duet_task *task, unsigned long ino,
 	if (found) {
 		if (replace)
 			cur->item->state = state;
-		else
-			tnode_dispose(tnode, NULL, NULL);
+		tnode_dispose(tnode, NULL, NULL);
 	} else {
 		/* Insert node in tree */
 		rb_link_node(&tnode->node, parent, link);

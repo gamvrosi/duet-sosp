@@ -40,7 +40,7 @@ int btrfs_iget_ino(struct btrfs_fs_info *fs_info, unsigned long ino,
 
 	*inode = btrfs_iget(fs_info->sb, &key, fs_info->fs_root, ondisk);
 	if (IS_ERR(*inode)) {
-		printk(KERN_ERR "btrfs_iget_ino: no inode %lu\n", ino);
+		map_dbg(KERN_ERR "btrfs_iget_ino: no inode %lu\n", ino);
 		return 1;
 	}
 

@@ -60,14 +60,14 @@ static int process_inode(struct duet_task *task, struct inode *inode)
 		if (unlikely(!page))
 			continue;
 
-		lock_page(page);
+		//lock_page(page);
 		spin_lock_irq(&task->itm_lock);
 		state = DUET_PAGE_ADDED;
 		if (PageDirty(page))
 			state = DUET_PAGE_ADDED_MODIFIED;
 		itmtree_insert(task, inode->i_ino, page->index, state, 1);
 		spin_unlock_irq(&task->itm_lock);
-		unlock_page(page);
+		//unlock_page(page);
 	}
 	rcu_read_unlock();
 
@@ -95,13 +95,13 @@ again:
 			if (inode->i_sb != task->sb)
 				continue;
 
-			spin_lock(&inode->i_lock);
-			__iget(inode);
-			spin_unlock(&inode->i_lock);
-
 			/* If we haven't seen this inode before, process it. */
 			if (bittree_check(&inodetree, 1, 32768, inode->i_ino, 1,
 			    NULL) != 1) {
+				spin_lock(&inode->i_lock);
+				__iget(inode);
+				spin_unlock(&inode->i_lock);
+
 				spin_unlock(duet_inode_hash_lock);
 				process_inode(task, inode);
 				bittree_mark(&inodetree, 1, 32768, inode->i_ino,
@@ -109,8 +109,6 @@ again:
 				iput(inode);
 				goto again;
 			}
-
-			iput(inode);
 		}
 
 		spin_unlock(duet_inode_hash_lock);

@@ -403,7 +403,7 @@ static noinline_for_stack void scrub_free_ctx(struct scrub_ctx *sctx)
 
 #ifdef CONFIG_BTRFS_DUET_SCRUB
 	/* Deregister the task from the Duet framework */
-	if (duet_deregister(sctx->taskid))
+	if (sctx->taskid && duet_deregister(sctx->taskid))
 		printk(KERN_ERR "scrub: failed to deregister with duet\n");
 #endif /* CONFIG_BTRFS_DUET_SCRUB */
 
@@ -924,7 +924,7 @@ struct scrub_ctx *scrub_setup_ctx(struct btrfs_device *dev, u64 deadline,
 	sctx->scrub_dev = dev->bdev;
 
 	/* Register the task with the Duet framework */
-	if (duet_register(&sctx->taskid, "btrfs-scrub",
+	if (duet_online() && duet_register(&sctx->taskid, "btrfs-scrub",
 	    DUET_EVT_ADD|DUET_EVT_MOD, fs_info->sb->s_blocksize, fs_info->sb)) {
 		printk(KERN_ERR "scrub: failed to register with duet\n");
 		return ERR_PTR(-EFAULT);
@@ -3451,7 +3451,7 @@ back_to_paused:
 			    mutex_unlock(&fs_info->scrub_lock);
 #ifdef CONFIG_BTRFS_DUET_SCRUB
 			    /* If there's no more to process, wait */
-			    if (!duet_online() || !process_duet_events(sctx))
+			    if (!duet_online() || !sctx->taskid || !process_duet_events(sctx))
 #endif
 				wait_event(fs_info->scrub_pause_wait,
 				   atomic_read(&fs_info->scrub_pause_req) == 0);
@@ -3479,7 +3479,7 @@ back_to_paused:
 
 #ifdef CONFIG_BTRFS_DUET_SCRUB
 		/* If we hit the disk, we try to give the workload a chance. */
-		if (duet_online() && process_duet_events(sctx))
+		if (duet_online() && sctx->taskid && process_duet_events(sctx))
 			continue;
 #endif /* CONFIG_BTRFS_DUET_SCRUB */
 

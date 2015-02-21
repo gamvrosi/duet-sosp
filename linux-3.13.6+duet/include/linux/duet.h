@@ -34,12 +34,10 @@
 #define DUET_EVT_MOD	(1 << 2)
 
 /* Page states. Up-to-date is implied by absence. */
-enum {
-	DUET_PAGE_ADDED		 = DUET_EVT_ADD,
-	DUET_PAGE_REMOVED	 = DUET_EVT_REM,
-	DUET_PAGE_ADDED_MODIFIED = DUET_EVT_ADD | DUET_EVT_MOD,
-	DUET_PAGE_MODIFIED	 = DUET_EVT_MOD,
-};
+#define DUET_PAGE_ADDED			(DUET_EVT_ADD)
+#define DUET_PAGE_REMOVED		(DUET_EVT_REM)
+#define DUET_PAGE_ADDED_MODIFIED	(DUET_EVT_ADD | DUET_EVT_MOD)
+#define DUET_PAGE_MODIFIED		(DUET_EVT_MOD)
 
 /* Item struct returned for processing */
 struct duet_item {

@@ -3673,77 +3673,87 @@ static int send_write(struct send_ctx *sctx, u64 offset, u32 len)
 	struct extent_map *em;
 	struct btrfs_fs_info *fs_info = sctx->send_root->fs_info;
 	ktime_t start, finish;
-	u32 curlen = len;
+	u32 rlen;
 	u64 lofft, idx = offset >> PAGE_CACHE_SHIFT;
 
-	if (!duet_online())
+	if (!duet_online() || !sctx->taskid)
 		goto send;
 
 	if (btrfs_iget_ino(fs_info, sctx->cur_ino, &inode, NULL))
 		goto send;
 
-	/* Exclude next unset logical range */
-	offset = idx << PAGE_CACHE_SHIFT;
+	/* Exclude any sent blocks starting from offset */
 unset_next:
 	if (btrfs_get_logical(inode, idx, &em, NULL))
 		goto idone;
 
 	lofft = em->block_start + (idx << PAGE_CACHE_SHIFT) - em->start;
-	while (duet_check(sctx->taskid, lofft, PAGE_CACHE_SIZE) == 1 && len) {
+	while (len && duet_check(sctx->taskid, lofft, PAGE_CACHE_SIZE) == 1) {
 		idx++;
-		len -= PAGE_CACHE_SIZE;
-		offset += PAGE_CACHE_SIZE;
+		if (len < (idx << PAGE_CACHE_SHIFT) - offset)
+			goto edone;
+		len -= (idx << PAGE_CACHE_SHIFT) - offset;
+		skipped += (idx << PAGE_CACHE_SHIFT) - offset;
+		offset = (idx << PAGE_CACHE_SHIFT);
 		lofft += PAGE_CACHE_SIZE;
-		skipped += PAGE_CACHE_SIZE;
 
 		/* XXX: should have >= PAGE_CACHE_SIZE bytes left, if any */
-		if (em->len - ((idx << PAGE_CACHE_SHIFT) - em->start) <
+		if (len && em->len - ((idx << PAGE_CACHE_SHIFT) - em->start) <
 		    PAGE_CACHE_SIZE) {
 			free_extent_map(em);
 			goto unset_next;
 		}
 	}
 
+	if (!len || len <= (idx << PAGE_CACHE_SHIFT) - offset)
+		goto edone;
 	free_extent_map(em);
 
 	/* Find next set logical range */
-	curlen = PAGE_CACHE_SIZE;
+	rlen = len;
+	len = (idx << PAGE_CACHE_SHIFT) - offset;
+	rlen -= len;
 set_next:
 	if (btrfs_get_logical(inode, idx, &em, NULL))
 		goto idone;
 
 	lofft = em->block_start + (idx << PAGE_CACHE_SHIFT) - em->start;
-	while (duet_check(sctx->taskid, lofft, PAGE_CACHE_SIZE) != 1 && len) {
+	while (rlen && duet_check(sctx->taskid, lofft, PAGE_CACHE_SIZE) != 1) {
 		idx++;
-		len -= PAGE_CACHE_SIZE;
-		curlen += PAGE_CACHE_SIZE;
+		if (rlen < PAGE_CACHE_SIZE) {
+			len += rlen;
+			goto edone;
+		}
+		rlen -= PAGE_CACHE_SIZE;
+		len += PAGE_CACHE_SIZE;
 		lofft += PAGE_CACHE_SIZE;
 
 		/* XXX: should have >= PAGE_CACHE_SIZE bytes left, if any */
-		if (em->len - ((idx << PAGE_CACHE_SHIFT) - em->start) <
+		if (rlen && em->len - ((idx << PAGE_CACHE_SHIFT) - em->start) <
 				PAGE_CACHE_SIZE) {
 			free_extent_map(em);
 			goto set_next;
 		}
 	}
 
-	len = curlen;
+edone:
 	free_extent_map(em);
 idone:
 	iput(inode);
+	if (!len)
+		goto skip;
 send:
 #endif /* CONFIG_BTRFS_DUET_BACKUP */
-
 	p = fs_path_alloc();
 	if (!p)
 		return -ENOMEM;
 
-verbose_printk("btrfs: send_write offset=%llu, len=%d\n", offset, curlen);
+verbose_printk("btrfs: send_write offset=%llu, len=%d\n", offset, len);
 
 #ifdef CONFIG_BTRFS_DUET_BACKUP
 	start = ktime_get();
 #endif /* CONFIG_BTRFS_DUET_BACKUP */
-	num_read = fill_read_buf(sctx, sctx->cur_ino, offset, curlen);
+	num_read = fill_read_buf(sctx, sctx->cur_ino, offset, len);
 #ifdef CONFIG_BTRFS_DUET_BACKUP
 	finish = ktime_get();
 	sctx->send_root->fs_info->send_elapsed_rtime +=
@@ -3775,6 +3785,7 @@ out:
 	if (ret < 0)
 		return ret;
 #ifdef CONFIG_BTRFS_DUET_BACKUP
+skip:
 	atomic64_add(skipped, &sctx->send_root->fs_info->send_total_bytes);
 #endif /* CONFIG_BTRFS_DUET_BACKUP */
 	return num_read + skipped;
@@ -4605,6 +4616,8 @@ verbose_printk("btrfs: send_o3_write ino=%llu, offset=%llu, len=%lu\n", ino, off
 	TLV_PUT_U64(sctx, BTRFS_SEND_A_FILE_OFFSET, offt);
 	TLV_PUT(sctx, BTRFS_SEND_A_DATA, sctx->page_buf, PAGE_CACHE_SIZE);
 
+	atomic64_add(sctx->send_size,
+		&sctx->send_root->fs_info->send_best_effort);
 	ret = send_cmd(sctx);
 
 tlv_put_failure:
@@ -4612,9 +4625,6 @@ out:
 	if (ret < 0)
 		printk(KERN_ERR "send_o3_write: failed to send o3 write "
 			"(ino %llu, iofft %llu)\n", ino, offt);
-	else
-		atomic64_add(PAGE_CACHE_SIZE,
-			&sctx->send_root->fs_info->send_best_effort);
 
 	return ret;
 }
@@ -4628,7 +4638,7 @@ static int process_inode(u64 ino, u64 offt, u64 root, void *ctx)
 	if (root != sctx->send_root->objectid)
 		return 0;
 
-	/* TODO: Great! Now send the data out of order */
+	/* Great! Now send the data out of order */
 	send_o3_write(sctx, ino, offt);
 
 	return 0;
@@ -4646,9 +4656,10 @@ static int process_inode(u64 ino, u64 offt, u64 root, void *ctx)
  */
 static int process_duet_events(struct send_ctx *sctx)
 {
-	int ret = 256;
+	int stop = 0, ret = 256, mret;
 	u16 itret;
 	u64 lofft;
+	char *addr;
 	struct duet_item itm;
 	struct inode *inode;
 	struct page *page;
@@ -4666,12 +4677,12 @@ static int process_duet_events(struct send_ctx *sctx)
 		/* Fetch one item */
 		if (duet_fetch(sctx->taskid, 1, &itm, &itret)) {
 			printk(KERN_ERR "duet-send: duet_fetch failed\n");
-			return 0;
+			break;
 		}
 
-		/* If there were no events, return 0 */
+		/* If there were no events, return */
 		if (!itret)
-			return 0;
+			break;
 
 		/* If we're already past this inode, ignore the event */
 		if (itm.ino < sctx->send_progress)
@@ -4692,8 +4703,14 @@ static int process_duet_events(struct send_ctx *sctx)
 			goto idone;
 		}
 
-		memcpy(sctx->page_buf, kmap(page), PAGE_CACHE_SIZE);
-		kunmap(page);
+		addr = kmap(page);
+		if (addr) {
+			memcpy(sctx->page_buf, addr, PAGE_CACHE_SIZE);
+			kunmap(page);
+		} else {
+			unlock_page(page);
+			goto idone;
+		}
 		unlock_page(page);
 
 		/* Trace the logical extent the page belongs to */
@@ -4709,27 +4726,27 @@ static int process_duet_events(struct send_ctx *sctx)
 			goto edone;
 		}
 
+		/* We're about to do some I/O, so let the foreground workload
+		 * have a go too */
+		stop = 1;
+
+		/* Mark sent range to ensure we won't send it again. */
+
+		if (duet_mark(sctx->taskid, lofft, PAGE_CACHE_SIZE) == -1) {
+			send_dbg(KERN_INFO "duet-send: failed to mark lrange "
+				"[%llu, %llu]\n", lofft, lofft+PAGE_CACHE_SIZE);
+		}
+
 		/*
 		 * Now iterate through all inodes that refer to this extent,
 		 * and pick out the ones that refer to our snapshot. The rest
 		 * of the work takes place in process_inode
 		 */
-		ret = iterate_inodes_from_logical(lofft, fs_info, path,
+		mret = iterate_inodes_from_logical(lofft, fs_info, path,
 							process_inode, sctx);
-		if (ret != 0 && ret != ENOENT) {
-			printk(KERN_ERR "duet-send: iterate_inodes_from_logical"
+		if (mret != 0 && mret != ENOENT)
+			send_dbg(KERN_ERR "duet-send: iterate_inodes_from_logical"
 					" failed\n");
-			goto edone;
-		}
-
-		/*
-		 * Finally, mark sent range to ensure we won't send it again.
-		 * Note how the iterator above sent out all the possible inodes!
-		 */
-		if (duet_mark(sctx->taskid, lofft, PAGE_CACHE_SIZE) == -1) {
-			send_dbg(KERN_INFO "duet-send: failed to mark lrange "
-				"[%llu, %llu]\n", lofft, lofft+PAGE_CACHE_SIZE);
-		}
 
 edone:
 		free_extent_map(em);
@@ -4737,6 +4754,8 @@ idone:
 		iput(inode);
 done:
 		ret--;
+		if (stop)
+			break;
 	}
 
 	btrfs_free_path(path);
@@ -4760,28 +4779,19 @@ static int changed_cb(struct btrfs_root *left_root,
 	struct send_ctx *sctx = ctx;
 	struct btrfs_fs_info *fs_info = sctx->send_root->fs_info;
 
-#ifdef CONFIG_BTRFS_DUET_BACKUP
-start_again:
-#endif /* CONFIG_BTRFS_DUET_BACKUP */
-
 	/* Check if we've been asked to cancel */
 	if (atomic_read(&fs_info->send_cancel_req))
 		return -1;
 
-#ifdef CONFIG_BTRFS_DUET_BACKUP
-	if (process_duet_events(sctx))
-		goto start_again;
-#endif /* CONFIG_BTRFS_DUET_BACKUP */
-
 	if (result == BTRFS_COMPARE_TREE_SAME) {
 		if (key->type != BTRFS_INODE_REF_KEY &&
 		    key->type != BTRFS_INODE_EXTREF_KEY)
-			return 0;
+			goto out; //return 0;
 		ret = compare_refs(sctx, left_path, key);
 		if (!ret)
-			return 0;
+			goto out; //return 0;
 		if (ret < 0)
-			return ret;
+			goto out; //return ret;
 		result = BTRFS_COMPARE_TREE_CHANGED;
 		ret = 0;
 	}
@@ -4810,6 +4820,16 @@ start_again:
 		ret = changed_extent(sctx, result);
 
 out:
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+start_again:
+	/* Check if we've been asked to cancel */
+	if (atomic_read(&fs_info->send_cancel_req))
+		return -1;
+
+	if (duet_online() && sctx->taskid && process_duet_events(sctx))
+		goto start_again;
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
+
 	return ret;
 }
 
@@ -5129,8 +5149,8 @@ long btrfs_ioctl_send(struct file *mnt_file, void __user *arg_)
 	}
 
 	/* Register the task with the Duet framework */
-	if (duet_register(&sctx->taskid, "btrfs-send", DUET_EVT_ADD,
-		fs_info->sb->s_blocksize, fs_info->sb)) {
+	if (duet_online() && duet_register(&sctx->taskid, "btrfs-send",
+		DUET_EVT_ADD, fs_info->sb->s_blocksize, fs_info->sb)) {
 		printk(KERN_ERR "duet-send: registration with duet failed\n");
 		ret = -EFAULT;
 		goto out;
@@ -5176,7 +5196,7 @@ out:
 			atomic64_read(&fs_info->send_best_effort));
 
 	/* Deregister the task from the Duet framework */
-	if (duet_deregister(sctx->taskid))
+	if (duet_online() && sctx->taskid && duet_deregister(sctx->taskid))
 		printk(KERN_ERR "send: deregistration with duet failed\n");
 
 	vfree(sctx->page_buf);

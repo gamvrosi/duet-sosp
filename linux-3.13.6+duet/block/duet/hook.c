@@ -36,10 +36,7 @@ int duet_fetch(__u8 taskid, __u16 itreq, struct duet_item *items, __u16 *itret)
 		return 1;	
 	}
 
-	/*
-	 * We'll either run out of items, or grab itreq items.
-	 * We also skip the outer lock. Suck it interrupts.
-	 */
+	/* We'll either run out of items, or grab itreq items. */
 	*itret = 0;
 
 again:
@@ -119,6 +116,9 @@ static void duet_handle_event(struct duet_task *task, __u8 evtcode,
 	struct rb_node *node = NULL;
 	struct item_rbnode *tnode = NULL;
 	struct inode *inode;
+	unsigned long ino;
+	umode_t imode;
+	struct super_block *isb;
 
 	BUG_ON(!page_mapping(page));
 
@@ -129,16 +129,28 @@ static void duet_handle_event(struct duet_task *task, __u8 evtcode,
 		return;
 	}
 
+	/* Take out all the required inode fields in case it goes away */
+	//spin_lock_irq(&inode->i_lock);
+	ino = inode->i_ino;
+	imode = inode->i_mode;
+	isb = inode->i_sb;
+	//spin_unlock_irq(&inode->i_lock);
+
 	/* Verify that the event refers to the fs we're interested in */
-	if (task->sb && task->sb != inode->i_sb) {
+	if (task->sb && task->sb != isb) {
 		duet_dbg(KERN_INFO "duet: event not on fs of interest\n");
 		return;
 	}
 
 	/* Verify that the inode does not belong to a special file */
 	/* XXX: Is this absolutely necessary? */
-	if (!S_ISREG(inode->i_mode) && !S_ISDIR(inode->i_mode)) {
+	if (!S_ISREG(imode) && !S_ISDIR(imode)) {
 		duet_dbg(KERN_INFO "duet: event not on regular file\n");
+		return;
+	}
+
+	if (!ino) {
+		printk(KERN_ERR "duet: inode not initialized\n");
 		return;
 	}
 
@@ -151,9 +163,9 @@ static void duet_handle_event(struct duet_task *task, __u8 evtcode,
 		tnode = rb_entry(node, struct item_rbnode, node);
 
 		/* We order based on (inode, page index) */
-		if (tnode->item->ino > inode->i_ino) {
+		if (tnode->item->ino > ino) {
 			node = node->rb_left;
-		} else if (tnode->item->ino < inode->i_ino) {
+		} else if (tnode->item->ino < ino) {
 			node = node->rb_right;
 		} else {
 			/* Found inode, look for index */
@@ -169,15 +181,14 @@ static void duet_handle_event(struct duet_task *task, __u8 evtcode,
 	}
 
 	duet_dbg(KERN_DEBUG "duet-page: %s node (ino%lu, idx%lu)\n",
-		found ? "found" : "didn't find",
-		found ? tnode->item->ino : inode->i_ino,
+		found ? "found" : "didn't find", found ? tnode->item->ino : ino,
 		found ? tnode->item->idx : page->index);
 
 	/* If we found it, update according to our model. Otherwise, insert. */
 	if (!found) {
 		/* This is easy. The event code coincides with the state we're
 		 * transitioning to. */
-		if (itmtree_insert(task, inode->i_ino, page->index, evtcode, 0))
+		if (itmtree_insert(task, ino, page->index, evtcode, 0))
 			printk(KERN_ERR "duet: itmtree insert failed\n");
 	} else if (found) {
 		/* What we do depends on what we found */
@@ -185,8 +196,8 @@ static void duet_handle_event(struct duet_task *task, __u8 evtcode,
 		case DUET_PAGE_ADDED:
 			switch (evtcode) {
 			case DUET_EVT_ADD:
-				printk(KERN_ERR "We got an A event while at the"
-						" A state. This is a bug!\n");
+				duet_dbg(KERN_DEBUG "We got an A event while "
+					"at the A state. This is a bug!\n");
 				break;
 			case DUET_EVT_MOD:
 				tnode->item->state = DUET_PAGE_ADDED_MODIFIED;
@@ -204,8 +215,8 @@ static void duet_handle_event(struct duet_task *task, __u8 evtcode,
 				break;
 			case DUET_EVT_MOD:
 			case DUET_EVT_REM:
-				printk(KERN_ERR "We got an %s event while at "
-						"the R state. This is a bug!\n",
+				duet_dbg(KERN_DEBUG "We got an %s event while "
+					"at the R state. This is a bug!\n",
 					evtcode == DUET_EVT_MOD ? "M" : "R");
 				break;
 			}
@@ -214,8 +225,8 @@ static void duet_handle_event(struct duet_task *task, __u8 evtcode,
 		case DUET_PAGE_ADDED_MODIFIED:
 			switch (evtcode) {
 			case DUET_EVT_ADD:
-				printk(KERN_ERR "We got an A event while at the"
-						" A+M state. This is a bug!\n");
+				duet_dbg(KERN_DEBUG "We got an A event while "
+					"at the A+M state. This is a bug!\n");
 				break;
 			case DUET_EVT_MOD:
 				/* Nothing changes */
@@ -229,8 +240,8 @@ static void duet_handle_event(struct duet_task *task, __u8 evtcode,
 		case DUET_PAGE_MODIFIED:
 			switch (evtcode) {
 			case DUET_EVT_ADD:
-				printk(KERN_ERR "We got an A event while at the"
-						" M state. This is a bug!\n");
+				duet_dbg(KERN_DEBUG "We got an A event while "
+					"at the M state. This is a bug!\n");
 				break;
 			case DUET_EVT_MOD:
 				/* Nothing changes */
