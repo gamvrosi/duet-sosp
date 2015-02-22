@@ -35,6 +35,20 @@ int duet_bootstrap(void)
 		return 1;
 	}
 
+	spin_lock_init(&duet_env.evtwq_lock);
+
+	/*
+	 * Events will be put on this work queue as they arrive. It needs to be
+	 * ordered, otherwise state model won't work.
+	 * XXX: Would WQ_HIGHPRI make sense in this case?
+	 */
+	duet_env.evtwq = alloc_ordered_workqueue("duet-evtwq", 0);
+	if (!duet_env.evtwq) {
+		printk(KERN_ERR "duet: failed to allocate event work queue\n");
+		atomic_set(&duet_env.status, DUET_STATUS_OFF);
+		return 1;
+	}
+
 	INIT_LIST_HEAD(&duet_env.tasks);
 	mutex_init(&duet_env.task_list_mutex);
 	atomic_set(&duet_env.status, DUET_STATUS_ON);
@@ -47,6 +61,7 @@ int duet_bootstrap(void)
 int duet_shutdown(void)
 {
 	struct duet_task *task;
+	struct workqueue_struct *tmp_wq = NULL;
 
 	if (atomic_cmpxchg(&duet_env.status, DUET_STATUS_ON, DUET_STATUS_CLEAN)
 	    != DUET_STATUS_ON) {
@@ -56,6 +71,14 @@ int duet_shutdown(void)
 
 	rcu_assign_pointer(duet_hook_cache_fp, NULL);
 	synchronize_rcu();
+
+	/* Flush and destroy work queue */
+	spin_lock_irq(&duet_env.evtwq_lock);
+	tmp_wq = duet_env.evtwq;
+	duet_env.evtwq = NULL;
+	spin_unlock_irq(&duet_env.evtwq_lock);
+	flush_workqueue(tmp_wq);
+	destroy_workqueue(tmp_wq);
 
 	/* Remove all tasks */
 	mutex_lock(&duet_env.task_list_mutex);

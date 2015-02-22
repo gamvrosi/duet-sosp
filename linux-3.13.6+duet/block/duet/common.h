@@ -24,6 +24,7 @@
 #include <linux/rbtree.h>
 #include <linux/rculist.h>
 #include <linux/duet.h>
+#include <linux/workqueue.h>
 
 #define MAX_NAME	128
 
@@ -67,12 +68,20 @@ struct duet_task {
 	/* ItemTree -- item events tree */
 	__u8			itmtype;	/* pages or inodes? */
 	spinlock_t		itm_lock;
-	//spinlock_t		itm_hook_lock;
 	struct rb_root		itmtree;
 #ifdef CONFIG_DUET_TREE_STATS
 	__u64			stat_itm_cur;	/* Cur # of ItemTree nodes */
 	__u64			stat_itm_max;	/* Max # of ItemTree nodes */
 #endif /* CONFIG_DUET_TREE_STATS */
+};
+
+struct evtwork {
+	struct work_struct 	work;
+
+	__u8 			evt;
+	unsigned long 		ino;
+	unsigned long 		idx;
+	struct super_block	*isb;
 };
 
 struct duet_info {
@@ -84,6 +93,10 @@ struct duet_info {
 	 */
 	struct mutex		task_list_mutex;
 	struct list_head	tasks;
+
+	/* Workqueue of events not processed yet */
+	spinlock_t		evtwq_lock;
+	struct workqueue_struct	*evtwq;
 };
 
 extern struct duet_info duet_env;

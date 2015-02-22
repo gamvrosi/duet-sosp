@@ -138,6 +138,7 @@ struct send_ctx {
 #ifdef CONFIG_BTRFS_DUET_BACKUP
 	__u8 taskid;
 	char *page_buf;
+	struct btrfs_path *o3_path;
 #endif /* CONFIG_BTRFS_DUET_BACKUP */
 };
 
@@ -3658,6 +3659,171 @@ out:
 	return ret;
 }
 
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+static int send_o3_write(struct send_ctx *sctx, u64 ino, u64 offt)
+{
+	int ret = 0;
+
+verbose_printk("btrfs: send_o3_write ino=%llu, offset=%llu, len=%lu\n", ino, offt, PAGE_CACHE_SIZE);
+
+	send_dbg(KERN_DEBUG "send_o3_write: sending ino%llu, offset%llu\n",
+		ino, offt);
+
+	if (!sctx->send_size) {
+		ret = begin_cmd(sctx, BTRFS_SEND_C_O3_WRITE);
+		if (ret < 0) {
+			send_dbg(KERN_ERR "send_o3_write: failed to begin command\n");
+			goto out;
+		}
+	}
+
+	/* Send 4124bytes */
+	TLV_PUT_U64(sctx, BTRFS_SEND_A_INO, ino);
+	TLV_PUT_U64(sctx, BTRFS_SEND_A_FILE_OFFSET, offt);
+	TLV_PUT(sctx, BTRFS_SEND_A_DATA, sctx->page_buf, PAGE_CACHE_SIZE);
+
+	if (sctx->send_max_size - sctx->send_size < 4124) {
+		atomic64_add(sctx->send_size,
+			&sctx->send_root->fs_info->send_best_effort);
+		ret = send_cmd(sctx);
+	}
+
+tlv_put_failure:
+out:
+	if (ret < 0)
+		printk(KERN_ERR "send_o3_write: failed to send o3 write "
+			"(ino %llu, iofft %llu)\n", ino, offt);
+
+	return ret;
+}
+
+/* Checks that the inode belongs to our snapshot, and if so, it sends it out. */
+static int process_inode(u64 ino, u64 offt, u64 root, void *ctx)
+{
+	struct send_ctx *sctx = (struct send_ctx *)ctx;
+
+	/* Check that the inode belongs to our snapshot */
+	if (root != sctx->send_root->objectid)
+		return 0;
+
+	/* Great! Now send the data out of order */
+	send_o3_write(sctx, ino, offt);
+
+	return 0;
+}
+
+/*
+ * This is the core of the synergistic backup. We are passed pages that were
+ * added in the cache, and we need to find if their data belong to the snapshot
+ * we are backing up, then send it out of order if so.
+ * Wrt correctness, remember that all this is happening on a read-only snapshot
+ *
+ * This function returns 0 if there are no pages to process. Otherwise it
+ * processes up to 256 events, until it finds one page that needs to be sent.
+ * In either case, it returns 1 and we give a chance to the foreground workload.
+ */
+static int process_duet_events(struct send_ctx *sctx)
+{
+	int ret = 256, mret;
+	u16 itret;
+	u64 lofft;
+	char *addr;
+	struct duet_item itm;
+	struct inode *inode;
+	struct page *page;
+	struct extent_map *em;
+	struct btrfs_fs_info *fs_info = sctx->send_root->fs_info;
+
+	while (ret) {
+		/* Fetch one item */
+		if (duet_fetch(sctx->taskid, 1, &itm, &itret)) {
+			printk(KERN_ERR "duet-send: duet_fetch failed\n");
+			break;
+		}
+
+		/* If there were no events, return */
+		if (!itret)
+			break;
+
+		/* If we're already past this inode, ignore the event */
+		if (itm.ino < sctx->send_progress)
+			goto done;
+
+		/* Get inode */
+		if (btrfs_iget_ino(fs_info, itm.ino, &inode, NULL))
+			goto done;
+
+		/* Trace the logical extent the page belongs to */
+		if (btrfs_get_logical(inode, itm.idx, &em, NULL))
+			goto idone;
+
+		/* Check if we've already sent this range */
+		lofft = em->block_start + (itm.idx << PAGE_CACHE_SHIFT) -
+			em->start;
+		free_extent_map(em);
+		if (duet_check(sctx->taskid, lofft, PAGE_CACHE_SIZE) == 1) {
+			send_dbg(KERN_INFO "duet-send: lrange [%llu, %llu] "
+				"found marked\n", lofft, lofft+PAGE_CACHE_SIZE);
+			goto idone;
+		}
+
+		/* Lock page, and copy in buffer if not dirty */
+		page = find_lock_page(inode->i_mapping, itm.idx);
+		if (!page) {
+			send_dbg(KERN_INFO "duet-send: couldn't find page\n");
+			goto idone;
+		} else if (PageDirty(page)) {
+			send_dbg(KERN_INFO "duet-send: page already dirty\n");
+			unlock_page(page);
+			page_cache_release(page);
+			goto idone;
+		}
+
+		addr = kmap(page);
+		if (addr) {
+			memcpy(sctx->page_buf, addr, PAGE_CACHE_SIZE);
+			kunmap(page);
+		} else {
+			unlock_page(page);
+			page_cache_release(page);
+			goto idone;
+		}
+		unlock_page(page);
+		page_cache_release(page);
+
+		/* Mark sent range to ensure we won't send it again. */
+		if (duet_mark(sctx->taskid, lofft, PAGE_CACHE_SIZE) == -1) {
+			send_dbg(KERN_INFO "duet-send: failed to mark lrange "
+				"[%llu, %llu]\n", lofft, lofft+PAGE_CACHE_SIZE);
+		}
+
+		/*
+		 * Now iterate through all inodes that refer to this extent,
+		 * and pick out the ones that refer to our snapshot. The rest
+		 * of the work takes place in process_inode
+		 */
+		mret = iterate_inodes_from_logical(lofft, fs_info,
+					sctx->o3_path, process_inode, sctx);
+		if (mret != 0 && mret != ENOENT)
+			send_dbg(KERN_ERR "duet-send: iterate_inodes_from_logical"
+					" failed\n");
+idone:
+		iput(inode);
+done:
+		ret--;
+	}
+
+	if (sctx->send_size) {
+		atomic64_add(sctx->send_size,
+			&sctx->send_root->fs_info->send_best_effort);
+		ret = send_cmd(sctx);
+	}
+
+	send_dbg(KERN_INFO "process_duet_events: fetched %d events\n", 256 - ret);
+	return !ret;
+}
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
+
 /*
  * Read some bytes from the current inode/file and send a write command to
  * user space.
@@ -3675,6 +3841,16 @@ static int send_write(struct send_ctx *sctx, u64 offset, u32 len)
 	ktime_t start, finish;
 	u32 rlen;
 	u64 lofft, idx = offset >> PAGE_CACHE_SHIFT;
+
+start_again:
+	/* Check if we've been asked to cancel */
+	if (atomic_read(&fs_info->send_cancel_req))
+		goto send;
+
+	if (duet_online() && sctx->taskid && process_duet_events(sctx))
+		goto start_again;
+
+	send_dbg("btrfs: wanted to send_write offset=%llu, len=%d\n", offset, len);
 
 	if (!duet_online() || !sctx->taskid)
 		goto send;
@@ -3749,6 +3925,7 @@ send:
 		return -ENOMEM;
 
 verbose_printk("btrfs: send_write offset=%llu, len=%d\n", offset, len);
+	send_dbg("btrfs: ended up send_write offset=%llu, len=%d\n", offset, len);
 
 #ifdef CONFIG_BTRFS_DUET_BACKUP
 	start = ktime_get();
@@ -4596,173 +4773,6 @@ out:
 	return ret;
 }
 
-#ifdef CONFIG_BTRFS_DUET_BACKUP
-static int send_o3_write(struct send_ctx *sctx, u64 ino, u64 offt)
-{
-	int ret = 0;
-
-verbose_printk("btrfs: send_o3_write ino=%llu, offset=%llu, len=%lu\n", ino, offt, PAGE_CACHE_SIZE);
-
-	send_dbg(KERN_DEBUG "send_o3_write: sending ino%llu, offset%llu\n",
-		ino, offt);
-
-	ret = begin_cmd(sctx, BTRFS_SEND_C_O3_WRITE);
-	if (ret < 0) {
-		send_dbg(KERN_ERR "send_o3_write: failed to begin command\n");
-		goto out;
-	}
-
-	TLV_PUT_U64(sctx, BTRFS_SEND_A_INO, ino);
-	TLV_PUT_U64(sctx, BTRFS_SEND_A_FILE_OFFSET, offt);
-	TLV_PUT(sctx, BTRFS_SEND_A_DATA, sctx->page_buf, PAGE_CACHE_SIZE);
-
-	atomic64_add(sctx->send_size,
-		&sctx->send_root->fs_info->send_best_effort);
-	ret = send_cmd(sctx);
-
-tlv_put_failure:
-out:
-	if (ret < 0)
-		printk(KERN_ERR "send_o3_write: failed to send o3 write "
-			"(ino %llu, iofft %llu)\n", ino, offt);
-
-	return ret;
-}
-
-/* Checks that the inode belongs to our snapshot, and if so, it sends it out. */
-static int process_inode(u64 ino, u64 offt, u64 root, void *ctx)
-{
-	struct send_ctx *sctx = (struct send_ctx *)ctx;
-
-	/* Check that the inode belongs to our snapshot */
-	if (root != sctx->send_root->objectid)
-		return 0;
-
-	/* Great! Now send the data out of order */
-	send_o3_write(sctx, ino, offt);
-
-	return 0;
-}
-
-/*
- * This is the core of the synergistic backup. We are passed pages that were
- * added in the cache, and we need to find if their data belong to the snapshot
- * we are backing up, then send it out of order if so.
- * Wrt correctness, remember that all this is happening on a read-only snapshot
- *
- * This function returns 0 if there are no pages to process. Otherwise it
- * processes up to 256 events, until it finds one page that needs to be sent.
- * In either case, it returns 1 and we give a chance to the foreground workload.
- */
-static int process_duet_events(struct send_ctx *sctx)
-{
-	int stop = 0, ret = 256, mret;
-	u16 itret;
-	u64 lofft;
-	char *addr;
-	struct duet_item itm;
-	struct inode *inode;
-	struct page *page;
-	struct extent_map *em;
-	struct btrfs_path *path;
-	struct btrfs_fs_info *fs_info = sctx->send_root->fs_info;
-
-	path = btrfs_alloc_path();
-	if (!path) {
-		printk(KERN_ERR "duet-send: failed to allocate path\n");
-		return 0;
-	}
-
-	while (ret) {
-		/* Fetch one item */
-		if (duet_fetch(sctx->taskid, 1, &itm, &itret)) {
-			printk(KERN_ERR "duet-send: duet_fetch failed\n");
-			break;
-		}
-
-		/* If there were no events, return */
-		if (!itret)
-			break;
-
-		/* If we're already past this inode, ignore the event */
-		if (itm.ino < sctx->send_progress)
-			goto done;
-
-		/* Get inode */
-		if (btrfs_iget_ino(fs_info, itm.ino, &inode, NULL))
-			goto done;
-
-		/* Lock page, and copy in buffer if not dirty */
-		page = find_lock_page(inode->i_mapping, itm.idx);
-		if (!page) {
-			printk(KERN_INFO "duet-send: couldn't find page\n");
-			goto idone;
-		} else if (PageDirty(page)) {
-			printk(KERN_INFO "duet-send: page already dirty\n");
-			unlock_page(page);
-			goto idone;
-		}
-
-		addr = kmap(page);
-		if (addr) {
-			memcpy(sctx->page_buf, addr, PAGE_CACHE_SIZE);
-			kunmap(page);
-		} else {
-			unlock_page(page);
-			goto idone;
-		}
-		unlock_page(page);
-
-		/* Trace the logical extent the page belongs to */
-		if (btrfs_get_logical(inode, itm.idx, &em, NULL))
-			goto idone;
-
-		/* Check if we've already sent this range */
-		lofft = em->block_start + (itm.idx << PAGE_CACHE_SHIFT) -
-			em->start;
-		if (duet_check(sctx->taskid, lofft, PAGE_CACHE_SIZE) == 1) {
-			send_dbg(KERN_INFO "duet-send: lrange [%llu, %llu] "
-				"found marked\n", lofft, lofft+PAGE_CACHE_SIZE);
-			goto edone;
-		}
-
-		/* We're about to do some I/O, so let the foreground workload
-		 * have a go too */
-		stop = 1;
-
-		/* Mark sent range to ensure we won't send it again. */
-
-		if (duet_mark(sctx->taskid, lofft, PAGE_CACHE_SIZE) == -1) {
-			send_dbg(KERN_INFO "duet-send: failed to mark lrange "
-				"[%llu, %llu]\n", lofft, lofft+PAGE_CACHE_SIZE);
-		}
-
-		/*
-		 * Now iterate through all inodes that refer to this extent,
-		 * and pick out the ones that refer to our snapshot. The rest
-		 * of the work takes place in process_inode
-		 */
-		mret = iterate_inodes_from_logical(lofft, fs_info, path,
-							process_inode, sctx);
-		if (mret != 0 && mret != ENOENT)
-			send_dbg(KERN_ERR "duet-send: iterate_inodes_from_logical"
-					" failed\n");
-
-edone:
-		free_extent_map(em);
-idone:
-		iput(inode);
-done:
-		ret--;
-		if (stop)
-			break;
-	}
-
-	btrfs_free_path(path);
-	return !ret;
-}
-#endif /* CONFIG_BTRFS_DUET_BACKUP */
-
 /*
  * Updates compare related fields in sctx and simply forwards to the actual
  * changed_xxx functions.
@@ -4778,20 +4788,27 @@ static int changed_cb(struct btrfs_root *left_root,
 	int ret = 0;
 	struct send_ctx *sctx = ctx;
 	struct btrfs_fs_info *fs_info = sctx->send_root->fs_info;
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+start_again:
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
 
 	/* Check if we've been asked to cancel */
 	if (atomic_read(&fs_info->send_cancel_req))
 		return -1;
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+	if (duet_online() && sctx->taskid && process_duet_events(sctx))
+		goto start_again;
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
 
 	if (result == BTRFS_COMPARE_TREE_SAME) {
 		if (key->type != BTRFS_INODE_REF_KEY &&
 		    key->type != BTRFS_INODE_EXTREF_KEY)
-			goto out; //return 0;
+			return 0;
 		ret = compare_refs(sctx, left_path, key);
 		if (!ret)
-			goto out; //return 0;
+			return 0;
 		if (ret < 0)
-			goto out; //return ret;
+			return ret;
 		result = BTRFS_COMPARE_TREE_CHANGED;
 		ret = 0;
 	}
@@ -4820,16 +4837,6 @@ static int changed_cb(struct btrfs_root *left_root,
 		ret = changed_extent(sctx, result);
 
 out:
-#ifdef CONFIG_BTRFS_DUET_BACKUP
-start_again:
-	/* Check if we've been asked to cancel */
-	if (atomic_read(&fs_info->send_cancel_req))
-		return -1;
-
-	if (duet_online() && sctx->taskid && process_duet_events(sctx))
-		goto start_again;
-#endif /* CONFIG_BTRFS_DUET_BACKUP */
-
 	return ret;
 }
 
@@ -4933,6 +4940,7 @@ static int send_subvol(struct send_ctx *sctx)
 		if (ret < 0)
 			goto out;
 	} else {
+		printk(KERN_INFO "btrfs send: sending full tree\n");
 		ret = full_send_tree(sctx);
 		if (ret < 0)
 			goto out;
@@ -5148,6 +5156,15 @@ long btrfs_ioctl_send(struct file *mnt_file, void __user *arg_)
 		goto out;
 	}
 
+	/* Allocate the path we'll use to traverse the send tree out of order */
+	sctx->o3_path = btrfs_alloc_path();
+	if (!sctx->o3_path) {
+		printk(KERN_ERR "duet-send: failed to allocate o3 path\n");
+		ret = -EFAULT;
+		goto out;
+	}
+	sctx->o3_path->skip_locking = 1;
+
 	/* Register the task with the Duet framework */
 	if (duet_online() && duet_register(&sctx->taskid, "btrfs-send",
 		DUET_EVT_ADD, fs_info->sb->s_blocksize, fs_info->sb)) {
@@ -5199,10 +5216,15 @@ out:
 	if (duet_online() && sctx->taskid && duet_deregister(sctx->taskid))
 		printk(KERN_ERR "send: deregistration with duet failed\n");
 
-	vfree(sctx->page_buf);
 #endif /* CONFIG_BTRFS_DUET_BACKUP */
 
 	if (sctx) {
+#ifdef CONFIG_BTRFS_DUET_BACKUP
+		if (sctx->page_buf)
+			vfree(sctx->page_buf);
+		if (sctx->o3_path)
+			btrfs_free_path(sctx->o3_path);
+#endif /* CONFIG_BTRFS_DUET_BACKUP */
 		if (sctx->send_filp)
 			fput(sctx->send_filp);
 

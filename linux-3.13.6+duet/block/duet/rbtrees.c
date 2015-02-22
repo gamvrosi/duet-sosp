@@ -302,13 +302,6 @@ int itmtree_insert(struct duet_task *task, unsigned long ino,
 	struct rb_node **link, *parent = NULL;
 	struct item_rbnode *cur, *tnode;
 
-	/* Create the node */
-	tnode = tnode_init(task, ino, index, state);
-	if (!tnode) {
-		printk(KERN_ERR "duet: tnode alloc failed\n");
-		return 1;
-	}
-
 	/* Find where to insert it */
 	link = &task->itmtree.rb_node;
 	while (*link) {
@@ -316,15 +309,15 @@ int itmtree_insert(struct duet_task *task, unsigned long ino,
 		cur = rb_entry(parent, struct item_rbnode, node);
 
 		/* We order based on (inode, page index) */
-		if (cur->item->ino > tnode->item->ino) {
+		if (cur->item->ino > ino) {
 			link = &(*link)->rb_left;
-		} else if (cur->item->ino < tnode->item->ino) {
+		} else if (cur->item->ino < ino) {
 			link = &(*link)->rb_right;
 		} else {
 			/* Found inode, look for index */
-			if (cur->item->idx > tnode->item->idx) {
+			if (cur->item->idx > index) {
 				link = &(*link)->rb_left;
-			} else if (cur->item->idx < tnode->item->idx) {
+			} else if (cur->item->idx < index) {
 				link = &(*link)->rb_right;
 			} else {
 				found = 1;
@@ -334,18 +327,85 @@ int itmtree_insert(struct duet_task *task, unsigned long ino,
 	}
 
 	duet_dbg(KERN_DEBUG "duet: %s page node (ino%lu, idx%lu)\n",
-		found ? "will not insert" : "will insert",
-		tnode->item->ino, tnode->item->idx);
+		found ? (replace ? "replacing" : "updating") : "inserting",
+		ino, index);
 
-	if (found) {
-		if (replace)
-			cur->item->state = state;
-		tnode_dispose(tnode, NULL, NULL);
-	} else {
+	if (found && replace) {
+		cur->item->state = state;
+	} else if (found && !replace) {
+		/* What we do depends on what we found */
+		switch (cur->item->state) {
+		case DUET_PAGE_ADDED:
+			switch (state) {
+			case DUET_EVT_ADD:
+				duet_dbg(KERN_DEBUG "We got an A event while "
+					"at the A state. This is a bug!\n");
+				break;
+			case DUET_EVT_MOD:
+				cur->item->state = DUET_PAGE_ADDED_MODIFIED;
+				break;
+			case DUET_EVT_REM:
+				tnode_dispose(cur, parent, &task->itmtree);
+				break;
+			}
+			break;
+
+		case DUET_PAGE_REMOVED:
+			switch (state) {
+			case DUET_EVT_ADD:
+				tnode_dispose(cur, parent, &task->itmtree);
+				break;
+			case DUET_EVT_MOD:
+			case DUET_EVT_REM:
+				duet_dbg(KERN_DEBUG "We got an %s event while "
+					"at the R state. This is a bug!\n",
+					state == DUET_EVT_MOD ? "M" : "R");
+				break;
+			}
+			break;
+
+		case DUET_PAGE_ADDED_MODIFIED:
+			switch (state) {
+			case DUET_EVT_ADD:
+				duet_dbg(KERN_DEBUG "We got an A event while "
+					"at the A+M state. This is a bug!\n");
+				break;
+			case DUET_EVT_MOD:
+				/* Nothing changes */
+				break;
+			case DUET_EVT_REM:
+				tnode_dispose(cur, parent, &task->itmtree);
+				break;
+			}
+			break;
+
+		case DUET_PAGE_MODIFIED:
+			switch (state) {
+			case DUET_EVT_ADD:
+				duet_dbg(KERN_DEBUG "We got an A event while "
+					"at the M state. This is a bug!\n");
+				break;
+			case DUET_EVT_MOD:
+				/* Nothing changes */
+				break;
+			case DUET_EVT_REM:
+				cur->item->state = DUET_PAGE_REMOVED;
+				break;
+			}
+			break;
+		}
+	} else if (!found) {
+		/* Create the node */
+		tnode = tnode_init(task, ino, index, state);
+		if (!tnode) {
+			printk(KERN_ERR "duet: tnode alloc failed\n");
+			return 1;
+		}
+
 		/* Insert node in tree */
 		rb_link_node(&tnode->node, parent, link);
 		rb_insert_color(&tnode->node, &task->itmtree);
 	}
 
-	return found;
+	return 0;
 }

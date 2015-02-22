@@ -61,12 +61,12 @@ static int process_inode(struct duet_task *task, struct inode *inode)
 			continue;
 
 		//lock_page(page);
-		spin_lock_irq(&task->itm_lock);
+		spin_lock(&task->itm_lock);
 		state = DUET_PAGE_ADDED;
 		if (PageDirty(page))
 			state = DUET_PAGE_ADDED_MODIFIED;
 		itmtree_insert(task, inode->i_ino, page->index, state, 1);
-		spin_unlock_irq(&task->itm_lock);
+		spin_unlock(&task->itm_lock);
 		//unlock_page(page);
 	}
 	rcu_read_unlock();
@@ -339,7 +339,6 @@ static int duet_task_init(struct duet_task **task, const char *name,
 	atomic_set(&(*task)->refcount, 0);
 
 	spin_lock_init(&(*task)->itm_lock);
-	//spin_lock_init(&(*task)->itm_outer_lock);
 	mutex_init(&(*task)->bittree_lock);
 
 	INIT_LIST_HEAD(&(*task)->task_list);
