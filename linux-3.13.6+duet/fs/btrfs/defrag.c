@@ -117,13 +117,23 @@ static int process_inmem_inode(struct defrag_ctx *dctx)
 {
 	int ret = 0;
 	struct inode *inode = NULL;
+#ifdef CONFIG_BTRFS_DUET_DEFRAG_CPUMON
+	ktime_t start, finish;
+#endif /* CONFIG_BTRFS_DUET_DEFRAG_CPUMON */
 
 again:
+#ifdef CONFIG_BTRFS_DUET_DEFRAG_CPUMON
+	start = ktime_get();
+#endif /* CONFIG_BTRFS_DUET_DEFRAG_CPUMON */
 	if (itree_update(&dctx->itree, dctx->taskid, defrag_get_inode,
 			(void *)dctx)) {
 		defrag_dbg(KERN_ERR "duet-defrag: failed to update itree\n");
 		return 0;
 	}
+#ifdef CONFIG_BTRFS_DUET_DEFRAG_CPUMON
+	finish = ktime_get();
+	atomic64_add(ktime_us_delta(finish, start), &dctx->bittree_time);
+#endif /* CONFIG_BTRFS_DUET_DEFRAG_CPUMON */
 
 	if (itree_fetch(&dctx->itree, dctx->taskid, &inode, defrag_get_inode,
 			(void *)dctx)) {
