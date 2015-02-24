@@ -17,39 +17,147 @@
  */
 #include "common.h"
 
-#if 0
 #define get_ratio(ret, n, d)	\
 	do {			\
 		ret = n * 100;	\
 		do_div(ret, d);	\
 	} while (0);
 
-/*
- * Inserts a node in an ItemTree of inodes. Assumes relevant locks have been
- * obtained. Returns 1 on failure.
- */
-static int duet_item_insert_inode(struct duet_task *task, struct duet_item *itm)
+struct itree_node {
+	struct rb_node	inodes_node;
+	struct rb_node	sorted_node;
+	unsigned long	ino;
+	__u8		inmem;	/* pages (out of 100) currently in memory */
+};
+
+void itree_init(struct inode_tree *itree)
+{
+	itree->sorted = RB_ROOT;
+	itree->inodes = RB_ROOT;
+}
+EXPORT_SYMBOL_GPL(itree_init);
+
+static struct itree_node *itnode_init(unsigned long ino, __u8 inmem)
+{
+	struct itree_node *itnode = NULL;
+
+	itnode = kzalloc(sizeof(*itnode), GFP_NOFS);
+	if (!itnode)
+		return NULL;
+
+	RB_CLEAR_NODE(&itnode->inodes_node);
+	RB_CLEAR_NODE(&itnode->sorted_node);
+	itnode->ino = ino;
+	itnode->inmem = inmem;
+	return itnode;
+}
+
+/* Removes an inode from the inode trees. Returns 1 if node was not found. */
+static int remove_itree_one(struct inode_tree *itree, unsigned long ino)
 {
 	int found = 0;
 	struct rb_node **link, *parent = NULL;
-	struct duet_item *cur;
+	struct itree_node *cur;
 
-	link = &task->itmtree.rb_node;
-
+	/* Find through the inodes tree */
+	link = &itree->inodes.rb_node;
 	while (*link) {
 		parent = *link;
-		cur = rb_entry(parent, struct duet_item, node);
+		cur = rb_entry(parent, struct itree_node, inodes_node);
 
-		/* We order based on (inmem_ratio, inode) */
-		if (cur->inmem > itm->inmem) {
+		/* We order based on inode number alone */
+		if (cur->ino > ino) {
 			link = &(*link)->rb_left;
-		} else if (cur->inmem < itm->inmem) {
+		} else if (cur->ino < ino) {
 			link = &(*link)->rb_right;
 		} else {
-			/* Found inmem_ratio, look for btrfs_ino */
-			if (cur->ino > itm->ino) {
+			found = 1;
+			break;
+		}
+	}
+
+	if (!found) {
+		duet_dbg(KERN_DEBUG "itree: inode %lu not found\n", ino);
+		return 1;
+	}
+
+	/* Remove from both the inodes and sorted tree */
+	rb_erase(&cur->inodes_node, &itree->inodes);
+	rb_erase(&cur->sorted_node, &itree->sorted);
+	kfree(cur);
+
+	return 0;
+}
+
+/*
+ * Updates inode tree. First, looks into the inodes tree for the inmem count,
+ * and updates the tree. Then, it repeated the process for the sorted tree,
+ * using the inmem count. Returns 1 on failure.
+ */
+static int update_itree_one(struct inode_tree *itree, unsigned long ino,
+	__u8 inmem)
+{
+	int found = 0;
+	struct rb_node **link, *parent = NULL;
+	struct itree_node *cur, *itnode;
+
+	/* First go through the inodes tree */
+	link = &itree->inodes.rb_node;
+	while (*link) {
+		parent = *link;
+		cur = rb_entry(parent, struct itree_node, inodes_node);
+
+		/* We order based on inode number alone */
+		if (cur->ino > ino) {
+			link = &(*link)->rb_left;
+		} else if (cur->ino < ino) {
+			link = &(*link)->rb_right;
+		} else {
+			found = 1;
+			break;
+		}
+	}
+
+	duet_dbg(KERN_DEBUG "itree: %s inode %lu\n",
+		found ? "updating" : "inserting", ino);
+
+	if (found) {
+		/* Ensure we're not already up-to-date */
+		if (cur->inmem == inmem)
+			return 0;
+
+		/* Remove the old node from the sorted tree; we'll reinsert */
+		rb_erase(&cur->sorted_node, &itree->sorted);
+		cur->inmem = inmem;
+		itnode = cur;
+	} else {
+		/* Create the node */
+		itnode = itnode_init(ino, inmem);
+		if (!itnode) {
+			printk(KERN_ERR "itree: itnode alloc failed\n");
+			return 1;
+		}
+
+		/* Insert node in inode tree, then in sorted tree */
+		rb_link_node(&itnode->inodes_node, parent, link);
+		rb_insert_color(&itnode->inodes_node, &itree->inodes);
+	}
+
+	/* Now go through the sorted tree to (re)insert itnode */
+	link = &itree->sorted.rb_node;
+	while (*link) {
+		parent = *link;
+		cur = rb_entry(parent, struct itree_node, sorted_node);
+
+		/* We order based on the inmem pages, then the inode number */
+		if (cur->inmem > itnode->inmem) {
+			link = &(*link)->rb_left;
+		} else if (cur->inmem < itnode->inmem) {
+			link = &(*link)->rb_right;
+		} else {
+			if (cur->ino > itnode->ino) {
 				link = &(*link)->rb_left;
-			} else if (cur->ino < itm->ino) {
+			} else if (cur->ino < itnode->ino) {
 				link = &(*link)->rb_right;
 			} else {
 				found = 1;
@@ -58,128 +166,136 @@ static int duet_item_insert_inode(struct duet_task *task, struct duet_item *itm)
 		}
 	}
 
-	duet_dbg(KERN_DEBUG "duet: %s insert inode (ino%lu, r%u)\n",
-		found ? "won't" : "will", itm->ino, itm->inmem);
+	if (found) {
+		printk(KERN_ERR "itree: node already in sorted itree (bug!)\n");
+		kfree(itnode);
+		return 1;
+	} else {
+		rb_link_node(&itnode->sorted_node, parent, link);
+		rb_insert_color(&itnode->sorted_node, &itree->sorted);
+	}
 
-	if (found)
-		goto out;
-
-	/* Insert node in tree */
-	rb_link_node(&itm->node, parent, link);
-	rb_insert_color(&itm->node, &task->itmtree);
-
-out:
-	return found;
+	return 0;
 }
+
+/* Process all pending page events for given task, and update the inode tree */
+int itree_update(struct inode_tree *itree, __u8 taskid,
+	itree_get_inode_t *itree_get_inode, void *ctx)
+{
+	int ret = 0;
+	__u16 itret;
+	__u8 inmem_ratio;
+	struct inode *inode;
+	struct duet_item itm;
+	unsigned long inmem_pages, total_pages;
+
+	while (1) {
+		if (duet_fetch(taskid, 1, &itm, &itret)) {
+			printk(KERN_ERR "itree: duet_fetch failed\n");
+			return 1;
+		}
+
+		/* If there were no events, we're done */
+		if (!itret)
+			break;
+
+		/*
+		 * We only process ADDED and REMOVED events,
+		 * and skip over processed inodes.
+		 */
+		if (!(itm.state & (DUET_PAGE_ADDED | DUET_PAGE_REMOVED)) ||
+		    duet_check(taskid, itm.ino, 1) == 1)
+			continue;
+
+		/* Get the inode. Should return 1 if the inode is no longer
+		 * in the cache, and -1 on any other error. */
+		ret = itree_get_inode(ctx, itm.ino, &inode);
+		if (ret == 1) {
+			printk(KERN_ERR "itree: inode not in cache\n");
+			remove_itree_one(itree, itm.ino);
+			continue;
+		} else if (ret == -1) {
+			printk(KERN_ERR "itree: inode not found\n");
+			continue;
+		}
+
+		/*
+		 * Calculate the current inmem ratio, and the updated one.
+		 * Instead of worrying about ADD/REM, just get up-to-date counts
+		 */
+		total_pages = ((i_size_read(inode) - 1) >> PAGE_SHIFT) + 1;
+		inmem_pages = inode->i_mapping->nrpages;
+		get_ratio(inmem_ratio, inmem_pages, total_pages);
+
+		if (update_itree_one(itree, itm.ino, inmem_ratio))
+			printk(KERN_ERR "itree: failed to update itree node\n");
+
+		iput(inode);
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(itree_update);
 
 /*
- * This handles ADD, MOD and REM events for an inode tree. Indexing is based on
- * the ratio of pages in memory, and the inode number as seen by VFS.
+ * Get the first inode from the sorted tree, then remove from both. Use
+ * itree_get_inode function to retrieve the inode. Returns 1 if any
+ * errors occurred, otherwise the inode is returned with its refcount
+ * updated.
  */
-static void duet_handle_inode(struct duet_task *task, __u8 evtcode, __u64 idx,
-	struct page *page)
+int itree_fetch(struct inode_tree *itree, __u8 taskid, struct inode **inode,
+	itree_get_inode_t *itree_get_inode, void *ctx)
 {
-	int found = 0;
-	struct rb_node *node = NULL;
-	struct duet_item *itm = NULL;
-	struct inode *inode = page->mapping->host;
-	u8 cur_inmem_ratio, new_inmem_ratio;
-	u64 inmem_pages, total_pages;
+	int ret = 0;
+	struct rb_node *rbnode;
+	struct itree_node *itnode;
+	unsigned long ino;
 
-	if (!(evtcode & (DUET_EVT_ADD | DUET_EVT_REM | DUET_EVT_MOD))) {
-		printk(KERN_ERR "duet: evtcode %d in duet_handle_inode\n",
-			evtcode);
-		return;
+	*inode = NULL;
+
+again:
+	if (RB_EMPTY_ROOT(&itree->sorted))
+		return 0;
+
+	/* Grab last node in the sorted tree, and remove from both trees */
+	rbnode = rb_last(&itree->sorted);
+	itnode = rb_entry(rbnode, struct itree_node, sorted_node);
+	rb_erase(&itnode->inodes_node, &itree->inodes);
+	rb_erase(&itnode->sorted_node, &itree->sorted);
+
+	ino = itnode->ino;
+	kfree(itnode);
+
+	/* Check if we've processed it before */
+	if (duet_check(taskid, ino, 1) == 1)
+		goto again;
+
+	/* Get the actual inode. Should return 1 if the inode is no longer
+	 * in the cache, and -1 on any other error. */
+	if (itree_get_inode(ctx, ino, inode) == -1) {
+		printk(KERN_ERR "itree: inode not found\n");
+		ret = 1;
 	}
 
-	/* There's nothing we need to do for MOD events */
-	if (evtcode == DUET_EVT_MOD)
-		return;
-
-	/* Verify that the event refers to the fs we're interested in */
-	if (task->sb && task->sb != inode->i_sb) {
-		duet_dbg(KERN_INFO "duet: event not on fs of interest\n");
-		return;
-	}
-
-	/* Verify that we have not seen this inode again */
-	if (duet_check(task->id, idx, 1) == 1)
-		return;
-
-	/* Calculate the current inmem ratio, and the updated one */
-	total_pages = ((i_size_read(inode) - 1) >> PAGE_SHIFT) + 1;
-	inmem_pages = page->mapping->nrpages;
-	if (evtcode == DUET_EVT_ADD)
-		inmem_pages--;
-
-	get_ratio(cur_inmem_ratio, inmem_pages, total_pages);
-	get_ratio(new_inmem_ratio,
-		inmem_pages + (evtcode == DUET_EVT_ADD ? 1 : -1), total_pages);
-
-	/* First, look up the node in the ItemTree */
-	//spin_lock_irq(&task->itm_outer_lock);
-	spin_lock_irq(&task->itm_lock);
-	node = task->itmtree.rb_node;
-
-	while (node) {
-		itm = rb_entry(node, struct duet_item, node);
-
-		/* We order based on (inmem_ratio, inode) */
-		if (itm->inmem > cur_inmem_ratio) {
-			node = node->rb_left;
-		} else if (itm->inmem < cur_inmem_ratio) {
-			node = node->rb_right;
-		} else {
-			/* Found inmem_ratio, look for ino */
-			if (itm->ino > inode->i_ino) {
-				node = node->rb_left;
-			} else if (itm->ino < inode->i_ino) {
-				node = node->rb_right;
-			} else {
-				found = 1;
-				break;
-			}
-		}
-	}
-
-	duet_dbg(KERN_DEBUG "d: %s node (ino%lu, r%u)\n",
-		found ? "found" : "didn't find", found ? itm->ino : inode->i_ino,
-		found ? itm->inmem : cur_inmem_ratio);
-
-	/* If we found it, update it. If not, insert. */
-	if (!found && evtcode == DUET_EVT_ADD) {
-		itm = duet_item_init(task, inode->i_ino, new_inmem_ratio,
-				(void *)inode);
-		if (!itm) {
-			printk(KERN_ERR "duet: itnode alloc failed\n");
-			goto out;
-		}
-
-		if (duet_item_insert_inode(task, itm)) {
-			printk(KERN_ERR "duet: insert failed\n");
-			duet_dispose_item(itm);
-		}
-	} else if (found && new_inmem_ratio != cur_inmem_ratio) {
-		/* Update the itnode */
-		itm->inmem = new_inmem_ratio;
-
-		/* Did the number of pages reach zero? Then remove */
-		if (!itm->inmem) {
-			rb_erase(node, &task->itmtree);
-			duet_dispose_item(itm);
-			goto out;
-		}
-
-		/* The ratio has changed, so erase and reinsert */
-		rb_erase(node, &task->itmtree);
-		if (duet_item_insert_inode(task, itm)) {
-			printk(KERN_ERR "duet: insert failed\n");
-			duet_dispose_item(itm);
-		}
-	}
-
-out:
-	spin_unlock_irq(&task->itm_lock);
-	//spin_unlock_irq(&task->itm_outer_lock);
+	return ret;
 }
-#endif
+EXPORT_SYMBOL_GPL(itree_fetch);
+
+void itree_teardown(struct inode_tree *itree)
+{
+	struct rb_node *rbnode;
+	struct itree_node *itnode;
+
+	while (!RB_EMPTY_ROOT(&itree->inodes)) {
+		rbnode = rb_first(&itree->inodes);
+		rb_erase(rbnode, &itree->inodes);
+	}
+
+	while (!RB_EMPTY_ROOT(&itree->sorted)) {
+		rbnode = rb_first(&itree->sorted);
+		itnode = rb_entry(rbnode, struct itree_node, sorted_node);
+		rb_erase(rbnode, &itree->sorted);
+		kfree(itnode);
+	}
+}
+EXPORT_SYMBOL_GPL(itree_teardown);
