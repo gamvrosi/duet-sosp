@@ -141,6 +141,7 @@ void duet_hook(__u8 evtcode, void *data)
 	struct page *page = (struct page *)data;
 	struct evtwork *ework;
 	struct inode *inode;
+	unsigned long flags;
 
 	/* Duet must be online, and the page must belong to a valid mapping */
 	if (!duet_online() || !page || !page_mapping(page) ||
@@ -175,7 +176,7 @@ void duet_hook(__u8 evtcode, void *data)
 	ework->evt = evtcode;
 	ework->isb = inode->i_sb;
 
-	spin_lock_irq(&duet_env.evtwq_lock);
+	spin_lock_irqsave(&duet_env.evtwq_lock, flags);
 	if (!duet_env.evtwq ||
 	    queue_work(duet_env.evtwq, (struct work_struct *)ework) != 1) {
 		printk(KERN_ERR "duet: failed to queue up work\n");
@@ -183,6 +184,6 @@ void duet_hook(__u8 evtcode, void *data)
 		kfree(ework);
 		return;
 	}
-	spin_unlock_irq(&duet_env.evtwq_lock);
+	spin_unlock_irqrestore(&duet_env.evtwq_lock, flags);
 }
 EXPORT_SYMBOL_GPL(duet_hook);

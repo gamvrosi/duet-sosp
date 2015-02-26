@@ -85,26 +85,21 @@ static int defrag_inode(struct inode *inode, struct defrag_ctx *dctx,
 #ifdef CONFIG_BTRFS_DUET_DEFRAG
 /*
  * Get the inode with the specified inode number.
- * Returns 1 if the inode is no longer in the cache (and no inode),
- * and -1 on any other error.
+ * Returns 1 on error.
  */
 static int defrag_get_inode(void *ctx, unsigned long ino, struct inode **inode)
 {
-	int ondisk = 0;
 	struct defrag_ctx *dctx = (struct defrag_ctx *)ctx;
 	struct btrfs_fs_info *fs_info = dctx->defrag_root->fs_info;
 
-	if (btrfs_iget_ino(fs_info, ino, inode, &ondisk)) {
+	*inode = NULL;
+
+	if (btrfs_iget_ino(fs_info, ino, inode, NULL)) {
 		defrag_dbg("duet-defrag: failed to get inode\n");
-		return -1;
+		return 1;
 	}
 
-	if (ondisk) {
-		iput(*inode);
-		*inode = NULL;
-	}
-
-	return ondisk;
+	return 0;
 }
 
 /*
@@ -127,8 +122,8 @@ again:
 #endif /* CONFIG_BTRFS_DUET_DEFRAG_CPUMON */
 	if (itree_update(&dctx->itree, dctx->taskid, defrag_get_inode,
 			(void *)dctx)) {
-		defrag_dbg(KERN_ERR "duet-defrag: failed to update itree\n");
-		return 0;
+		printk(KERN_ERR "duet-defrag: failed to update itree\n");
+		return -1;
 	}
 #ifdef CONFIG_BTRFS_DUET_DEFRAG_CPUMON
 	finish = ktime_get();
@@ -137,7 +132,7 @@ again:
 
 	if (itree_fetch(&dctx->itree, dctx->taskid, &inode, defrag_get_inode,
 			(void *)dctx)) {
-		defrag_dbg(KERN_INFO "duet-defrag: failed to fetch an inode\n");
+		printk(KERN_INFO "duet-defrag: failed to fetch an inode\n");
 		return 0;
 	}
 
@@ -234,8 +229,13 @@ static int defrag_subvol(struct defrag_ctx *dctx)
 		}
 
 #ifdef CONFIG_BTRFS_DUET_DEFRAG
-		if (duet_online() && dctx->taskid && process_inmem_inode(dctx))
-			continue;
+		if (duet_online() && dctx->taskid) {
+			ret = process_inmem_inode(dctx);
+			if (ret == 1)
+				continue;
+			else if (ret == -1)
+				goto out;
+		}
 #endif /* CONFIG_BTRFS_DUET_DEFRAG */
 
 		ret = btrfs_search_slot_for_read(defrag_root, &key, path, 1, 0);
