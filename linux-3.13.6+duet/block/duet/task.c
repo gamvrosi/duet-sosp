@@ -62,9 +62,9 @@ static int process_inode(struct duet_task *task, struct inode *inode)
 
 		//lock_page(page);
 		spin_lock(&task->itm_lock);
-		state = DUET_PAGE_ADDED;
+		state = DUET_PAGE_ADD;
 		if (PageDirty(page))
-			state = DUET_PAGE_ADDED_MODIFIED;
+			state = DUET_PAGE_ADD_MOD;
 		itmtree_insert(task, inode->i_ino, page->index, state, 1);
 		spin_unlock(&task->itm_lock);
 		//unlock_page(page);

@@ -330,19 +330,22 @@ int itmtree_insert(struct duet_task *task, unsigned long ino,
 		found ? (replace ? "replacing" : "updating") : "inserting",
 		ino, index);
 
+	state &= task->evtmask;
+	if (!state)
+		return 0;
+
 	if (found && replace) {
 		cur->item->state = state;
 	} else if (found && !replace) {
 		/* What we do depends on what we found */
 		switch (cur->item->state) {
-		case DUET_PAGE_ADDED:
+		case DUET_PAGE_ADD:
 			switch (state) {
 			case DUET_EVT_ADD:
-				duet_dbg(KERN_DEBUG "We got an A event while "
-					"at the A state. This is a bug!\n");
+			case DUET_EVT_FLS:
 				break;
 			case DUET_EVT_MOD:
-				cur->item->state = DUET_PAGE_ADDED_MODIFIED;
+				cur->item->state = DUET_PAGE_ADD_MOD;
 				break;
 			case DUET_EVT_REM:
 				tnode_dispose(cur, parent, &task->itmtree);
@@ -350,28 +353,25 @@ int itmtree_insert(struct duet_task *task, unsigned long ino,
 			}
 			break;
 
-		case DUET_PAGE_REMOVED:
+		case DUET_PAGE_REM:
 			switch (state) {
-			case DUET_EVT_ADD:
-				tnode_dispose(cur, parent, &task->itmtree);
-				break;
 			case DUET_EVT_MOD:
 			case DUET_EVT_REM:
-				duet_dbg(KERN_DEBUG "We got an %s event while "
-					"at the R state. This is a bug!\n",
-					state == DUET_EVT_MOD ? "M" : "R");
+			case DUET_EVT_FLS:
+				break;
+			case DUET_EVT_ADD:
+				tnode_dispose(cur, parent, &task->itmtree);
 				break;
 			}
 			break;
 
-		case DUET_PAGE_ADDED_MODIFIED:
+		case DUET_PAGE_ADD_MOD:
 			switch (state) {
 			case DUET_EVT_ADD:
-				duet_dbg(KERN_DEBUG "We got an A event while "
-					"at the A+M state. This is a bug!\n");
-				break;
 			case DUET_EVT_MOD:
-				/* Nothing changes */
+				break;
+			case DUET_EVT_FLS:
+				cur->item->state = DUET_PAGE_ADD;
 				break;
 			case DUET_EVT_REM:
 				tnode_dispose(cur, parent, &task->itmtree);
@@ -379,17 +379,30 @@ int itmtree_insert(struct duet_task *task, unsigned long ino,
 			}
 			break;
 
-		case DUET_PAGE_MODIFIED:
+		case DUET_PAGE_MOD:
 			switch (state) {
 			case DUET_EVT_ADD:
-				duet_dbg(KERN_DEBUG "We got an A event while "
-					"at the M state. This is a bug!\n");
-				break;
 			case DUET_EVT_MOD:
-				/* Nothing changes */
 				break;
 			case DUET_EVT_REM:
-				cur->item->state = DUET_PAGE_REMOVED;
+				cur->item->state = DUET_PAGE_REM;
+				break;
+			case DUET_EVT_FLS:
+				tnode_dispose(cur, parent, &task->itmtree);
+				break;
+			}
+			break;
+
+		case DUET_PAGE_FLS:
+			switch (state) {
+			case DUET_EVT_ADD:
+			case DUET_EVT_FLS:
+				break;
+			case DUET_EVT_REM:
+				cur->item->state = DUET_PAGE_REM;
+				break;
+			case DUET_EVT_MOD:
+				tnode_dispose(cur, parent, &task->itmtree);
 				break;
 			}
 			break;

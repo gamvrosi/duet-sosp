@@ -26,18 +26,21 @@
 
 /*
  * Event types: ADD (resp. REM) are triggered when a page __descriptor__ is
- * inserted in (resp. about to be removed from) the page cache. MOD is produced
+ * inserted in (resp. about to be removed from) the page cache. MOD is triggered
  * when the page is dirtied (nb: during writes, pages are added, then dirtied).
+ * Finally, FLS is triggered when a page is marked to be flushed.
  */
 #define DUET_EVT_ADD	(1 << 0)
 #define DUET_EVT_REM	(1 << 1)
 #define DUET_EVT_MOD	(1 << 2)
+#define DUET_EVT_FLS	(1 << 3)
 
 /* Page states. Up-to-date is implied by absence. */
-#define DUET_PAGE_ADDED			(DUET_EVT_ADD)
-#define DUET_PAGE_REMOVED		(DUET_EVT_REM)
-#define DUET_PAGE_ADDED_MODIFIED	(DUET_EVT_ADD | DUET_EVT_MOD)
-#define DUET_PAGE_MODIFIED		(DUET_EVT_MOD)
+#define DUET_PAGE_ADD		(DUET_EVT_ADD)
+#define DUET_PAGE_REM		(DUET_EVT_REM)
+#define DUET_PAGE_MOD		(DUET_EVT_MOD)
+#define DUET_PAGE_FLS		(DUET_EVT_FLS)
+#define DUET_PAGE_ADD_MOD	(DUET_EVT_ADD | DUET_EVT_MOD)
 
 /* Item struct returned for processing */
 struct duet_item {

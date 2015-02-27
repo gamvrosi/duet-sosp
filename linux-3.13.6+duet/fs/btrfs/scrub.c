@@ -720,8 +720,8 @@ static int process_duet_events(struct scrub_ctx *sctx)
 		}
 
 		switch (itm.state) {
-		case DUET_PAGE_MODIFIED:
-		case DUET_PAGE_ADDED_MODIFIED:
+		case DUET_PAGE_MOD:
+		case DUET_PAGE_ADD_MOD:
 			scrub_dbg(KERN_INFO "duet-scrub: clearing [%llu, %llu] --"
 				" dstart = %llu\n",
 				dstart+pstart, dstart+pstart+len, dstart);
@@ -731,7 +731,7 @@ static int process_duet_events(struct scrub_ctx *sctx)
 					dstart + pstart, dstart + pstart +
 					mapped_length, sctx->taskid);
 			break;
-		case DUET_PAGE_ADDED:
+		case DUET_PAGE_ADD:
 			scrub_dbg(KERN_INFO "duet-scrub: marking [%llu, %llu] --"
 				" dstart = %llu\n",
 				dstart+pstart, dstart+pstart+len, dstart);

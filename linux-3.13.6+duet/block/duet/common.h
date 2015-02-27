@@ -134,6 +134,6 @@ inline int bittree_unmark(struct rb_root *bittree, __u32 range, __u32 bmapsize,
 void tnode_dispose(struct item_rbnode *tnode, struct rb_node *rbnode,
 	struct rb_root *root);
 int itmtree_insert(struct duet_task *task, unsigned long ino,
-	unsigned long index, __u8 state, __u8 replace);
+	unsigned long index, __u8 evtcode, __u8 replace);
 
 #endif /* _COMMON_H */

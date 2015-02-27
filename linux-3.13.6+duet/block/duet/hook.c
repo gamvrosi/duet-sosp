@@ -27,22 +27,27 @@
  * initial state of each page in the cache (but haven't told the task). We
  * achieve that by scanning the page cache at registration time (check task.c).
  * Although we implement this model for all tasks, different tasks can subscribe
- * to only a subset of the events (ADD, MOD, or REM).
+ * to only a subset of the events (ADD, MOD, REM, or FLS), which basically
+ * knocks off irrelevant state transitions.
  *
+ *                           +----------+
+ *            REM            | Page     |
+ *       +-------------------| flushed  |
+ *       |                   +----------+
+ *       |                     ^
+ *       |               FLS   | | fetch,
+ *       V                     | v  MOD
  *  +---------+  fetch,ADD  +------------+     ADD       +-------+   Page
  *  | Page    |------------>| Page       |-------------->| Page  |<- - - - -
  *  | removed |<------------| up-to-date |<--------------| added |  Scanner
  *  +---------+     REM     +------------+  fetch,REM    +-------+
- *       ^                     ^ |      ^                    |
- *       |               fetch | | MOD  | fetch,REM          | MOD
- *       |                     | v      +------+             v
+ *       ^                     ^ |      ^                  ^  |
+ *       |              fetch, | | MOD  | fetch,REM    FLS |  | MOD
+ *       |               FLS   | v      +------+           |  v
  *       |   REM             +----------+      |      +--------------+   Page
  *       +-------------------| Page     |      +------| Page added   |<- - - - -
  *                           | modified |             | and modified |  Scanner
  *                           +----------+             +--------------+
- *                               ^ |                        ^ |
- *                               | | MOD                    | | MOD
- *                               +-+                        +-+
  *
  * Pages that are not up-to-date are put in a red-black tree, so that we can
  * find them in O(logn) time. Indexing is based on inode number (good enough
@@ -84,18 +89,15 @@ again:
 		goto done;
 	}
 
-	/* Copy fields off to items array, if we've subscribed to this item */
-	if (task->evtmask & tnode->item->state) {
-		items[*itret].ino = tnode->item->ino;
-		items[*itret].idx = tnode->item->idx;
-		items[*itret].state = tnode->item->state;
+	/* Copy fields off to items array */
+	items[*itret].ino = tnode->item->ino;
+	items[*itret].idx = tnode->item->idx;
+	items[*itret].state = tnode->item->state;
 
-		duet_dbg(KERN_INFO "duet_fetch: sending (ino%lu, idx%lu, %x)\n",
-			items[*itret].ino, items[*itret].idx,
-			items[*itret].state);
+	duet_dbg(KERN_INFO "duet_fetch: sending (ino%lu, idx%lu, %x)\n",
+		items[*itret].ino, items[*itret].idx, items[*itret].state);
 
-		(*itret)++;
-	}
+	(*itret)++;
 
 	tnode_dispose(tnode, NULL, NULL);
 	if (*itret < itreq)

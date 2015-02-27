@@ -41,6 +41,7 @@
 //#define DUET_EVT_ADD	(1 << 0)
 //#define DUET_EVT_REM	(1 << 1)
 //#define DUET_EVT_MOD	(1 << 2)
+//#define DUET_EVT_FLS	(1 << 3)
 
 /* We return up to MAX_ITEMS at a time (9b each). */
 struct duet_ioctl_fetch_args {

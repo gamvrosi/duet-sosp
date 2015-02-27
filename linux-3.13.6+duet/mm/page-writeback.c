@@ -2322,9 +2322,20 @@ EXPORT_SYMBOL(set_page_dirty_lock);
 int clear_page_dirty_for_io(struct page *page)
 {
 	struct address_space *mapping = page_mapping(page);
+#ifdef CONFIG_DUET
+	duet_hook_t *dhfp = NULL;
+#endif /* CONFIG_DUET */
 
 	BUG_ON(!PageLocked(page));
 
+#ifdef CONFIG_DUET
+	rcu_read_lock();
+	dhfp = rcu_dereference(duet_hook_cache_fp);
+
+	if (dhfp)
+		dhfp(DUET_EVT_FLS, (void *)page);
+	rcu_read_unlock();
+#endif /* CONFIG_DUET */
 	if (mapping && mapping_cap_account_dirty(mapping)) {
 		/*
 		 * Yes, Virginia, this is indeed insane.
