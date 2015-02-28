@@ -719,19 +719,7 @@ static int process_duet_events(struct scrub_ctx *sctx)
 			goto idone;
 		}
 
-		switch (itm.state) {
-		case DUET_PAGE_MOD:
-		case DUET_PAGE_ADD_MOD:
-			scrub_dbg(KERN_INFO "duet-scrub: clearing [%llu, %llu] --"
-				" dstart = %llu\n",
-				dstart+pstart, dstart+pstart+len, dstart);
-			if (duet_unmark(sctx->taskid, dstart+pstart, len) == -1)
-				printk(KERN_ERR "duet-scrub: failed to unmark"
-					" [%llu, %llu] range for task #%d\n",
-					dstart + pstart, dstart + pstart +
-					mapped_length, sctx->taskid);
-			break;
-		case DUET_PAGE_ADD:
+		if (itm.state == DUET_PAGE_ADDED) {
 			scrub_dbg(KERN_INFO "duet-scrub: marking [%llu, %llu] --"
 				" dstart = %llu\n",
 				dstart+pstart, dstart+pstart+len, dstart);
@@ -740,7 +728,17 @@ static int process_duet_events(struct scrub_ctx *sctx)
 					" [%llu, %llu] range for task #%d\n",
 					dstart + pstart, dstart + pstart +
 					mapped_length, sctx->taskid);
-			break;
+		} else if (itm.state & DUET_PAGE_DIRTY) {
+			scrub_dbg(KERN_INFO "duet-scrub: clearing [%llu, %llu] --"
+				" dstart = %llu\n",
+				dstart+pstart, dstart+pstart+len, dstart);
+			if (duet_unmark(sctx->taskid, dstart+pstart, len) == -1)
+				printk(KERN_ERR "duet-scrub: failed to unmark"
+					" [%llu, %llu] range for task #%d\n",
+					dstart + pstart, dstart + pstart +
+					mapped_length, sctx->taskid);
+		} else {
+			printk(KERN_ERR "duet-scrub: received unknown event\n");
 		}
 
 idone:
@@ -925,7 +923,8 @@ struct scrub_ctx *scrub_setup_ctx(struct btrfs_device *dev, u64 deadline,
 
 	/* Register the task with the Duet framework */
 	if (duet_online() && duet_register(&sctx->taskid, "btrfs-scrub",
-	    DUET_EVT_ADD|DUET_EVT_MOD, fs_info->sb->s_blocksize, fs_info->sb)) {
+	    DUET_EVENT_BASED | DUET_PAGE_ADDED | DUET_PAGE_DIRTY,
+	    fs_info->sb->s_blocksize, fs_info->sb)) {
 		printk(KERN_ERR "scrub: failed to register with duet\n");
 		return ERR_PTR(-EFAULT);
 	}

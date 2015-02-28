@@ -25,24 +25,35 @@
 #endif
 
 /*
- * Event types: ADD (resp. REM) are triggered when a page __descriptor__ is
- * inserted in (resp. about to be removed from) the page cache. MOD is triggered
- * when the page is dirtied (nb: during writes, pages are added, then dirtied).
- * Finally, FLS is triggered when a page is marked to be flushed.
+ * Duet can be either state- or event-based. State-based Duet monitors changes
+ * in the page cache, specifically whether a page EXISTS and whether it has
+ * been MODIFIED. Event-based Duet monitors events that have happened on a page,
+ * which include all events in the lifetime of a cache page: ADDED, REMOVED,
+ * DIRTY, FLUSHED.
+ * Add and remove events are triggered when a page __descriptor__ is inserted or
+ * removed from the page cache. Modification events are triggered when the page
+ * is dirtied (nb: during writes, pages are added, then dirtied), and flush
+ * events are triggered when a page is marked for writeback.
  */
-#define DUET_EVT_ADD	(1 << 0)
-#define DUET_EVT_REM	(1 << 1)
-#define DUET_EVT_MOD	(1 << 2)
-#define DUET_EVT_FLS	(1 << 3)
+#define DUET_PAGE_ADDED		(1 << 0)
+#define DUET_PAGE_REMOVED	(1 << 1)
+#define DUET_PAGE_DIRTY		(1 << 2)
+#define DUET_PAGE_FLUSHED	(1 << 3)
 
-/* Page states. Up-to-date is implied by absence. */
-#define DUET_PAGE_ADD		(DUET_EVT_ADD)
-#define DUET_PAGE_REM		(DUET_EVT_REM)
-#define DUET_PAGE_MOD		(DUET_EVT_MOD)
-#define DUET_PAGE_FLS		(DUET_EVT_FLS)
-#define DUET_PAGE_ADD_MOD	(DUET_EVT_ADD | DUET_EVT_MOD)
+#define DUET_PAGE_MODIFIED	(DUET_PAGE_DIRTY | DUET_PAGE_FLUSHED)
+#define DUET_PAGE_EXISTS	(DUET_PAGE_ADDED | DUET_PAGE_REMOVED)
 
-/* Item struct returned for processing */
+#define DUET_EVENT_BASED	(1 << 4)
+#define DUET_CACHE_STATE	(1 << 5)
+
+#define DUET_PAGE_EVENTS	(DUET_PAGE_MODIFIED | DUET_PAGE_EXISTS)
+
+/*
+ * Item struct returned for processing. For both state- and event- based duet,
+ * we return 4 bits, for page addition, removal, dirtying, and flushing. The
+ * acceptable combinations, however, will differ based on what the task has
+ * subscribed for.
+ */
 struct duet_item {
 	unsigned long ino;
 	unsigned long idx;

@@ -250,7 +250,7 @@ int itree_update(struct inode_tree *itree, __u8 taskid,
 		 * We only process ADDED and REMOVED events,
 		 * and skip over processed inodes.
 		 */
-		if (!(itm.state & (DUET_PAGE_ADD | DUET_PAGE_REM)) ||
+		if (!(itm.state & (DUET_PAGE_ADDED | DUET_PAGE_REMOVED)) ||
 		    duet_check(taskid, itm.ino, 1) == 1)
 			continue;
 

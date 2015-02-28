@@ -127,7 +127,7 @@ void __delete_from_page_cache(struct page *page)
 	dhfp = rcu_dereference(duet_hook_cache_fp);
 
 	if (dhfp)
-		dhfp(DUET_EVT_REM, (void *)page);
+		dhfp(DUET_PAGE_REMOVED, (void *)page);
 	rcu_read_unlock();
 #endif /* CONFIG_DUET */
 
@@ -512,7 +512,7 @@ int add_to_page_cache_locked(struct page *page, struct address_space *mapping,
 	dhfp = rcu_dereference(duet_hook_cache_fp);
 
 	if (dhfp)
-		dhfp(DUET_EVT_ADD, (void *)page);
+		dhfp(DUET_PAGE_ADDED, (void *)page);
 	rcu_read_unlock();
 #endif /* CONFIG_DUET */
 

@@ -336,76 +336,23 @@ int itmtree_insert(struct duet_task *task, unsigned long ino,
 
 	if (found && replace) {
 		cur->item->state = state;
-	} else if (found && !replace) {
-		/* What we do depends on what we found */
-		switch (cur->item->state) {
-		case DUET_PAGE_ADD:
-			switch (state) {
-			case DUET_EVT_ADD:
-			case DUET_EVT_FLS:
-				break;
-			case DUET_EVT_MOD:
-				cur->item->state = DUET_PAGE_ADD_MOD;
-				break;
-			case DUET_EVT_REM:
-				tnode_dispose(cur, parent, &task->itmtree);
-				break;
-			}
-			break;
+	} else if (found) {
+		cur->item->state |= state;
 
-		case DUET_PAGE_REM:
-			switch (state) {
-			case DUET_EVT_MOD:
-			case DUET_EVT_REM:
-			case DUET_EVT_FLS:
-				break;
-			case DUET_EVT_ADD:
-				tnode_dispose(cur, parent, &task->itmtree);
-				break;
-			}
-			break;
+		if (task->evtmask & DUET_CACHE_STATE) {
+			/* Negate previous events and remove if needed */
+			if ((cur->item->state & DUET_PAGE_ADDED) &&
+			    (cur->item->state & DUET_PAGE_REMOVED))
+				cur->item->state &= ~(DUET_PAGE_ADDED |
+						      DUET_PAGE_REMOVED);
 
-		case DUET_PAGE_ADD_MOD:
-			switch (state) {
-			case DUET_EVT_ADD:
-			case DUET_EVT_MOD:
-				break;
-			case DUET_EVT_FLS:
-				cur->item->state = DUET_PAGE_ADD;
-				break;
-			case DUET_EVT_REM:
-				tnode_dispose(cur, parent, &task->itmtree);
-				break;
-			}
-			break;
+			if ((cur->item->state & DUET_PAGE_DIRTY) &&
+			    (cur->item->state & DUET_PAGE_FLUSHED))
+				cur->item->state &= ~(DUET_PAGE_DIRTY |
+						      DUET_PAGE_FLUSHED);
 
-		case DUET_PAGE_MOD:
-			switch (state) {
-			case DUET_EVT_ADD:
-			case DUET_EVT_MOD:
-				break;
-			case DUET_EVT_REM:
-				cur->item->state = DUET_PAGE_REM;
-				break;
-			case DUET_EVT_FLS:
+			if (!cur->item->state)
 				tnode_dispose(cur, parent, &task->itmtree);
-				break;
-			}
-			break;
-
-		case DUET_PAGE_FLS:
-			switch (state) {
-			case DUET_EVT_ADD:
-			case DUET_EVT_FLS:
-				break;
-			case DUET_EVT_REM:
-				cur->item->state = DUET_PAGE_REM;
-				break;
-			case DUET_EVT_MOD:
-				tnode_dispose(cur, parent, &task->itmtree);
-				break;
-			}
-			break;
 		}
 	} else if (!found) {
 		/* Create the node */

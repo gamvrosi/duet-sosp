@@ -2255,7 +2255,7 @@ int set_page_dirty(struct page *page)
 		dhfp = rcu_dereference(duet_hook_cache_fp);
 
 		if (dhfp)
-			dhfp(DUET_EVT_MOD, (void *)page);
+			dhfp(DUET_PAGE_MODIFIED, (void *)page);
 		rcu_read_unlock();
 #endif /* CONFIG_DUET */
 
@@ -2333,7 +2333,7 @@ int clear_page_dirty_for_io(struct page *page)
 	dhfp = rcu_dereference(duet_hook_cache_fp);
 
 	if (dhfp)
-		dhfp(DUET_EVT_FLS, (void *)page);
+		dhfp(DUET_PAGE_FLUSHED, (void *)page);
 	rcu_read_unlock();
 #endif /* CONFIG_DUET */
 	if (mapping && mapping_cap_account_dirty(mapping)) {

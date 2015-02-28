@@ -38,10 +38,14 @@
 #define DUET_PRINTITEM		9
 
 /* event types: only necessary at user-level ioctl.h */
-//#define DUET_EVT_ADD	(1 << 0)
-//#define DUET_EVT_REM	(1 << 1)
-//#define DUET_EVT_MOD	(1 << 2)
-//#define DUET_EVT_FLS	(1 << 3)
+//#define DUET_PAGE_ADDED		(1 << 0)
+//#define DUET_PAGE_REMOVED	(1 << 1)
+//#define DUET_PAGE_DIRTY		(1 << 2)
+//#define DUET_PAGE_FLUSHED	(1 << 3)
+//#define DUET_PAGE_MODIFIED	(1 << 4)
+//#define DUET_PAGE_EXISTS	(1 << 5)
+//#define DUET_EVENT_BASED	(1 << 6)
+//#define DUET_CACHE_STATE	(1 << 7)
 
 /* We return up to MAX_ITEMS at a time (9b each). */
 struct duet_ioctl_fetch_args {

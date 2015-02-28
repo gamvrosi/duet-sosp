@@ -62,9 +62,10 @@ static int process_inode(struct duet_task *task, struct inode *inode)
 
 		//lock_page(page);
 		spin_lock(&task->itm_lock);
-		state = DUET_PAGE_ADD;
+		state = DUET_PAGE_ADDED;
 		if (PageDirty(page))
-			state = DUET_PAGE_ADD_MOD;
+			state |= DUET_PAGE_DIRTY;
+		state &= task->evtmask;
 		itmtree_insert(task, inode->i_ino, page->index, state, 1);
 		spin_unlock(&task->itm_lock);
 		//unlock_page(page);
@@ -349,6 +350,27 @@ static int duet_task_init(struct duet_task **task, const char *name,
 	/* We no longer expose this at registration. Fixed to 32KB. */
 	(*task)->bmapsize = 32768;
 
+	/* Do some sanity checking on event mask */
+	if (((evtmask & DUET_EVENT_BASED) && (evtmask & DUET_CACHE_STATE)) ||
+	    !(evtmask & (DUET_EVENT_BASED | DUET_CACHE_STATE))) {
+		printk(KERN_DEBUG "duet: failed to register state of duet\n");
+		goto err;
+	}
+
+	if (!(evtmask & DUET_PAGE_EVENTS)) {
+		printk(KERN_DEBUG "duet: failed to register page events\n");
+		goto err;
+	}
+
+	if ((evtmask & DUET_CACHE_STATE) &&
+		(((evtmask & DUET_PAGE_EXISTS) &&
+			((evtmask & DUET_PAGE_EXISTS) != DUET_PAGE_EXISTS)) ||
+		 ((evtmask & DUET_PAGE_MODIFIED) &&
+			((evtmask & DUET_PAGE_MODIFIED) != DUET_PAGE_MODIFIED)))) {
+		printk(KERN_DEBUG "duet: failed to register state cache duet\n");
+		goto err;
+	}
+
 	(*task)->evtmask = evtmask;
 	(*task)->sb = (struct super_block *)owner;
 	if (bitrange)
@@ -356,7 +378,12 @@ static int duet_task_init(struct duet_task **task, const char *name,
 	else
 		(*task)->bitrange = 4096;
 
+	printk(KERN_DEBUG "duet: task registered with evtmask %u", evtmask);
 	return 0;
+err:
+	printk(KERN_ERR "duet: error registering task\n");
+	kfree(*task);
+	return -EINVAL;
 }
 
 /* Properly dismantle and dispose of a task struct.
