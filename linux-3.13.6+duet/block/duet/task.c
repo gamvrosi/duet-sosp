@@ -86,8 +86,9 @@ static int scan_page_cache(struct duet_task *task)
 	struct rb_root inodetree = RB_ROOT;
 
 	printk(KERN_INFO "duet: page cache scan started\n");
+	loop = 0;
 again:
-	for (loop = 0; loop < (1U << *duet_i_hash_shift); loop++) {
+	for (loop; loop < (1U << *duet_i_hash_shift); loop++) {
 		head = *duet_inode_hashtable + loop;
 		spin_lock(duet_inode_hash_lock);
 
