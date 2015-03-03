@@ -392,6 +392,15 @@ start:
 			exit_cleanup(RERR_FILEIO);
 		}
 
+#ifdef HAVE_DUET
+		if (duet_check(tid, st.st_ino, 1) == 1)
+			goto skip_file;
+
+		if (INFO_GTE(DUET, 1))
+			rprintf(FINFO, "duet: sending %s (ino %lu), ndx %d\n",
+				fname, st.st_ino, ndx);
+#endif /* HAVE_DUET */
+
 		if (st.st_size) {
 			int32 read_size = MAX(s->blength * 3, MAX_MAP_SIZE);
 			mbuf = map_file(fd, st.st_size, read_size, s->blength);
@@ -432,6 +441,13 @@ start:
 					full_fname(fname));
 			}
 		}
+#ifdef HAVE_DUET
+		if (duet_mark(tid, st.st_ino, 1))
+			rprintf(FERROR, "duet: failed to mark %s (ino %lu)\n",
+				fname, st.st_ino);
+
+skip_file:
+#endif /* HAVE_DUET */
 		close(fd);
 
 		free_sums(s);
@@ -456,6 +472,9 @@ start:
 
 	if (INFO_GTE(DUET, 1))
 		rprintf(FINFO, "deregistering with DUET\n");
+
+	if (duet_debug_printbit(tid))
+		rprintf(FERROR, "failed to print BitTree\n");
 
 	if (duet_deregister(tid))
 		rprintf(FERROR, "failed to deregister with Duet\n");
