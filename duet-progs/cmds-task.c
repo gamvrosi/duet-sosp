@@ -57,7 +57,7 @@ static const char * const cmd_task_reg_usage[] = {
 	"",
 	"-n     name under which to register the task",
 	"-b     range of items/bytes per bitmap bit",
-	"-m     notification model for task",
+	"-m     event mask for task",
 	NULL
 };
 
@@ -146,12 +146,12 @@ static int cmd_task_fetch(int fd, int argc, char **argv)
 	}
 
 	/* Print out the list we received */
-	fprintf(stdout, "Inode number\tOffset      \tEvent   \n"
+	fprintf(stdout, "Inode number\tOffset      \tState   \n"
 			"------------\t------------\t--------\n");
 	for (i=0; i<args.num; i++) {
 		fprintf(stdout, "%12lu\t%12lu\t%8x\n",
 			args.itm[i].ino, args.itm[i].idx << 12,
-			args.itm[i].evt);
+			args.itm[i].state);
 	}
 
 	return ret;
@@ -171,15 +171,15 @@ static int cmd_task_list(int fd, int argc, char **argv)
 	}
 
 	/* Print out the list we received */
-	fprintf(stdout, "ID\tTask Name\tBit range\tNot. model\n"
-			"--\t---------\t---------\t----------\n");
+	fprintf(stdout, "ID\tTask Name\tBit range\tEvt. mask\n"
+			"--\t---------\t---------\t---------\n");
 	for (i=0; i<MAX_TASKS; i++) {
 		if (!args.tid[i])
 			break;
 
 		fprintf(stdout, "%2d\t%9s\t%9u\t%10u\n",
 			args.tid[i], args.tnames[i], args.bitrange[i],
-			args.nmodel[i]);
+			args.evtmask[i]);
 	}
 
 	return ret;
@@ -214,19 +214,10 @@ static int cmd_task_reg(int fd, int argc, char **argv)
 			}
 			break;
 		case 'm':
-			if (!strncmp(optarg, "add", 3))
-				args.nmodel = MODEL_ADD;
-			else if (!strncmp(optarg, "rem", 3))
-				args.nmodel = MODEL_REM;
-			else if (!strncmp(optarg, "both", 4))
-				args.nmodel = MODEL_BOTH;
-			else if (!strncmp(optarg, "diff", 4))
-				args.nmodel = MODEL_DIFF;
-			else if (!strncmp(optarg, "axs", 3))
-				args.nmodel = MODEL_AXS;
-			else {
-				fprintf(stderr, "error: invalid model '%s'\n",
-					optarg);
+			errno = 0;
+			args.evtmask = (__u8)strtol(optarg, NULL, 10);
+			if (errno) {
+				perror("strtol: invalid evtmask");
 				usage(cmd_task_reg_usage);
 			}
 			break;

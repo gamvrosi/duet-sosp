@@ -24,31 +24,25 @@
 #define MAX_TASKS	32
 #define MAX_ITEMS	256
 #define MAX_NAME	128
+#define MAX_PATH	1024
 #define DUET_IOC_MAGIC	0xDE
 
 /* ioctl codes */
-#define DUET_START	1
-#define DUET_STOP	2
-#define DUET_REGISTER	3
-#define DUET_DEREGISTER	4
-#define DUET_MARK	5
-#define DUET_UNMARK	6
-#define DUET_CHECK	7
-#define DUET_PRINTBIT	8
-#define DUET_PRINTITEM	9
-
-/* notification model codes */
-#define MODEL_ADD	1	/* only ADD events */
-#define MODEL_REM	2	/* only REM events */
-#define MODEL_BOTH	3	/* both ADD/REM events */
-#define MODEL_DIFF	4	/* difference of ADD/REM events */
-#define MODEL_AXS	5	/* data accesses based on ADD/MOD */
+#define DUET_START		1
+#define DUET_STOP		2
+#define DUET_REGISTER		3
+#define DUET_DEREGISTER		4
+#define DUET_MARK		5
+#define DUET_UNMARK		6
+#define DUET_CHECK		7
+#define DUET_PRINTBIT		8
+#define DUET_PRINTITEM		9
 
 /* Item struct returned for processing */
 struct duet_item {
 	unsigned long	ino;
 	unsigned long	idx;
-	__u8		evt;	/* added, removed, modified? */
+	__u8		state;
 };
 
 /* We return up to MAX_ITEMS at a time (9b each). */
@@ -62,7 +56,7 @@ struct duet_ioctl_list_args {
 	__u8 	tid[MAX_TASKS];			/* out */
 	char 	tnames[MAX_TASKS][MAX_NAME];	/* out */
 	__u32 	bitrange[MAX_TASKS];		/* out */
-	__u8	nmodel[MAX_TASKS];		/* out */
+	__u8	evtmask[MAX_TASKS];		/* out */
 };
 
 struct duet_ioctl_cmd_args {
@@ -72,9 +66,10 @@ struct duet_ioctl_cmd_args {
 	union {
 		/* Registration args */
 		struct {
-			__u8 	nmodel;		/* in */
+			__u8 	evtmask;	/* in */
 			__u32 	bitrange;	/* in */
 			char 	name[MAX_NAME];	/* in */
+			char	path[MAX_PATH];	/* in */
 		};
 		/* (Un)marking and checking args */
 		struct {
