@@ -798,9 +798,6 @@ static void do_server_sender(int f_in, int f_out, int argc, char *argv[])
 	struct file_list *flist;
 	char *dir = argv[0];
 
-	if (INFO_GTE(DUET, 1))
-		rprintf(FINFO, "server_sender dir = %s\n", dir);
-
 	if (DEBUG_GTE(SEND, 1))
 		rprintf(FINFO, "server_sender starting pid=%d\n", (int)getpid());
 

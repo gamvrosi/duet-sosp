@@ -44,6 +44,12 @@ while getopts ":dci" opt; do
 		make clean
 		make
 
+		# ...and (re)compile rsync
+		cd ../rsync-3.1.1+duet
+		make clean
+		make reconfigure
+		make
+
 		cd ..
 		;;
 	i)
@@ -58,6 +64,8 @@ while getopts ":dci" opt; do
 		# Install the duet tools (in /usr/local/bin)
 		cd ../duet-progs
 		sudo make install
+
+		# Do not install rsync; it will replace the stock rsync
 
 		cd ..
 		;;

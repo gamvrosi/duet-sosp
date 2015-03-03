@@ -209,15 +209,19 @@ void send_files(int f_in, int f_out)
 	int ndx, j;
 #ifdef HAVE_DUET
 	__u8 tid;
+	char *cwd, buf[PATH_MAX];
 
 	if (!out_of_order)
 		goto start;
 
-	if (INFO_GTE(DUET, 1))
-		rprintf(FINFO, "registering with Duet\n");
+	cwd = getcwd(buf, PATH_MAX);
+	if (!cwd) {
+		rprintf(FERROR, "failed to get current working directory\n");
+		return;
+	}
 
-	if (duet_register(&tid, "rsync", DUET_CACHE_STATE | DUET_PAGE_EXISTS,
-		1, "/")) {
+	if (duet_register(&tid, "rsync", 1, DUET_CACHE_STATE | DUET_PAGE_EXISTS,
+		cwd)) {
 		rprintf(FERROR, "failed to register with Duet\n");
 		return;
 	}
