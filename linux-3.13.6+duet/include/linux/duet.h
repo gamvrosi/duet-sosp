@@ -71,7 +71,7 @@ struct inode_tree {
 
 /* Framework interface functions */
 int duet_register(__u8 *taskid, const char *name, __u8 evtmask, __u32 bitrange,
-		  void *owner);
+		  void *owner, unsigned long ino);
 int duet_deregister(__u8 taskid);
 int duet_online(void);
 int duet_check(__u8 taskid, __u64 idx, __u32 num);

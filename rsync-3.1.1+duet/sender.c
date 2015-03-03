@@ -21,6 +21,9 @@
 
 #include "rsync.h"
 #include "inums.h"
+#ifdef HAVE_DUET
+#include "duet.h"
+#endif /* HAVE_DUET */
 
 extern int do_xfers;
 extern int am_server;
@@ -44,6 +47,9 @@ extern int inplace;
 extern int batch_fd;
 extern int write_batch;
 extern int file_old_total;
+#ifdef HAVE_DUET
+extern int out_of_order;
+#endif /* HAVE_DUET */
 extern struct stats stats;
 extern struct file_list *cur_flist, *first_flist, *dir_flist;
 
@@ -201,6 +207,23 @@ void send_files(int f_in, int f_out)
 	int f_xfer = write_batch < 0 ? batch_fd : f_out;
 	int save_io_error = io_error;
 	int ndx, j;
+#ifdef HAVE_DUET
+	__u8 tid;
+
+	if (!out_of_order)
+		goto start;
+
+	if (INFO_GTE(DUET, 1))
+		rprintf(FINFO, "registering with Duet\n");
+
+	if (duet_register(&tid, "rsync", DUET_CACHE_STATE | DUET_PAGE_EXISTS,
+		1, "/")) {
+		rprintf(FERROR, "failed to register with Duet\n");
+		return;
+	}
+
+start:
+#endif /* HAVE_DUET */
 
 	if (DEBUG_GTE(SEND, 1))
 		rprintf(FINFO, "send_files starting\n");
@@ -423,7 +446,18 @@ void send_files(int f_in, int f_out)
 
 	if (DEBUG_GTE(SEND, 1))
 		rprintf(FINFO, "send files finished\n");
+#ifdef HAVE_DUET
+	if (!out_of_order)
+		goto end;
 
+	if (INFO_GTE(DUET, 1))
+		rprintf(FINFO, "deregistering with DUET\n");
+
+	if (duet_deregister(tid))
+		rprintf(FERROR, "failed to deregister with Duet\n");
+
+end:
+#endif /* HAVE_DUET */
 	match_report();
 
 	write_ndx(f_out, NDX_DONE);

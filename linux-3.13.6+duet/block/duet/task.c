@@ -328,7 +328,7 @@ EXPORT_SYMBOL_GPL(duet_mark);
 
 /* Properly allocate and initialize a task struct */
 static int duet_task_init(struct duet_task **task, const char *name,
-	__u8 evtmask, __u32 bitrange, void *owner)
+	__u8 evtmask, __u32 bitrange, void *owner, unsigned long ino)
 {
 	*task = kzalloc(sizeof(**task), GFP_NOFS);
 	if (!(*task))
@@ -373,6 +373,7 @@ static int duet_task_init(struct duet_task **task, const char *name,
 
 	(*task)->evtmask = evtmask;
 	(*task)->sb = (struct super_block *)owner;
+	(*task)->ino = ino;
 	if (bitrange)
 		(*task)->bitrange = bitrange;
 	else
@@ -413,7 +414,7 @@ void duet_task_dispose(struct duet_task *task)
 }
 
 int duet_register(__u8 *taskid, const char *name, __u8 evtmask, __u32 bitrange,
-	void *owner)
+	void *owner, unsigned long ino)
 {
 	int ret;
 	struct list_head *last;
@@ -424,7 +425,7 @@ int duet_register(__u8 *taskid, const char *name, __u8 evtmask, __u32 bitrange,
 		return -EINVAL;
 	}
 
-	ret = duet_task_init(&task, name, evtmask, bitrange, owner);
+	ret = duet_task_init(&task, name, evtmask, bitrange, owner, ino);
 	if (ret) {
 		printk(KERN_ERR "duet: failed to initialize task\n");
 		return ret;

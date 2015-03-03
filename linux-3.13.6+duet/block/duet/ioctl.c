@@ -17,6 +17,8 @@
  */
 #include <linux/slab.h>
 #include <linux/uaccess.h>
+#include <linux/syscalls.h>
+#include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/duet.h>
 #include "ioctl.h"
@@ -139,6 +141,9 @@ err:
 static int duet_ioctl_cmd(void __user *arg)
 {
 	struct duet_ioctl_cmd_args *ca;
+	struct file *file;
+	mm_segment_t old_fs;
+	int fd;
 
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
@@ -177,9 +182,38 @@ static int duet_ioctl_cmd(void __user *arg)
 		break;
 
 	case DUET_REGISTER:
-		/* XXX: We do not pass an owner for this one. Future work. */
+		/* First, open the path we were given */
+		old_fs = get_fs();
+		set_fs(KERNEL_DS);
+
+		fd = sys_open(ca->path, O_RDONLY, 0644);
+		if (fd < 0) {
+			printk(KERN_ERR "duet: failed to open %s\n", ca->path);
+			goto reg_done;
+		}
+
+		file = fget(fd);
+		if (!file) {
+			printk(KERN_ERR "duet: failed to get %s\n", ca->path);
+			goto reg_close;
+		}
+
+		if (!file->f_inode) {
+			printk(KERN_ERR "duet: no inode for %s\n", ca->path);
+			goto reg_put;
+		}
+
 		ca->ret = duet_register(&ca->tid, ca->name, ca->evtmask,
-					ca->bitrange, NULL);
+					ca->bitrange, file->f_inode->i_sb,
+					file->f_inode->i_ino);
+		printk(KERN_INFO "duet: registered under %s, ino %lu\n",
+			ca->path, file->f_inode->i_ino);
+reg_put:
+		fput(file);
+reg_close:
+		sys_close(fd);
+reg_done:
+		set_fs(old_fs);
 		break;
 
 	case DUET_DEREGISTER:

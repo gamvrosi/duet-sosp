@@ -124,6 +124,9 @@ struct pid_status {
 
 static time_t starttime, endtime;
 static int64 total_read, total_written;
+#ifdef HAVE_DUET
+static int64 total_o3_read, total_o3_written;
+#endif /* HAVE_DUET */
 
 static void show_malloc_stats(void);
 
@@ -224,6 +227,10 @@ static void handle_stats(int f)
 	/* Cache two stats because the read/write code can change it. */
 	total_read = stats.total_read;
 	total_written = stats.total_written;
+#ifdef HAVE_DUET
+	total_o3_read = stats.total_o3_read;
+	total_o3_written = stats.total_o3_written;
+#endif /* HAVE_DUET */
 
 	if (INFO_GTE(STATS, 3)) {
 		/* These come out from every process */
@@ -332,8 +339,16 @@ static void output_summary(void)
 		}
 		rprintf(FINFO,"Total bytes sent: %s\n",
 			human_num(total_written));
+#ifdef HAVE_DUET
+		rprintf(FINFO,"Total bytes sent out-of-order: %s\n",
+			human_num(total_o3_written));
+#endif /* HAVE_DUET */
 		rprintf(FINFO,"Total bytes received: %s\n",
 			human_num(total_read));
+#ifdef HAVE_DUET
+		rprintf(FINFO,"Total bytes received out-of-order: %s\n",
+			human_num(total_o3_read));
+#endif /* HAVE_DUET */
 	}
 
 	if (INFO_GTE(STATS, 1)) {
@@ -342,6 +357,12 @@ static void output_summary(void)
 			"sent %s bytes  received %s bytes  %s bytes/sec\n",
 			human_num(total_written), human_num(total_read),
 			human_dnum((total_written + total_read)/(0.5 + (endtime - starttime)), 2));
+#ifdef HAVE_DUET
+		rprintf(FINFO,
+			"out-of-order sent %s bytes  received %s bytes  %s bytes/sec\n",
+			human_num(total_o3_written), human_num(total_o3_read),
+			human_dnum((total_o3_written + total_o3_read)/(0.5 + (endtime - starttime)), 2));
+#endif /* HAVE_DUET */
 		rprintf(FINFO, "total size is %s  speedup is %s%s\n",
 			human_num(stats.total_size),
 			comma_dnum((double)stats.total_size / (total_written+total_read), 2),
@@ -776,6 +797,9 @@ static void do_server_sender(int f_in, int f_out, int argc, char *argv[])
 {
 	struct file_list *flist;
 	char *dir = argv[0];
+
+	if (INFO_GTE(DUET, 1))
+		rprintf(FINFO, "server_sender dir = %s\n", dir);
 
 	if (DEBUG_GTE(SEND, 1))
 		rprintf(FINFO, "server_sender starting pid=%d\n", (int)getpid());

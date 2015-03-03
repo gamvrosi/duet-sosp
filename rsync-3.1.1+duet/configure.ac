@@ -798,6 +798,11 @@ else
     AC_MSG_RESULT(no)
 fi
 
+AC_MSG_CHECKING([included duet lib])
+AC_MSG_RESULT($srcdir/duet)
+BUILD_DUET='$(duet_OBJS)'
+CFLAGS="-I$srcdir/duet $CFLAGS"
+
 AC_CACHE_CHECK([for unsigned char],rsync_cv_SIGNED_CHAR_OK,[
 AC_TRY_COMPILE([],[signed char *s = ""],
 rsync_cv_SIGNED_CHAR_OK=yes,rsync_cv_SIGNED_CHAR_OK=no)])
@@ -952,6 +957,7 @@ AC_SUBST(OBJ_RESTORE)
 AC_SUBST(CC_SHOBJ_FLAG)
 AC_SUBST(BUILD_POPT)
 AC_SUBST(BUILD_ZLIB)
+AC_SUBST(BUILD_DUET)
 AC_SUBST(MAKE_MAN)
 
 AC_PATH_PROG([STUNNEL], [stunnel], [stunnel], [$PATH$PATH_SEPARATOR/usr/sbin$PATH_SEPARATOR/sbin])
@@ -1106,8 +1112,7 @@ case "$CC" in
     ;;
 esac
 
-AC_CONFIG_FILES([Makefile lib/dummy zlib/dummy popt/dummy shconfig])
-AC_OUTPUT
+AC_CONFIG_FILES([Makefile lib/dummy zlib/dummy popt/dummy shconfig]) AC_OUTPUT
 
 AC_MSG_RESULT()
 AC_MSG_RESULT([    rsync ${RSYNC_VERSION} configuration successful])

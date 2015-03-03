@@ -901,6 +901,10 @@ struct stats {
 	int64 total_transferred_size;
 	int64 total_written;
 	int64 total_read;
+#ifdef HAVE_DUET
+	int64 total_o3_written;
+	int64 total_o3_read;
+#endif /* HAVE_DUET */
 	int64 literal_data;
 	int64 matched_data;
 	int64 flist_buildtime;
@@ -1239,7 +1243,12 @@ extern short info_levels[], debug_levels[];
 #define INFO_BACKUP 0
 #define INFO_COPY (INFO_BACKUP+1)
 #define INFO_DEL (INFO_COPY+1)
+#ifdef HAVE_DUET
+#define INFO_DUET (INFO_DEL+1)
+#define INFO_FLIST (INFO_DUET+1)
+#else
 #define INFO_FLIST (INFO_DEL+1)
+#endif /* HAVE_DUET */
 #define INFO_MISC (INFO_FLIST+1)
 #define INFO_MOUNT (INFO_MISC+1)
 #define INFO_NAME (INFO_MOUNT+1)

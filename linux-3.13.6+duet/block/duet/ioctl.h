@@ -24,6 +24,7 @@
 #define MAX_TASKS	32
 #define MAX_ITEMS	256
 #define MAX_NAME	128
+#define MAX_PATH	1024
 #define DUET_IOC_MAGIC	0xDE
 
 /* ioctl codes */
@@ -36,16 +37,6 @@
 #define DUET_CHECK		7
 #define DUET_PRINTBIT		8
 #define DUET_PRINTITEM		9
-
-/* event types: only necessary at user-level ioctl.h */
-//#define DUET_PAGE_ADDED		(1 << 0)
-//#define DUET_PAGE_REMOVED	(1 << 1)
-//#define DUET_PAGE_DIRTY		(1 << 2)
-//#define DUET_PAGE_FLUSHED	(1 << 3)
-//#define DUET_PAGE_MODIFIED	(1 << 4)
-//#define DUET_PAGE_EXISTS	(1 << 5)
-//#define DUET_EVENT_BASED	(1 << 6)
-//#define DUET_CACHE_STATE	(1 << 7)
 
 /* We return up to MAX_ITEMS at a time (9b each). */
 struct duet_ioctl_fetch_args {
@@ -71,6 +62,7 @@ struct duet_ioctl_cmd_args {
 			__u8 	evtmask;	/* in */
 			__u32 	bitrange;	/* in */
 			char 	name[MAX_NAME];	/* in */
+			char	path[MAX_PATH];	/* in */
 		};
 		/* (Un)marking and checking args */
 		struct {

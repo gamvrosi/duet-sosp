@@ -54,6 +54,7 @@ struct duet_task {
 	atomic_t		refcount;
 	__u8			evtmask;	/* Mask of subscribed events */
 	struct super_block	*sb;		/* Filesystem of task (opt) */
+	unsigned long		ino;		/* Parent inode number */
 
 	/* BitTree -- progress bitmap tree */
 	__u32			bitrange;	/* range per bmap bit */

@@ -127,6 +127,9 @@ int delay_updates = 0;
 long block_size = 0; /* "long" because popt can't set an int32. */
 char *skip_compress = NULL;
 item_list dparam_list = EMPTY_ITEM_LIST;
+#ifdef HAVE_DUET
+int out_of_order = 0;
+#endif /* HAVE_DUET */
 
 /** Network address family. **/
 int default_af_hint
@@ -249,6 +252,9 @@ static struct output_struct info_words[COUNT_INFO+1] = {
 	INFO_WORD(BACKUP, W_REC, "Mention files backed up"),
 	INFO_WORD(COPY, W_REC, "Mention files copied locally on the receiving side"),
 	INFO_WORD(DEL, W_REC, "Mention deletions on the receiving side"),
+#ifdef HAVE_DUET
+	INFO_WORD(DUET, W_SND, "Mention files sent out-of-order"),
+#endif /* HAVE_DUET */
 	INFO_WORD(FLIST, W_CLI, "Mention file-list receiving/sending (levels 1-2)"),
 	INFO_WORD(MISC, W_SND|W_REC, "Mention miscellaneous information (levels 1-2)"),
 	INFO_WORD(MOUNT, W_SND|W_REC, "Mention mounts that were found or skipped"),
@@ -806,6 +812,9 @@ void usage(enum logcode F)
   rprintf(F,"     --checksum-seed=NUM     set block/file checksum seed (advanced)\n");
   rprintf(F," -4, --ipv4                  prefer IPv4\n");
   rprintf(F," -6, --ipv6                  prefer IPv6\n");
+#ifdef HAVE_DUET
+  rprintf(F,"     --out-of-order          try to send data out of order using duet\n");
+#endif /* HAVE_DUET */
   rprintf(F,"     --version               print version number\n");
   rprintf(F,"(-h) --help                  show this help (-h is --help only if used alone)\n");
 
@@ -817,6 +826,9 @@ void usage(enum logcode F)
 
 enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
       OPT_FILTER, OPT_COMPARE_DEST, OPT_COPY_DEST, OPT_LINK_DEST, OPT_HELP,
+#ifdef HAVE_DUET
+      OPT_DUET,
+#endif /* HAVE_DUET */
       OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE, OPT_CHMOD,
       OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
       OPT_NO_D, OPT_APPEND, OPT_NO_ICONV, OPT_INFO, OPT_DEBUG,
@@ -826,6 +838,9 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
 static struct poptOption long_options[] = {
   /* longName, shortName, argInfo, argPtr, value, descrip, argDesc */
   {"help",             0,  POPT_ARG_NONE,   0, OPT_HELP, 0, 0 },
+#ifdef HAVE_DUET
+  {"out-of-order",     0,  POPT_ARG_NONE,   0, OPT_DUET, 0, 0 },
+#endif /* HAVE_DUET */
   {"version",          0,  POPT_ARG_NONE,   0, OPT_VERSION, 0, 0},
   {"verbose",         'v', POPT_ARG_NONE,   0, 'v', 0, 0 },
   {"no-verbose",       0,  POPT_ARG_VAL,    &verbose, 0, 0, 0 },
@@ -1070,6 +1085,9 @@ static void daemon_usage(enum logcode F)
   rprintf(F," -v, --verbose               increase verbosity\n");
   rprintf(F," -4, --ipv4                  prefer IPv4\n");
   rprintf(F," -6, --ipv6                  prefer IPv6\n");
+#ifdef HAVE_DUET
+  rprintf(F,"     --out-of-order          try to send data out of order using duet\n");
+#endif /* HAVE_DUET */
   rprintf(F,"     --help                  show this help screen\n");
 
   rprintf(F,"\n");
@@ -1098,6 +1116,9 @@ static struct poptOption long_daemon_options[] = {
   {"verbose",         'v', POPT_ARG_NONE,   0, 'v', 0, 0 },
   {"no-verbose",       0,  POPT_ARG_VAL,    &verbose, 0, 0, 0 },
   {"no-v",             0,  POPT_ARG_VAL,    &verbose, 0, 0, 0 },
+#ifdef HAVE_DUET
+  {"out-of-order",     0,  POPT_ARG_NONE,   0, OPT_DUET, 0, 0 },
+#endif /* HAVE_DUET */
   {"help",            'h', POPT_ARG_NONE,   0, 'h', 0, 0 },
   {0,0,0,0, 0, 0, 0}
 };
@@ -1758,6 +1779,11 @@ int parse_arguments(int *argc_p, const char ***argv_p)
 		case OPT_HELP:
 			usage(FINFO);
 			exit_cleanup(0);
+#ifdef HAVE_DUET
+		case OPT_DUET:
+			out_of_order = 1;
+			break;
+#endif /* HAVE_DUET */
 
 		case 'A':
 #ifdef SUPPORT_ACLS
@@ -2770,6 +2796,11 @@ void server_options(char **args, int *argc_p)
 
 	if (do_compression > 1)
 		args[ac++] = "--new-compress";
+
+#ifdef HAVE_DUET
+	if (out_of_order)
+		args[ac++] = "--out-of-order";
+#endif /* HAVE_DUET */
 
 	if (remote_option_cnt) {
 		int j;
