@@ -21,16 +21,16 @@
 
 /*
  * The framework implements two event models defining how we update the page
- * state when a new event happens. The first model, CACHE_STATE allows
- * subscription to PAGE_EXISTS and PAGE_MODIFIED events, which report whether
- * the existence or modification state of the page has **changed** since the
- * last time the task was told about it.
- * The second model, EVENT_BASED, is simpler. It just report an OR'ed mask of
- * all the event codes: PAGE_ADDED, PAGE_DIRTY, PAGE_REMOVED, PAGE_FLUSHED that
- * occurred since the last time the page was told.
+ * state when a new event happens. The first model allows subscription to
+ * PAGE_EXISTS and PAGE_MODIFIED events, which report whether the existence or
+ * modification state of the page has **changed** since the last time the task
+ * was told about it.
+ * The second model is simpler. It just report an OR'ed mask of all the event
+ * codes: PAGE_ADDED, PAGE_DIRTY, PAGE_REMOVED, PAGE_FLUSHED that occurred since
+ * the last time the page was told.
  * Pages are put in a red-black tree, so that we can find them in O(logn) time.
- * Indexing is based on inode number (good enough when we look at one file
- * system at a time), and the index of the page within said inode.
+ * Indexing is based on inode number (good enough when we look at one filesystem
+ * at a time), and the index of the page within said inode.
  */
 
 /*

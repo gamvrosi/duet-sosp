@@ -352,23 +352,15 @@ static int duet_task_init(struct duet_task **task, const char *name,
 	(*task)->bmapsize = 32768;
 
 	/* Do some sanity checking on event mask */
-	if (((evtmask & DUET_EVENT_BASED) && (evtmask & DUET_CACHE_STATE)) ||
-	    !(evtmask & (DUET_EVENT_BASED | DUET_CACHE_STATE))) {
-		printk(KERN_DEBUG "duet: failed to register state of duet\n");
+	if ((evtmask & DUET_PAGE_EXISTS) &&
+	    (evtmask & (DUET_PAGE_ADDED | DUET_PAGE_REMOVED))) {
+		printk(KERN_DEBUG "duet: failed to register EXIST events\n");
 		goto err;
 	}
 
-	if (!(evtmask & DUET_PAGE_EVENTS)) {
-		printk(KERN_DEBUG "duet: failed to register page events\n");
-		goto err;
-	}
-
-	if ((evtmask & DUET_CACHE_STATE) &&
-		(((evtmask & DUET_PAGE_EXISTS) &&
-			((evtmask & DUET_PAGE_EXISTS) != DUET_PAGE_EXISTS)) ||
-		 ((evtmask & DUET_PAGE_MODIFIED) &&
-			((evtmask & DUET_PAGE_MODIFIED) != DUET_PAGE_MODIFIED)))) {
-		printk(KERN_DEBUG "duet: failed to register state cache duet\n");
+	if ((evtmask & DUET_PAGE_MODIFIED) &&
+	    (evtmask & (DUET_PAGE_DIRTY | DUET_PAGE_FLUSHED))) {
+		printk(KERN_DEBUG "duet: failed to register MODIFIED events\n");
 		goto err;
 	}
 

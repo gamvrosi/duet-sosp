@@ -25,11 +25,15 @@
 #endif
 
 /*
- * Duet can be either state- or event-based. State-based Duet monitors changes
- * in the page cache, specifically whether a page EXISTS and whether it has
- * been MODIFIED. Event-based Duet monitors events that have happened on a page,
- * which include all events in the lifetime of a cache page: ADDED, REMOVED,
- * DIRTY, FLUSHED.
+ * Duet can be either state- and/or event-based.
+ * State-based Duet monitors changes in the page cache. Registering for EXISTS
+ * events means that fetch will be returning ADDED or REMOVED events if the
+ * state of the page changes since the last fetch (i.e. the two events cancel
+ * each other out). Registering for MODIFIED events means that fetch will be
+ * returning DIRTY or FLUSHED events if the state of the page changes since the
+ * last fetch.
+ * Event-based Duet monitors events that have happened on a page, which include
+ * all events in the lifetime of a cache page: ADDED, REMOVED, DIRTY, FLUSHED.
  * Add and remove events are triggered when a page __descriptor__ is inserted or
  * removed from the page cache. Modification events are triggered when the page
  * is dirtied (nb: during writes, pages are added, then dirtied), and flush
@@ -39,14 +43,8 @@
 #define DUET_PAGE_REMOVED	(1 << 1)
 #define DUET_PAGE_DIRTY		(1 << 2)
 #define DUET_PAGE_FLUSHED	(1 << 3)
-
-#define DUET_PAGE_MODIFIED	(DUET_PAGE_DIRTY | DUET_PAGE_FLUSHED)
-#define DUET_PAGE_EXISTS	(DUET_PAGE_ADDED | DUET_PAGE_REMOVED)
-
-#define DUET_EVENT_BASED	(1 << 4)
-#define DUET_CACHE_STATE	(1 << 5)
-
-#define DUET_PAGE_EVENTS	(DUET_PAGE_MODIFIED | DUET_PAGE_EXISTS)
+#define DUET_PAGE_MODIFIED	(1 << 4)
+#define DUET_PAGE_EXISTS	(1 << 5)
 
 /*
  * Item struct returned for processing. For both state- and event- based duet,

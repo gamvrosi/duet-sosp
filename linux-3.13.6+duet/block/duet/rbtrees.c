@@ -339,21 +339,23 @@ int itmtree_insert(struct duet_task *task, unsigned long ino,
 	} else if (found) {
 		cur->item->state |= state;
 
-		if (task->evtmask & DUET_CACHE_STATE) {
-			/* Negate previous events and remove if needed */
+		/* Negate previous events and remove if needed */
+		if (task->evtmask & DUET_PAGE_EXISTS) {
 			if ((cur->item->state & DUET_PAGE_ADDED) &&
 			    (cur->item->state & DUET_PAGE_REMOVED))
 				cur->item->state &= ~(DUET_PAGE_ADDED |
 						      DUET_PAGE_REMOVED);
+		}
 
+		if (task->evtmask & DUET_PAGE_MODIFIED) {
 			if ((cur->item->state & DUET_PAGE_DIRTY) &&
 			    (cur->item->state & DUET_PAGE_FLUSHED))
 				cur->item->state &= ~(DUET_PAGE_DIRTY |
 						      DUET_PAGE_FLUSHED);
-
-			if (!cur->item->state)
-				tnode_dispose(cur, parent, &task->itmtree);
 		}
+
+		if (!cur->item->state)
+			tnode_dispose(cur, parent, &task->itmtree);
 	} else if (!found) {
 		/* Create the node */
 		tnode = tnode_init(task, ino, index, state);
