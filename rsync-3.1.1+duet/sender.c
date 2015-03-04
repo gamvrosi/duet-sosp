@@ -49,6 +49,7 @@ extern int write_batch;
 extern int file_old_total;
 #ifdef HAVE_DUET
 extern int out_of_order;
+extern __u8 tid;
 #endif /* HAVE_DUET */
 extern struct stats stats;
 extern struct file_list *cur_flist, *first_flist, *dir_flist;
@@ -190,6 +191,8 @@ static void write_ndx_and_attrs(int f_out, int ndx, int iflags,
 #endif
 }
 
+static int test_my_o3 = 0;
+
 void send_files(int f_in, int f_out)
 {
 	int fd = -1;
@@ -208,7 +211,6 @@ void send_files(int f_in, int f_out)
 	int save_io_error = io_error;
 	int ndx, j;
 #ifdef HAVE_DUET
-	__u8 tid;
 	char *cwd, buf[PATH_MAX];
 
 	if (!out_of_order)
@@ -220,8 +222,7 @@ void send_files(int f_in, int f_out)
 		return;
 	}
 
-	if (duet_register(&tid, "rsync", 1, DUET_CACHE_STATE | DUET_PAGE_EXISTS,
-		cwd)) {
+	if (duet_register(&tid, "rsync", DUET_PAGE_EXISTS, 1, cwd)) {
 		rprintf(FERROR, "failed to register with Duet\n");
 		return;
 	}
@@ -233,6 +234,12 @@ start:
 		rprintf(FINFO, "send_files starting\n");
 
 	while (1) {
+		/* Send a file out of order */
+		if (!test_my_o3) {
+			send_o3_file(f_out, "foodir/dirfoo/abcfoo");
+			test_my_o3++;
+		}
+
 		if (inc_recurse) {
 			send_extra_file_list(f_out, MIN_FILECNT_LOOKAHEAD);
 			extra_flist_sending_enabled = !flist_eof;
@@ -393,12 +400,24 @@ start:
 		}
 
 #ifdef HAVE_DUET
-		if (duet_check(tid, st.st_ino, 1) == 1)
-			goto skip_file;
+		if (INFO_GTE(DUET, 1))
+			rprintf(FINFO, "duet: checking %s (ino %lu)\n", fname,
+				st.st_ino);
+
+		if (duet_check(tid, st.st_ino, 1) == 1) {
+			if (INFO_GTE(DUET, 1))
+				rprintf(FINFO, "duet: skipping %s (ino %lu)\n",
+					fname, st.st_ino);
+			free_sums(s);
+			close(fd);
+			if (protocol_version >= 30)
+				send_msg_int(MSG_NO_SEND, ndx);
+			continue;
+		}
 
 		if (INFO_GTE(DUET, 1))
-			rprintf(FINFO, "duet: sending %s (ino %lu), ndx %d\n",
-				fname, st.st_ino, ndx);
+			rprintf(FINFO, "duet: sending %s (ino %lu)\n", fname,
+				st.st_ino);
 #endif /* HAVE_DUET */
 
 		if (st.st_size) {
@@ -446,7 +465,14 @@ start:
 			rprintf(FERROR, "duet: failed to mark %s (ino %lu)\n",
 				fname, st.st_ino);
 
-skip_file:
+		if (file->flags & FLAG_O3) {
+			rprintf(FINFO, "duet: recording %lu bytes sent out of order\n", st.st_size);
+			stats.total_o3_written += st.st_size;
+		}
+
+		if (INFO_GTE(DUET, 1))
+			rprintf(FINFO, "duet: marked %s (ino %lu)\n", fname,
+				st.st_ino);
 #endif /* HAVE_DUET */
 		close(fd);
 

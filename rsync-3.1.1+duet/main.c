@@ -23,6 +23,9 @@
 #include "rsync.h"
 #include "inums.h"
 #include "io.h"
+#ifdef HAVE_DUET
+#include "duet.h"
+#endif /* HAVE_DUET */
 #if defined CONFIG_LOCALE && defined HAVE_LOCALE_H
 #include <locale.h>
 #endif
@@ -103,6 +106,9 @@ int daemon_over_rsh = 0;
 mode_t orig_umask = 0;
 int batch_gen_fd = -1;
 int sender_keeps_checksum = 0;
+#ifdef HAVE_DUET
+__u8 tid;
+#endif /* HAVE_DUET */
 
 /* There's probably never more than at most 2 outstanding child processes,
  * but set it higher, just in case. */
@@ -125,7 +131,7 @@ struct pid_status {
 static time_t starttime, endtime;
 static int64 total_read, total_written;
 #ifdef HAVE_DUET
-static int64 total_o3_read, total_o3_written;
+static int64 total_o3_written; //total_o3_read
 #endif /* HAVE_DUET */
 
 static void show_malloc_stats(void);
@@ -228,7 +234,7 @@ static void handle_stats(int f)
 	total_read = stats.total_read;
 	total_written = stats.total_written;
 #ifdef HAVE_DUET
-	total_o3_read = stats.total_o3_read;
+	//total_o3_read = stats.total_o3_read;
 	total_o3_written = stats.total_o3_written;
 #endif /* HAVE_DUET */
 
@@ -345,10 +351,10 @@ static void output_summary(void)
 #endif /* HAVE_DUET */
 		rprintf(FINFO,"Total bytes received: %s\n",
 			human_num(total_read));
-#ifdef HAVE_DUET
-		rprintf(FINFO,"Total bytes received out-of-order: %s\n",
-			human_num(total_o3_read));
-#endif /* HAVE_DUET */
+//#ifdef HAVE_DUET
+//		rprintf(FINFO,"Total bytes received out-of-order: %s\n",
+//			human_num(total_o3_read));
+//#endif /* HAVE_DUET */
 	}
 
 	if (INFO_GTE(STATS, 1)) {
@@ -358,10 +364,12 @@ static void output_summary(void)
 			human_num(total_written), human_num(total_read),
 			human_dnum((total_written + total_read)/(0.5 + (endtime - starttime)), 2));
 #ifdef HAVE_DUET
-		rprintf(FINFO,
+		/* rprintf(FINFO,
 			"out-of-order sent %s bytes  received %s bytes  %s bytes/sec\n",
 			human_num(total_o3_written), human_num(total_o3_read),
-			human_dnum((total_o3_written + total_o3_read)/(0.5 + (endtime - starttime)), 2));
+			human_dnum((total_o3_written + total_o3_read)/(0.5 + (endtime - starttime)), 2)); */
+		rprintf(FINFO,
+			"out-of-order sent %s bytes\n", human_num(total_o3_written));
 #endif /* HAVE_DUET */
 		rprintf(FINFO, "total size is %s  speedup is %s%s\n",
 			human_num(stats.total_size),

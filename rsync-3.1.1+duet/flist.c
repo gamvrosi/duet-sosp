@@ -1959,6 +1959,45 @@ static void send1extra(int f, struct file_struct *file, struct file_list *flist)
 	free(relname_list);
 }
 
+#ifdef HAVE_DUET
+/* Send this one file out of order */
+void send_o3_file(int f, const char *fname)
+{
+	struct file_list *flist;
+	int64 start_write;
+
+//	const char *pathname = F_PATHNAME(file);
+
+	rprintf(FINFO, "send_o3_file starting\n");
+
+	flist = flist_new(0, "send_o3_file");
+	start_write = stats.total_written;
+
+	/* This is what we'll use to populate the flist */
+	write_ndx(f, NDX_FLIST_OFFSET - NDX_O3);
+	flist->parent_ndx = NDX_O3;
+
+//	char *slash;
+//	slash = strrchr(fname, '/');
+//	if (slash)
+//		send_implied_dirs(f, flist, fname, fname, slash, 0, SLASH_ENDING_NAME);
+	send_file_name(f, flist, fname, NULL, FLAG_O3, ALL_FILTERS);
+
+	write_byte(f, 0);
+
+	flist->sorted = flist->files;
+	flist_done_allocating(flist);
+
+	stats.total_o3_written += stats.total_written - start_write;
+	stats.total_written = start_write;
+
+	rprintf(FINFO, "send_o3_file: outputting flist\n");
+	if (DEBUG_GTE(FLIST, 3))
+		output_flist(flist);
+	rprintf(FINFO, "send_o3_file: send_o3_file done\n");
+}
+#endif /* HAVE_DUET */
+
 void send_extra_file_list(int f, int at_least)
 {
 	struct file_list *flist;
@@ -2969,8 +3008,8 @@ static void output_flist(struct file_list *flist)
 	const char *who = who_am_i();
 	int i;
 
-	rprintf(FINFO, "[%s] flist start=%d, used=%d, low=%d, high=%d\n",
-		who, flist->ndx_start, flist->used, flist->low, flist->high);
+	rprintf(FINFO, "[%s] flist start=%d, used=%d, low=%d, high=%d, parent_ndx=%d\n",
+		who, flist->ndx_start, flist->used, flist->low, flist->high, flist->parent_ndx);
 	for (i = 0; i < flist->used; i++) {
 		file = flist->files[i];
 		if ((am_root || am_sender) && uid_ndx) {

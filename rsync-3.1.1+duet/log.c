@@ -878,9 +878,11 @@ void log_exit(int code, const char *file, int line)
 			big_num(stats.total_read),
 			big_num(stats.total_size));
 #ifdef HAVE_DUET
-		rprintf(FLOG,"out of order sent %s bytes  received %s bytes\n",
+		rprintf(FLOG,"out of order sent %s bytes bytes\n",
+			big_num(stats.total_o3_written));
+		/* rprintf(FLOG,"out of order sent %s bytes  received %s bytes\n",
 			big_num(stats.total_o3_written),
-			big_num(stats.total_o3_read));
+			big_num(stats.total_o3_read)); */
 #endif /* HAVE_DUET */
 	} else if (am_server != 2) {
 		const char *name;

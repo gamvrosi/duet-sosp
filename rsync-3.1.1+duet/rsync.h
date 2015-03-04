@@ -83,6 +83,9 @@
 #define FLAG_SKIP_GROUP (1<<10)	/* receiver/generator */
 #define FLAG_TIME_FAILED (1<<11)/* generator */
 #define FLAG_MOD_NSEC (1<<12)	/* sender/receiver/generator */
+#ifdef HAVE_DUET
+#define FLAG_O3 (1<<13)		/* file is being sent out of order */
+#endif /* HAVE_DUET */
 
 /* These flags are passed to functions but not stored. */
 
@@ -250,6 +253,9 @@ enum msgcode {
 #define NDX_DONE -1
 #define NDX_FLIST_EOF -2
 #define NDX_DEL_STATS -3
+#ifdef HAVE_DUET
+#define NDX_O3 -4
+#endif /* HAVE_DUET */
 #define NDX_FLIST_OFFSET -101
 
 /* For calling delete_item() and delete_dir_contents(). */
@@ -903,7 +909,7 @@ struct stats {
 	int64 total_read;
 #ifdef HAVE_DUET
 	int64 total_o3_written;
-	int64 total_o3_read;
+	//int64 total_o3_read;
 #endif /* HAVE_DUET */
 	int64 literal_data;
 	int64 matched_data;

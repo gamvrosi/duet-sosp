@@ -319,6 +319,10 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr,
 	while (1) {
 		ndx = read_ndx(f_in);
 
+#ifdef HAVE_DUET
+		if (INFO_GTE(DUET, 2))
+			rprintf(FINFO, "read_ndx_and_attrs: Received ndx %d\n", ndx);
+#endif /* HAVE_DUET */
 		if (ndx >= 0)
 			break;
 		if (ndx == NDX_DONE)
@@ -348,7 +352,11 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr,
 			continue;
 		}
 		ndx = NDX_FLIST_OFFSET - ndx;
+#ifdef HAVE_DUET
+		if (ndx != NDX_O3 && (ndx < 0 || ndx >= dir_flist->used)) {
+#else
 		if (ndx < 0 || ndx >= dir_flist->used) {
+#endif /* HAVE_DUET */
 			ndx = NDX_FLIST_OFFSET - ndx;
 			rprintf(FERROR,
 				"Invalid dir index: %d (%d - %d) [%s]\n",
@@ -358,6 +366,11 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr,
 			exit_cleanup(RERR_PROTOCOL);
 		}
 
+#ifdef HAVE_DUET
+		if (ndx == NDX_O3 && INFO_GTE(DUET, 2))
+			rprintf(FINFO, "[%s] receiving flist out of order\n",
+				who_am_i());
+#endif /* HAVE_DUET */
 		if (DEBUG_GTE(FLIST, 2)) {
 			rprintf(FINFO, "[%s] receiving flist for dir %d\n",
 				who_am_i(), ndx);
@@ -368,6 +381,12 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr,
 		flist->parent_ndx = ndx;
 		stop_flist_forward();
 	}
+
+#ifdef HAVE_DUET
+	if (INFO_GTE(DUET, 2))
+		rprintf(FINFO, "read_ndx_and_attrs: out of read_loop [%s], ndx %d\n",
+			who_am_i(), ndx);
+#endif /* HAVE_DUET */
 
 	iflags = protocol_version >= 29 ? read_shortint(f_in)
 		   : ITEM_TRANSFER | ITEM_MISSING_DATA;
@@ -706,6 +725,14 @@ struct file_list *flist_for_ndx(int ndx, const char *fatal_error_loc)
 
 	if (!flist && !(flist = first_flist))
 		goto not_found;
+
+#ifdef HAVE_DUET
+	if (ndx == NDX_O3) {
+		if (first_flist->parent_ndx != NDX_O3)
+			goto not_found;
+		return first_flist;
+	}
+#endif /* HAVE_DUET */
 
 	while (ndx < flist->ndx_start-1) {
 		if (flist == first_flist)
