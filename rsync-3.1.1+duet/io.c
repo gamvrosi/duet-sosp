@@ -2186,6 +2186,11 @@ void write_ndx(int f, int32 ndx)
 	int32 diff, cnt = 0;
 	char b[6];
 
+#ifdef HAVE_DUET
+	if (DEBUG_GTE(SEND, 4))
+		rprintf(FINFO, "write_ndx: writing ndx %d\n", ndx);
+#endif /* HAVE_DUET */
+
 	if (protocol_version < 30 || read_batch) {
 		write_int(f, ndx);
 		return;

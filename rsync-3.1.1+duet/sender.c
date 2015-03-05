@@ -176,6 +176,11 @@ static void write_ndx_and_attrs(int f_out, int ndx, int iflags,
 				const char *fname, struct file_struct *file,
 				uchar fnamecmp_type, char *buf, int len)
 {
+#ifdef HAVE_DUET
+	if (DEBUG_GTE(SEND, 4))
+		rprintf(FINFO, "write_ndx_and_attrs: writing ndx %d\n", ndx);
+#endif /* HAVE_DUET */
+
 	write_ndx(f_out, ndx);
 	if (protocol_version < 29)
 		return;
@@ -250,6 +255,11 @@ start:
 					 xname, &xlen);
 		extra_flist_sending_enabled = False;
 
+#ifdef HAVE_DUET
+		if (DEBUG_GTE(SEND, 3))
+			rprintf(FINFO, "send_files: picked ndx %d\n", ndx);
+#endif /* HAVE_DUET */
+
 		if (ndx == NDX_DONE) {
 			if (!am_server && INFO_GTE(PROGRESS, 2) && cur_flist) {
 				set_current_file_index(NULL, 0);
@@ -275,6 +285,12 @@ start:
 
 		if (inc_recurse)
 			send_extra_file_list(f_out, MIN_FILECNT_LOOKAHEAD);
+
+#ifdef HAVE_DUET
+		if (DEBUG_GTE(SEND, 3))
+			rprintf(FINFO, "send_files: sending file with ndx %d\n",
+				ndx);
+#endif /* HAVE_DUET */
 
 		if (ndx - cur_flist->ndx_start >= 0)
 			file = cur_flist->files[ndx - cur_flist->ndx_start];
