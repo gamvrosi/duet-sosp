@@ -94,7 +94,7 @@ again:
 
 		/* Process this hash bucket */
 		hlist_for_each_entry(inode, head, i_hash) {
-			if (inode->i_sb != task->sb)
+			if (inode->i_sb != task->f_sb)
 				continue;
 
 			/* If we haven't seen this inode before, process it. */
@@ -329,7 +329,8 @@ EXPORT_SYMBOL_GPL(duet_mark);
 
 /* Properly allocate and initialize a task struct */
 static int duet_task_init(struct duet_task **task, const char *name,
-	__u8 evtmask, __u32 bitrange, void *owner, unsigned long ino)
+	__u8 evtmask, __u32 bitrange, struct super_block *f_sb,
+	unsigned long p_ino)
 {
 	*task = kzalloc(sizeof(**task), GFP_NOFS);
 	if (!(*task))
@@ -369,8 +370,9 @@ static int duet_task_init(struct duet_task **task, const char *name,
 	}
 
 	(*task)->evtmask = evtmask;
-	(*task)->sb = (struct super_block *)owner;
-	(*task)->ino = ino;
+	(*task)->f_sb = f_sb;
+	(*task)->p_ino = p_ino;
+
 	if (bitrange)
 		(*task)->bitrange = bitrange;
 	else
@@ -411,7 +413,7 @@ void duet_task_dispose(struct duet_task *task)
 }
 
 int duet_register(__u8 *taskid, const char *name, __u8 evtmask, __u32 bitrange,
-	void *owner, unsigned long ino)
+	struct super_block *f_sb, unsigned long p_ino)
 {
 	int ret;
 	struct list_head *last;
@@ -422,7 +424,7 @@ int duet_register(__u8 *taskid, const char *name, __u8 evtmask, __u32 bitrange,
 		return -EINVAL;
 	}
 
-	ret = duet_task_init(&task, name, evtmask, bitrange, owner, ino);
+	ret = duet_task_init(&task, name, evtmask, bitrange, f_sb, p_ino);
 	if (ret) {
 		printk(KERN_ERR "duet: failed to initialize task\n");
 		return ret;

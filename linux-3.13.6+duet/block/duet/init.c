@@ -114,15 +114,15 @@ static int __init duet_init(void)
 	ret = duet_create_chrdev();
 	if (ret)
 		return ret;
-
+#if 0
 	ret = duet_bootstrap();
 	if (ret) {
 		duet_destroy_chrdev();
 		printk(KERN_ERR "duet: failed to init module\n");
 		return ret;
 	}
-
-	printk(KERN_INFO "Duet initialized successfully.\n");
+#endif
+	printk(KERN_INFO "Duet device initialized successfully.\n");
 	return 0;
 }
 

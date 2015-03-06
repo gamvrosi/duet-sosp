@@ -99,7 +99,7 @@ static void __handle_event(struct work_struct *work)
 	rcu_read_lock();
 	list_for_each_entry_rcu(cur, &duet_env.tasks, task_list) {
 		/* Verify that the event refers to the fs we're interested in */
-		if (cur->sb && cur->sb != ework->isb) {
+		if (cur->f_sb && cur->f_sb != ework->isb) {
 			duet_dbg(KERN_INFO "duet: event sb not matching\n");
 			continue;
 		}

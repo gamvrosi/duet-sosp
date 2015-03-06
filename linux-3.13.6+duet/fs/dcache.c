@@ -3437,3 +3437,157 @@ void __init vfs_caches_init(unsigned long mempages)
 	bdev_cache_init();
 	chrdev_init();
 }
+
+#ifdef CONFIG_DUET
+/**
+ * __d_get_path - Get path from target to parent
+ * @tgt: the dentry we're starting from
+ * @par: the dentry we're hoping to hit on our way up
+ * @buffer: pointer to the end of the buffer
+ * @buflen: pointer to buffer length
+ *
+ * The function will first try to write out the pathname without taking any
+ * lock other than the RCU read lock to make sure that dentries won't go away.
+ * It only checks the sequence number of the global rename_lock as any change
+ * in the dentry's d_seq will be preceded by changes in the rename_lock
+ * sequence number. If the sequence number had been changed, it will restart
+ * the whole pathname back-tracing sequence again by taking the rename_lock.
+ * In this case, there is no need to take the RCU read lock as the recursive
+ * parent pointer references will keep the dentry chain alive as long as no
+ * rename operation is performed.
+ */
+static int __d_get_path(struct dentry *tgt, struct dentry *par,
+			char **buffer, int *buflen)
+{
+	struct dentry *dentry;
+	int error = 0;
+	unsigned seq, m_seq = 0;
+	char *bptr;
+	int blen;
+
+	rcu_read_lock();
+restart_mnt:
+	read_seqbegin_or_lock(&mount_lock, &m_seq);
+	seq = 0;
+	rcu_read_lock();
+restart:
+	bptr = *buffer;
+	blen = *buflen;
+	error = 0;
+	dentry = tgt;
+	read_seqbegin_or_lock(&rename_lock, &seq);
+	while (dentry != par) {
+		struct dentry *parent;
+
+		if (IS_ROOT(dentry)) {
+			/*
+			 * Filesystems needing to implement special "root names"
+			 * should do so with ->d_dname()
+			 */
+			if (dentry->d_name.len != 1 ||
+			    dentry->d_name.name[0] != '/') {
+				WARN(1, "Root dentry has weird name <%.*s>\n",
+				     (int) dentry->d_name.len,
+				     dentry->d_name.name);
+			}
+			if (!error)
+				error = 1;
+			break;
+		}
+
+		parent = dentry->d_parent;
+		prefetch(parent);
+		error = prepend_name(&bptr, &blen, &dentry->d_name);
+		if (error)
+			break;
+
+		dentry = parent;
+	}
+	if (!(seq & 1))
+		rcu_read_unlock();
+	if (need_seqretry(&rename_lock, seq)) {
+		seq = 1;
+		goto restart;
+	}
+	done_seqretry(&rename_lock, seq);
+
+	if (!(m_seq & 1))
+		rcu_read_unlock();
+	if (need_seqretry(&mount_lock, m_seq)) {
+		m_seq = 1;
+		goto restart_mnt;
+	}
+	done_seqretry(&mount_lock, m_seq);
+
+	if (error >= 0 && bptr == *buffer) {
+		if (--blen < 0)
+			error = -ENAMETOOLONG;
+		else
+			*--bptr = '/';
+	}
+	*buffer = bptr;
+	*buflen = blen;
+	return error;
+}
+
+/*
+ * We assume that:
+ * 1) The p_inode points to a directory. No hard links, no hard feelings.
+ * 2) You already hold a refcount on both c_inode and p_inode, so we go lockless
+ */
+char *d_get_path(struct inode *cnode, struct inode *pnode, char *buf, int len)
+{
+	char *res;
+	int tlen, ret = 0;
+	struct dentry *alias, *p_dentry, *c_dentry;
+
+	p_dentry = c_dentry = NULL;
+
+	if (!hlist_empty(&pnode->i_dentry)) {
+		//spin_lock(&p_inode->i_lock);
+		hlist_for_each_entry(alias, &pnode->i_dentry, d_alias) {
+			//spin_lock(&alias->d_lock);
+ 			if (!d_unhashed(alias) && !(IS_ROOT(alias) &&
+			    (alias->d_flags & DCACHE_DISCONNECTED))) {
+				p_dentry = alias;
+				break;
+			}
+			//spin_unlock(&alias->d_lock);
+		}
+		//spin_unlock(&inode->i_lock);
+	}
+
+	if (!p_dentry) {
+		printk(KERN_ERR "d_get_path: no dentry for parent inode\n");
+		return NULL;
+	}
+
+	ret = 1;
+	res = NULL;
+	if (!hlist_empty(&cnode->i_dentry)) {
+		//spin_lock(&c_inode->i_lock);
+		hlist_for_each_entry(alias, &cnode->i_dentry, d_alias) {
+			//spin_lock(&alias->d_lock);
+ 			if (!d_unhashed(alias) && !(IS_ROOT(alias) &&
+			    (alias->d_flags & DCACHE_DISCONNECTED))) {
+				c_dentry = alias;
+				res = buf + len;
+				tlen = len;
+				prepend(&res, &tlen, "\0", 1);
+				ret = __d_get_path(c_dentry, p_dentry,
+						&res, &tlen);
+				if (!ret)
+					break;
+			}
+			//spin_unlock(&alias->d_lock);
+		}
+		//spin_unlock(&c_inode->i_lock);
+	}
+
+	if (ret)
+		res = NULL;
+
+	return res;
+}
+EXPORT_SYMBOL(d_get_path);
+#endif /* CONFIG_DUET */

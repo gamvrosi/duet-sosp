@@ -53,8 +53,10 @@ struct duet_task {
 	wait_queue_head_t	cleaner_queue;
 	atomic_t		refcount;
 	__u8			evtmask;	/* Mask of subscribed events */
-	struct super_block	*sb;		/* Filesystem of task (opt) */
-	unsigned long		ino;		/* Parent inode number */
+
+	/* Optional heuristics to filter the events received */
+	struct super_block	*f_sb;		/* Filesystem of task */
+	unsigned long		p_ino;		/* Parent inode number */
 
 	/* BitTree -- progress bitmap tree */
 	__u32			bitrange;	/* range per bmap bit */
@@ -105,6 +107,8 @@ extern duet_hook_t *duet_hook_cache_fp;
 extern unsigned int *duet_i_hash_shift;
 extern struct hlist_head **duet_inode_hashtable;
 extern spinlock_t *duet_inode_hash_lock;
+extern char *d_get_path(struct inode *cnode, struct inode *pnode, char *buf,
+			int len);
 
 /* bmap.c */
 __u32 duet_bmap_count(__u8 *bmap, __u32 byte_len);

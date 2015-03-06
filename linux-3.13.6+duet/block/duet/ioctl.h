@@ -37,6 +37,7 @@
 #define DUET_CHECK		7
 #define DUET_PRINTBIT		8
 #define DUET_PRINTITEM		9
+#define DUET_GETPATH		10
 
 /* We return up to MAX_ITEMS at a time (9b each). */
 struct duet_ioctl_fetch_args {
@@ -68,6 +69,11 @@ struct duet_ioctl_cmd_args {
 		struct {
 			__u32 	itmnum;		/* in */
 			__u64 	itmidx;		/* in */
+		};
+		/* ino -> path args */
+		struct {
+			unsigned long c_ino;	/* in */
+			char cpath[MAX_PATH];	/* out */
 		};
 	};	
 };

@@ -106,6 +106,107 @@ int duet_shutdown(void)
 	return 0;
 }
 
+/* Scan through the page cache, and populate the task's tree. */
+static int find_get_inodes(struct super_block *sb, unsigned long p_ino,
+	unsigned long c_ino, struct inode **p_inode, struct inode **c_inode)
+{
+	unsigned int loop;
+	struct hlist_head *head;
+	struct inode *inode = NULL;
+
+	*p_inode = *c_inode = NULL;
+	for (loop = 0; loop < (1U << *duet_i_hash_shift); loop++) {
+		head = *duet_inode_hashtable + loop;
+		spin_lock(duet_inode_hash_lock);
+
+		/* Process this hash bucket */
+		hlist_for_each_entry(inode, head, i_hash) {
+			if (inode->i_sb != sb)
+				continue;
+
+			spin_lock(&inode->i_lock);
+			if (!*p_inode && inode->i_ino == p_ino) {
+				__iget(inode);
+				*p_inode = inode;
+			}
+
+			if (!*c_inode && inode->i_ino == c_ino) {
+				__iget(inode);
+				*c_inode = inode;
+			}
+			spin_unlock(&inode->i_lock);
+
+			if (*p_inode && *c_inode) {
+				spin_unlock(duet_inode_hash_lock);
+				return 0;
+			}
+		}
+		spin_unlock(duet_inode_hash_lock);
+	}
+
+	/* We shouldn't get here unless we failed */
+	if (*p_inode)
+		iput(*p_inode);
+	if (*c_inode)
+		iput(*c_inode);
+
+	return 1;
+}
+
+static int duet_getpath(__u8 tid, unsigned long c_ino, char *cpath)
+{
+	int len, ret = 0;
+	struct duet_task *task = duet_find_task(tid);
+	struct inode *c_inode, *p_inode;
+	char *p, *buf;
+
+	if (!task) {
+		printk(KERN_ERR "duet_getpath: invalid taskid (%d)\n", tid);
+		return 1;	
+	}
+
+	/* First, we need to find struct inode for child and parent */
+	if (find_get_inodes(task->f_sb, task->p_ino, c_ino,
+			    &p_inode, &c_inode)) {
+		printk(KERN_ERR "duet_getpath: failed to find inodes\n");
+		ret = 1;
+		goto done;
+	}
+	printk(KERN_INFO "duet_getpath: found both inodes!\n");
+
+	/* Now get the path */
+	len = MAX_PATH;
+	buf = kmalloc(MAX_PATH, GFP_NOFS);
+	if (!buf) {
+		printk(KERN_ERR "duet_getpath: failed to allocate path buf\n");
+		ret = 1;
+		goto done_put;
+	}
+
+	p = d_get_path(c_inode, p_inode, buf, len);
+	if (!p) {
+		printk(KERN_ERR "duet_getpath: d_get_path failed\n");
+		ret = 1;
+		goto done_put;
+	}
+
+	p++;
+	memcpy(cpath, p, len - (p - buf) + 1);
+
+	printk(KERN_INFO "duet_getpath: Great! We found %s and copied %s\n",
+		p, cpath);
+	kfree(buf);
+done_put:
+	iput(p_inode);
+	iput(c_inode);
+done:
+	/* decref and wake up cleaner if needed */
+	if (atomic_dec_and_test(&task->refcount))
+		wake_up(&task->cleaner_queue);
+
+	return ret;
+}
+
 static int duet_ioctl_fetch(void __user *arg)
 {
 	struct duet_ioctl_fetch_args *fa;
@@ -182,7 +283,7 @@ static int duet_ioctl_cmd(void __user *arg)
 		break;
 
 	case DUET_REGISTER:
-		/* First, open the path we were given */
+		/* First, open the path we were given, if it's there */
 		old_fs = get_fs();
 		set_fs(KERNEL_DS);
 
@@ -203,11 +304,17 @@ static int duet_ioctl_cmd(void __user *arg)
 			goto reg_put;
 		}
 
+		if (!S_ISDIR(file->f_inode->i_mode)) {
+			printk(KERN_ERR "duet: must register a dir\n");
+			goto reg_put;
+		}
+
 		ca->ret = duet_register(&ca->tid, ca->name, ca->evtmask,
 					ca->bitrange, file->f_inode->i_sb,
 					file->f_inode->i_ino);
 		printk(KERN_INFO "duet: registered under %s, ino %lu\n",
 			ca->path, file->f_inode->i_ino);
+
 reg_put:
 		fput(file);
 reg_close:
@@ -238,6 +345,10 @@ reg_done:
 
 	case DUET_PRINTITEM:
 		ca->ret = duet_print_itmtree(ca->tid);
+		break;
+
+	case DUET_GETPATH:
+		ca->ret = duet_getpath(ca->tid, ca->c_ino, ca->cpath);
 		break;
 
 	default:

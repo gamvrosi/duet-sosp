@@ -46,6 +46,16 @@ static const char * const cmd_debug_printitm_usage[] = {
 	NULL
 };
 
+static const char * const cmd_debug_getpath_usage[] = {
+	"duet debug getpath [tid] [child ino]",
+	"Check that [child ino] falls under the namespace subtree the task has",
+	"registered for, which is expected to be dir. The tid is necessary",
+	"to know which task is requesting this mapping, and which superblock",
+	"and namespace we're referring to.",
+	"",
+	NULL
+};
+
 static int cmd_debug_printbit(int fd, int argc, char **argv)
 {
 	int c, ret=0;
@@ -124,10 +134,49 @@ static int cmd_debug_printitm(int fd, int argc, char **argv)
 	return ret;
 }
 
+static int cmd_debug_getpath(int fd, int argc, char **argv)
+{
+	int ret=0;
+	struct duet_ioctl_cmd_args args;
+
+	memset(&args, 0, sizeof(args));
+	args.cmd_flags = DUET_GETPATH;
+
+	if (argc != 3)
+		usage(cmd_debug_getpath_usage);
+
+	/* Pass the inode numbers in */
+	errno = 0;
+	args.tid = (__u8)strtol(argv[1], NULL, 10);
+	if (errno) {
+		perror("strtol: invalid task ID");
+		usage(cmd_debug_printbit_usage);
+	}
+
+	errno = 0;
+	args.c_ino = (unsigned long)strtol(argv[2], NULL, 10);
+	if (errno) {
+		perror("strtol: invalid child inode");
+		usage(cmd_debug_getpath_usage);
+	}
+
+	ret = ioctl(fd, DUET_IOC_CMD, &args);
+	if (ret < 0) {
+		perror("debug isparent ioctl error");
+		usage(cmd_debug_getpath_usage);
+	}
+
+	fprintf(stdout, "%lu is %spart of the namespace (%s)\n", args.c_ino,
+		args.cpath[0] == '\0' ? "not " : "",
+		args.cpath[0] == '\0' ? "" : args.cpath);
+	return ret;
+}
+
 const struct cmd_group debug_cmd_group = {
 	debug_cmd_group_usage, NULL, {
 		{ "printbit", cmd_debug_printbit, cmd_debug_printbit_usage, NULL, 0 },
 		{ "printitm", cmd_debug_printitm, cmd_debug_printitm_usage, NULL, 0 },
+		{ "getpath", cmd_debug_getpath, cmd_debug_getpath_usage, NULL, 0 },
 	}
 };
 

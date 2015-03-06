@@ -23,6 +23,13 @@
 #include "ioctl.h"
 #include "commands.h"
 
+#define DUET_PAGE_ADDED		(1 << 0)
+#define DUET_PAGE_REMOVED	(1 << 1)
+#define DUET_PAGE_DIRTY		(1 << 2)
+#define DUET_PAGE_FLUSHED	(1 << 3)
+#define DUET_PAGE_MODIFIED	(1 << 4)
+#define DUET_PAGE_EXISTS	(1 << 5)
+
 static const char * const task_cmd_group_usage[] = {
 	"duet task <command> [options]",
 	NULL
@@ -47,17 +54,16 @@ static const char * const cmd_task_fetch_usage[] = {
 };
 
 static const char * const cmd_task_reg_usage[] = {
-	"duet task register [-n name] [-b bitrange] [-m nmodel]",
+	"duet task register [-n name] [-b bitrange] [-m nmodel] [-p path]",
 	"Registers a new task with the currently active framework. The task",
 	"will be assigned an ID, and will be registered under the provided",
 	"name. The bitmaps that keep information on what has been processed",
-	"can be customized to store a given range of numbers per bit. The",
-	"notification model must also be specified as one from:",
-	"'add', 'rem', 'both', 'diff', 'axs'.",
+	"can be customized to store a given range of numbers per bit.",
 	"",
 	"-n     name under which to register the task",
 	"-b     range of items/bytes per bitmap bit",
 	"-m     event mask for task",
+	"-p     path of the root of the namespace of interest",
 	NULL
 };
 
@@ -194,7 +200,7 @@ static int cmd_task_reg(int fd, int argc, char **argv)
 	args.cmd_flags = DUET_REGISTER;
 
 	optind = 1;
-	while ((c = getopt(argc, argv, "n:b:m:")) != -1) {
+	while ((c = getopt(argc, argv, "n:b:m:p:")) != -1) {
 		switch (c) {
 		case 'n':
 			len = strnlen(optarg, MAX_NAME);
@@ -219,6 +225,13 @@ static int cmd_task_reg(int fd, int argc, char **argv)
 			if (errno) {
 				perror("strtol: invalid evtmask");
 				usage(cmd_task_reg_usage);
+			}
+			break;
+		case 'p':
+			errno = 0;
+			memcpy(args.path, optarg, MAX_PATH);
+			if (errno) {
+				perror("memcpy: invalid path");
 			}
 			break;
 		default:
