@@ -206,6 +206,7 @@ again:
 	if (!itret)
 		goto out;
 
+	count = 0;
 	for (i = 0; i < itret; i++) {
 		/* We only process add/remove events, skip processed inodes */
 		if (!(itm[i].state & (DUET_PAGE_ADDED | DUET_PAGE_REMOVED)) ||
@@ -226,7 +227,7 @@ again:
 			count = 0;
 		}
 
-		count = (itm[i].state & DUET_PAGE_ADDED ? 1 : -1);
+		count += (itm[i].state & DUET_PAGE_ADDED ? 1 : -1);
 		last_ino = itm[i].ino;
 	}
 

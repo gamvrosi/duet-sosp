@@ -108,6 +108,7 @@ int batch_gen_fd = -1;
 int sender_keeps_checksum = 0;
 #ifdef HAVE_DUET
 __u8 tid;
+struct inode_tree itree;
 #endif /* HAVE_DUET */
 
 /* There's probably never more than at most 2 outstanding child processes,

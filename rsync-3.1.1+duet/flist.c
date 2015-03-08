@@ -1964,14 +1964,12 @@ static void send1extra(int f, struct file_struct *file, struct file_list *flist)
 void send_o3_file(int f, const char *fname)
 {
 	struct file_list *flist;
-	int64 start_write;
-
-//	const char *pathname = F_PATHNAME(file);
+//	int64 start_write;
 
 	rprintf(FINFO, "send_o3_file starting\n");
 
 	flist = flist_new(0, "send_o3_file");
-	start_write = stats.total_written;
+//	start_write = stats.total_written;
 
 	/* This is what we'll use to populate the flist */
 	write_ndx(f, NDX_FLIST_OFFSET - NDX_O3);
@@ -1988,12 +1986,14 @@ void send_o3_file(int f, const char *fname)
 	flist->sorted = flist->files;
 	flist_done_allocating(flist);
 
-	stats.total_o3_written += stats.total_written - start_write;
-	stats.total_written = start_write;
+//	stats.total_o3_written += stats.total_written - start_write;
+//	stats.total_written = start_write;
 
 	rprintf(FINFO, "send_o3_file: outputting flist\n");
+
 	if (DEBUG_GTE(FLIST, 3))
 		output_flist(flist);
+
 	rprintf(FINFO, "send_o3_file: send_o3_file done\n");
 }
 #endif /* HAVE_DUET */

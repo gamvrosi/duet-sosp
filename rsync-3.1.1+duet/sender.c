@@ -50,6 +50,7 @@ extern int file_old_total;
 #ifdef HAVE_DUET
 extern int out_of_order;
 extern __u8 tid;
+extern struct inode_tree itree;
 #endif /* HAVE_DUET */
 extern struct stats stats;
 extern struct file_list *cur_flist, *first_flist, *dir_flist;
@@ -196,8 +197,6 @@ static void write_ndx_and_attrs(int f_out, int ndx, int iflags,
 #endif
 }
 
-static int test_my_o3 = 0;
-
 void send_files(int f_in, int f_out)
 {
 	int fd = -1;
@@ -227,6 +226,8 @@ void send_files(int f_in, int f_out)
 		return;
 	}
 
+	itree_init(&itree);
+
 	if (duet_register(&tid, "rsync", DUET_PAGE_EXISTS, 1, cwd)) {
 		rprintf(FERROR, "failed to register with Duet\n");
 		return;
@@ -239,11 +240,25 @@ start:
 		rprintf(FINFO, "send_files starting\n");
 
 	while (1) {
-		/* Send a file out of order */
-		if (!test_my_o3) {
-			send_o3_file(f_out, "foodir/dirfoo/abcfoo");
-			test_my_o3++;
+#ifdef HAVE_DUET
+		if (out_of_order) {
+			/* Update the itree */
+			if (itree_update(&itree, tid)) {
+				rprintf(FERROR, "itree_update failed\n");
+				exit_cleanup(RERR_DUET);
+			}
+
+			/* Send a file out of order */
+			if (itree_fetch(&itree, tid, buf)) {
+				rprintf(FERROR, "itree_fetch got us nothing\n");
+				goto start_inorder;
+			}
+
+			send_o3_file(f_out, buf);
 		}
+
+start_inorder:
+#endif /* HAVE_DUET */
 
 		if (inc_recurse) {
 			send_extra_file_list(f_out, MIN_FILECNT_LOOKAHEAD);
@@ -521,6 +536,7 @@ start:
 	if (duet_deregister(tid))
 		rprintf(FERROR, "failed to deregister with Duet\n");
 
+	itree_teardown(&itree);
 end:
 #endif /* HAVE_DUET */
 	match_report();

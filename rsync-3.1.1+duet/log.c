@@ -102,6 +102,9 @@ struct {
 	{ RERR_CMD_KILLED , "remote shell killed" },
 	{ RERR_CMD_RUN    , "remote command could not be run" },
 	{ RERR_CMD_NOTFOUND,"remote command not found" },
+#ifdef HAVE_DUET
+	{ RERR_DUET       , "duet primitive failed" },
+#endif /* HAVE_DUET */
 	{ 0, NULL }
 };
 

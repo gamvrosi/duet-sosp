@@ -47,6 +47,10 @@
 #define RERR_TIMEOUT    30      /* timeout in data send/receive */
 #define RERR_CONTIMEOUT 35      /* timeout waiting for daemon connection */
 
+#ifdef HAVE_DUET
+#define RERR_DUET	40	/* duet primitive failed */
+#endif /* HAVE_DUET */
+
 /* Although it doesn't seem to be specified anywhere,
  * ssh and the shell seem to return these values:
  *

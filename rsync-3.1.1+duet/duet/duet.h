@@ -16,11 +16,12 @@
  * Boston, MA 021110-1307, USA.
  */
 #include <asm/types.h>
+#include <stddef.h>
 #include "rbtree.h"
 
 #define MAX_ITEMS	256	/* From ioctl.h */
 
-#define offsetof(TYPE, MEMBER) ((size_t) &((TYPE *)0)->MEMBER)
+//#define offsetof(TYPE, MEMBER) ((size_t) &((TYPE *)0)->MEMBER)
 #define container_of(ptr, type, member) ({				\
 		const typeof( ((type *)0)->member  ) *__mptr = (ptr);	\
 		(type *)( (char *)__mptr - offsetof(type,member)  ); })
@@ -70,6 +71,12 @@ struct inode_tree {
 	/* scratch space for fetched items */
 	struct duet_item itm[256];
 };
+
+/* InodeTree interface functions */
+void itree_init(struct inode_tree *itree);
+int itree_update(struct inode_tree *itree, __u8 taskid);
+int itree_fetch(struct inode_tree *itree, __u8 taskid, char *path);
+void itree_teardown(struct inode_tree *itree);
 
 int duet_register(__u8 *tid, const char *name, __u32 bitrange, __u8 evtmask,
 		const char *path);
