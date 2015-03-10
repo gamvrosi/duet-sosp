@@ -183,7 +183,7 @@ static int cmd_task_list(int fd, int argc, char **argv)
 		if (!args.tid[i])
 			break;
 
-		fprintf(stdout, "%2d\t%9s\t%9u\t%10u\n",
+		fprintf(stdout, "%2d\t%9s\t%9u\t%9u\n",
 			args.tid[i], args.tnames[i], args.bitrange[i],
 			args.evtmask[i]);
 	}
@@ -455,7 +455,7 @@ static int cmd_task_check(int fd, int argc, char **argv)
 
 	fprintf(stdout, "Blocks [%llu, %llu] in task #%d were %sset.\n",
 		args.itmidx, args.itmidx + args.itmnum, args.tid,
-		args.ret ? "not " : " ");
+		args.ret ? "" : "not ");
 	return ret;
 }
 

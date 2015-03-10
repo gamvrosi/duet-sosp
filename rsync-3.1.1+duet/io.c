@@ -208,7 +208,7 @@ static void check_timeout(BOOL allow_keepalive, int keepalive_flags)
  * There is another case for older protocol versions (< 24) where the module
  * listing was not terminated, so we must ignore an EOF error in that case and
  * exit.  In this situation, kluge_around_eof will be > 0. */
-static NORETURN void whine_about_eof(BOOL allow_kluge)
+static NORETURN void whine_about_eof(BOOL allow_kluge, const char *msg)
 {
 	if (kluge_around_eof && allow_kluge) {
 		int i;
@@ -220,8 +220,8 @@ static NORETURN void whine_about_eof(BOOL allow_kluge)
 	}
 
 	rprintf(FERROR, RSYNC_NAME ": connection unexpectedly closed "
-		"(%s bytes received so far) [%s]\n",
-		big_num(stats.total_read), who_am_i());
+		"(%s bytes received so far) [%s] -- %s\n",
+		big_num(stats.total_read), who_am_i(), msg);
 
 	exit_cleanup(RERR_STREAMIO);
 }
@@ -707,7 +707,7 @@ static char *perform_io(size_t needed, int flags)
 				if (kluge_around_eof == 2)
 					exit_cleanup(0);
 				if (iobuf.in_fd == -2)
-					whine_about_eof(True);
+					whine_about_eof(True, "PIO_NEED_INPUT");
 				rprintf(FERROR, "error in perform_io: no fd for input.\n");
 				exit_cleanup(RERR_PROTOCOL);
 			case PIO_NEED_OUTROOM:
@@ -715,7 +715,7 @@ static char *perform_io(size_t needed, int flags)
 				msgs2stderr = 1;
 				drain_multiplex_messages();
 				if (iobuf.out_fd == -2)
-					whine_about_eof(True);
+					whine_about_eof(True, "PIO_NEED_MSGROOM");
 				rprintf(FERROR, "error in perform_io: no fd for output.\n");
 				exit_cleanup(RERR_PROTOCOL);
 			default:
@@ -1678,13 +1678,13 @@ void wait_for_receiver(void)
 				msgdone_cnt++;
 				break;
 #ifdef HAVE_DUET
-			case NDX_O3:
+			case NDX_LIST_O3:
 				flist_receiving_enabled = False;
 				if (DEBUG_GTE(FLIST, 2)) {
-					rprintf(FINFO, "[%s] receiving flist for dir %d\n",
-						who_am_i(), ndx);
+					rprintf(FINFO, "[%s] receiving o3 flist\n",
+						who_am_i());
 				}
-				flist = recv_file_list(iobuf.in_fd);
+				flist = recv_file_list_o3(iobuf.in_fd, 1);
 				flist->parent_ndx = ndx;
 #ifdef SUPPORT_HARD_LINKS
 				if (preserve_hard_links)
@@ -1702,7 +1702,11 @@ void wait_for_receiver(void)
 				rprintf(FINFO, "[%s] receiving flist for dir %d\n",
 					who_am_i(), ndx);
 			}
+#ifdef HAVE_DUET
+			flist = recv_file_list_o3(iobuf.in_fd, 0);
+#else
 			flist = recv_file_list(iobuf.in_fd);
+#endif /* HAVE_DUET */
 			flist->parent_ndx = ndx;
 #ifdef SUPPORT_HARD_LINKS
 			if (preserve_hard_links)
@@ -1830,7 +1834,7 @@ void read_buf(int f, char *buf, size_t len)
 {
 	if (f != iobuf.in_fd) {
 		if (safe_read(f, buf, len) != len)
-			whine_about_eof(False); /* Doesn't return. */
+			whine_about_eof(False, "read_buf"); /* Doesn't return. */
 		goto batch_copy;
 	}
 
@@ -2188,7 +2192,8 @@ void write_ndx(int f, int32 ndx)
 
 #ifdef HAVE_DUET
 	if (DEBUG_GTE(SEND, 4))
-		rprintf(FINFO, "write_ndx: writing ndx %d\n", ndx);
+		rprintf(FINFO, "[%s] write_ndx: writing ndx %d\n",
+			who_am_i(), ndx);
 #endif /* HAVE_DUET */
 
 	if (protocol_version < 30 || read_batch) {

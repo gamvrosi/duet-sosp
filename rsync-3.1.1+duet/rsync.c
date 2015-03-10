@@ -50,6 +50,9 @@ extern int file_old_total;
 extern int keep_dirlinks;
 extern int make_backups;
 extern struct file_list *cur_flist, *first_flist, *dir_flist;
+#ifdef HAVE_DUET
+extern struct file_list *cur_o3_flist, *first_o3_flist;
+#endif /* HAVE_DUET */
 extern struct chmod_mode_struct *daemon_chmod_modes;
 #ifdef ICONV_OPTION
 extern char *iconv_opt;
@@ -321,7 +324,10 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr,
 
 #ifdef HAVE_DUET
 		if (INFO_GTE(DUET, 2))
-			rprintf(FINFO, "read_ndx_and_attrs: Received ndx %d\n", ndx);
+			rprintf(FINFO, "[%s] read_ndx_and_attrs: Received ndx %d\n",
+				who_am_i(), ndx);
+		if (ndx == NDX_O3_DONE)
+			return ndx;
 #endif /* HAVE_DUET */
 		if (ndx >= 0)
 			break;
@@ -353,7 +359,7 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr,
 		}
 		ndx = NDX_FLIST_OFFSET - ndx;
 #ifdef HAVE_DUET
-		if (ndx != NDX_O3 && (ndx < 0 || ndx >= dir_flist->used)) {
+		if (ndx != NDX_LIST_O3 && (ndx < 0 || ndx >= dir_flist->used)) {
 #else
 		if (ndx < 0 || ndx >= dir_flist->used) {
 #endif /* HAVE_DUET */
@@ -367,7 +373,7 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr,
 		}
 
 #ifdef HAVE_DUET
-		if (ndx == NDX_O3 && INFO_GTE(DUET, 2))
+		if (ndx == NDX_LIST_O3 && INFO_GTE(DUET, 2))
 			rprintf(FINFO, "[%s] receiving flist out of order\n",
 				who_am_i());
 #endif /* HAVE_DUET */
@@ -377,7 +383,11 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr,
 		}
 		/* Send all the data we read for this flist to the generator. */
 		start_flist_forward(ndx);
+#ifdef HAVE_DUET
+		flist = recv_file_list_o3(f_in, ndx == NDX_LIST_O3 ? 1 : 0);
+#else
 		flist = recv_file_list(f_in);
+#endif /* HAVE_DUET */
 		flist->parent_ndx = ndx;
 		stop_flist_forward();
 	}
@@ -399,7 +409,11 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr,
 	}
 
 	flist = flist_for_ndx(ndx, "read_ndx_and_attrs");
+#ifdef HAVE_DUET
+	if (flist->parent_ndx != NDX_LIST_O3 && flist != cur_flist) {
+#else
 	if (flist != cur_flist) {
+#endif /* HAVE_DUET */
 		cur_flist = flist;
 		if (am_sender) {
 			file_old_total = cur_flist->used;
@@ -421,7 +435,11 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr,
 	}
 	*len_ptr = len;
 
+#ifdef HAVE_DUET
+	if (flist->parent_ndx != NDX_LIST_O3 && (iflags & ITEM_TRANSFER)) {
+#else
 	if (iflags & ITEM_TRANSFER) {
+#endif /* HAVE_DUET */
 		int i = ndx - cur_flist->ndx_start;
 		if (i < 0 || !S_ISREG(cur_flist->files[i]->mode)) {
 			rprintf(FERROR,
@@ -723,16 +741,35 @@ struct file_list *flist_for_ndx(int ndx, const char *fatal_error_loc)
 {
 	struct file_list *flist = cur_flist;
 
-	if (!flist && !(flist = first_flist))
-		goto not_found;
+	if (DEBUG_GTE(FLIST, 4)) {
+		rprintf(FINFO, "Looking for ndx = %d (%s) [%s]\n",
+			ndx, fatal_error_loc, who_am_i());
+		output_all_flists("flist_for_ndx");
+	}
 
 #ifdef HAVE_DUET
-	if (ndx == NDX_O3) {
-		if (first_flist->parent_ndx != NDX_O3)
-			goto not_found;
-		return first_flist;
+	flist = cur_o3_flist;
+
+	if (!flist && !(flist = first_o3_flist))
+		goto not_o3;
+
+	while (ndx < flist->ndx_start-1) {
+		if (flist == first_o3_flist)
+			goto not_o3;
+		flist = flist->prev;
 	}
+	while (ndx >= flist->ndx_start + flist->used) {
+		if ((flist = flist->next) == first_flist)
+			goto not_o3;
+	}
+	return flist;
+
+  not_o3:
+	flist = cur_flist;
 #endif /* HAVE_DUET */
+
+	if (!flist && !(flist = first_flist))
+		goto not_found;
 
 	while (ndx < flist->ndx_start-1) {
 		if (flist == first_flist)

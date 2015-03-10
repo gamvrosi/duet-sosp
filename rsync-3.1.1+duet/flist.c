@@ -93,6 +93,9 @@ int checksum_len;
 dev_t filesystem_dev; /* used to implement -x */
 
 struct file_list *cur_flist, *first_flist, *dir_flist;
+#ifdef HAVE_DUET
+struct file_list *cur_o3_flist, *first_o3_flist;
+#endif /* HAVE_DUET */
 int send_dir_ndx = -1, send_dir_depth = -1;
 int flist_cnt = 0; /* how many (non-tmp) file list objects exist */
 int file_total = 0; /* total of all active items over all file-lists */
@@ -129,7 +132,46 @@ static char empty_sum[MAX_DIGEST_LEN];
 static int flist_count_offset; /* for --delete --progress */
 
 static void flist_sort_and_clean(struct file_list *flist, int strip_root);
-static void output_flist(struct file_list *flist);
+//static
+void output_flist(struct file_list *flist);
+
+void output_all_flists(const char *msg)
+{
+	struct file_list *cur;
+
+	cur = first_flist;
+#ifdef HAVE_DUET
+	if (first_o3_flist)
+		cur = first_o3_flist;
+#endif /* HAVE_DUET */
+
+	rprintf(FINFO, "[%s] %s: Outputting all file lists\n",
+		who_am_i(), msg);
+
+	while (cur) {
+		output_flist(cur);
+		cur = cur->next;
+	}
+
+#ifdef HAVE_DUET
+	if (first_o3_flist) {
+		rprintf(FINFO, "first_o3_flist is:\n");
+		output_flist(first_o3_flist);
+	}
+
+	if (cur_o3_flist) {
+		rprintf(FINFO, "cur_o3_flist is:\n");
+		output_flist(cur_o3_flist);
+	}
+#endif /* HAVE_DUET */
+	rprintf(FINFO, "first_flist is:\n");
+	output_flist(first_flist);
+
+	rprintf(FINFO, "cur_flist is:\n");
+	output_flist(cur_flist);
+	rprintf(FINFO, "[%s] %s: Done outputting file lists\n",
+		who_am_i(), msg);
+}
 
 void init_flist(void)
 {
@@ -1964,21 +2006,15 @@ static void send1extra(int f, struct file_struct *file, struct file_list *flist)
 void send_o3_file(int f, const char *fname)
 {
 	struct file_list *flist;
-//	int64 start_write;
 
 	rprintf(FINFO, "send_o3_file starting\n");
 
-	flist = flist_new(0, "send_o3_file");
-//	start_write = stats.total_written;
+	flist = flist_new(FLIST_O3, "send_o3_file");
 
 	/* This is what we'll use to populate the flist */
-	write_ndx(f, NDX_FLIST_OFFSET - NDX_O3);
-	flist->parent_ndx = NDX_O3;
+	write_ndx(f, NDX_FLIST_OFFSET - NDX_LIST_O3);
+	flist->parent_ndx = NDX_LIST_O3;
 
-//	char *slash;
-//	slash = strrchr(fname, '/');
-//	if (slash)
-//		send_implied_dirs(f, flist, fname, fname, slash, 0, SLASH_ENDING_NAME);
 	send_file_name(f, flist, fname, NULL, FLAG_O3, ALL_FILTERS);
 
 	write_byte(f, 0);
@@ -1986,13 +2022,13 @@ void send_o3_file(int f, const char *fname)
 	flist->sorted = flist->files;
 	flist_done_allocating(flist);
 
-//	stats.total_o3_written += stats.total_written - start_write;
-//	stats.total_written = start_write;
-
 	rprintf(FINFO, "send_o3_file: outputting flist\n");
 
 	if (DEBUG_GTE(FLIST, 3))
 		output_flist(flist);
+
+	if (DEBUG_GTE(FLIST, 4))
+		output_all_flists("send_o3_file");
 
 	rprintf(FINFO, "send_o3_file: send_o3_file done\n");
 }
@@ -2078,6 +2114,9 @@ void send_extra_file_list(int f, int at_least)
 		if (DEBUG_GTE(FLIST, 3))
 			output_flist(flist);
 
+		if (DEBUG_GTE(FLIST, 4))
+			output_all_flists("send_extra_file_list");
+
 		if (DIR_FIRST_CHILD(dp) >= 0) {
 			send_dir_ndx = DIR_FIRST_CHILD(dp);
 			send_dir_depth++;
@@ -2143,6 +2182,9 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
 #endif
 
 	flist = cur_flist = flist_new(0, "send_file_list");
+#ifdef HAVE_DUET
+	first_o3_flist = cur_o3_flist = NULL;
+#endif /* HAVE_DUET */
 	if (inc_recurse) {
 		dir_flist = flist_new(FLIST_TEMP, "send_file_list");
 		flags |= FLAG_DIVERT_DIRS;
@@ -2444,6 +2486,9 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
 	if (DEBUG_GTE(FLIST, 3))
 		output_flist(flist);
 
+	if (DEBUG_GTE(FLIST, 4))
+		output_all_flists("send_file_list");
+
 	if (DEBUG_GTE(FLIST, 2))
 		rprintf(FINFO, "send_file_list done\n");
 
@@ -2474,7 +2519,11 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
 	return flist;
 }
 
+#ifdef HAVE_DUET
+struct file_list *recv_file_list_o3(int f, int is_o3)
+#else
 struct file_list *recv_file_list(int f)
+#endif /* HAVE_DUET */
 {
 	struct file_list *flist;
 	int dstart, flags;
@@ -2499,7 +2548,12 @@ struct file_list *recv_file_list(int f)
 		init_hard_links();
 #endif
 
+#ifdef HAVE_DUET
+	flist = flist_new(is_o3 ? FLIST_O3 : 0,
+			  is_o3 ? "recv_o3_file_list" : "recv_file_list");
+#else
 	flist = flist_new(0, "recv_file_list");
+#endif /* HAVE_DUET */
 
 	if (inc_recurse) {
 		if (flist->ndx_start == 1)
@@ -2620,6 +2674,9 @@ struct file_list *recv_file_list(int f)
 	if (DEBUG_GTE(FLIST, 3))
 		output_flist(flist);
 
+	if (DEBUG_GTE(FLIST, 4))
+		output_all_flists("recv_file_list");
+
 	if (DEBUG_GTE(FLIST, 2))
 		rprintf(FINFO, "recv_file_list done\n");
 
@@ -2654,7 +2711,11 @@ void recv_additional_file_list(int f)
 			rprintf(FINFO, "[%s] receiving flist for dir %d\n",
 				who_am_i(), ndx);
 		}
+#ifdef HAVE_DUET
+		flist = recv_file_list_o3(f, ndx == NDX_LIST_O3 ? 1 : 0);
+#else
 		flist = recv_file_list(f);
+#endif /* HAVE_DUET */
 		flist->parent_ndx = ndx;
 	}
 }
@@ -2747,6 +2808,12 @@ void clear_file(struct file_struct *file)
 	file->len32 = F_DEPTH(file) = 1;
 }
 
+#ifdef HAVE_DUET
+#define max(a,b) ({ __typeof__ (a) _a = (a); \
+		__typeof__ (b) _b = (b); \
+		_a > _b ? _a : _b;  })
+#endif /* HAVE_DUET */
+
 /* Allocate a new file list. */
 struct file_list *flist_new(int flags, char *msg)
 {
@@ -2778,11 +2845,51 @@ struct file_list *flist_new(int flags, char *msg)
 
 			flist->file_pool = first_flist->file_pool;
 
+#ifdef HAVE_DUET
+			if (!first_o3_flist) {
+				flist->ndx_start = prev->ndx_start + prev->used + 1;
+				flist->flist_num = prev->flist_num + 1;
+			} else {
+				flist->ndx_start = max(prev->ndx_start + prev->used,
+					first_o3_flist->prev->ndx_start +
+					first_o3_flist->prev->used) + 1;
+				flist->flist_num = max(prev->flist_num,
+					first_o3_flist->prev->flist_num) + 1;
+			}
+
+			if (flags & FLIST_O3) {
+				/* Add before first_flist */
+				flist->prev = prev;
+				flist->next = first_flist;
+				first_flist->prev = flist;
+				if (prev->next)
+					prev->next = flist;
+
+				/* If we're alone, make first_o3_flist and
+				 * cur_o3_flist point to us */
+				if (!first_o3_flist)
+					first_o3_flist = flist;
+				if (!cur_o3_flist)
+					cur_o3_flist = flist;
+			} else {
+				while(prev->parent_ndx == NDX_LIST_O3)
+					prev = prev->prev;
+
+				flist->prev = prev;
+				if (first_o3_flist)
+					first_o3_flist->prev = flist;
+				else
+					first_flist->prev = flist;
+				prev->next = flist;
+				flist->next = NULL;
+			}
+#else
 			flist->ndx_start = prev->ndx_start + prev->used + 1;
 			flist->flist_num = prev->flist_num + 1;
 
 			flist->prev = prev;
 			prev->next = first_flist->prev = flist;
+#endif /* HAVE_DUET */
 		}
 		flist->pool_boundary = pool_boundary(flist->file_pool, 0);
 		flist_cnt++;
@@ -2798,14 +2905,27 @@ void flist_free(struct file_list *flist)
 		/* Was FLIST_TEMP dir-list. */
 	} else if (flist == flist->prev) {
 		first_flist = cur_flist = NULL;
+#ifdef HAVE_DUET
+		first_o3_flist = cur_o3_flist = NULL;
+#endif /* HAVE_DUET */
 		file_total = 0;
 		flist_cnt = 0;
 	} else {
 		if (flist == cur_flist)
 			cur_flist = flist->next;
-		if (flist == first_flist)
+#ifdef HAVE_DUET
+		else if (flist == cur_o3_flist)
+			cur_o3_flist = (flist->next == first_flist ?
+					NULL : flist->next);
+#endif /* HAVE_DUET */
+		if (flist == first_flist) {
 			first_flist = first_flist->next;
-		else {
+#ifdef HAVE_DUET
+		} else if (flist == first_o3_flist) {
+			first_o3_flist = (first_o3_flist->next == first_flist ?
+					NULL : first_o3_flist->next);
+#endif /* HAVE_DUET */
+		} else {
 			flist->prev->next = flist->next;
 			if (!flist->next)
 				flist->next = first_flist;
@@ -3000,7 +3120,8 @@ static void flist_sort_and_clean(struct file_list *flist, int strip_root)
 	}
 }
 
-static void output_flist(struct file_list *flist)
+//static
+void output_flist(struct file_list *flist)
 {
 	char uidbuf[16], gidbuf[16], depthbuf[16];
 	struct file_struct *file;

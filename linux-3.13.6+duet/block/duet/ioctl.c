@@ -172,7 +172,6 @@ static int duet_getpath(__u8 tid, unsigned long c_ino, char *cpath)
 		ret = 1;
 		goto done;
 	}
-	printk(KERN_INFO "duet_getpath: found both inodes!\n");
 
 	/* Now get the path */
 	len = MAX_PATH;
@@ -185,16 +184,14 @@ static int duet_getpath(__u8 tid, unsigned long c_ino, char *cpath)
 
 	p = d_get_path(c_inode, p_inode, buf, len);
 	if (!p) {
-		printk(KERN_ERR "duet_getpath: d_get_path failed\n");
-		ret = 1;
-		goto done_put;
+		printk(KERN_INFO "duet_getpath: no path found\n");
+		ret = 0;
+		cpath[0] = '\0';
+	} else {
+		p++;
+		memcpy(cpath, p, len - (p - buf) + 1);
 	}
 
-	p++;
-	memcpy(cpath, p, len - (p - buf) + 1);
-
-	printk(KERN_INFO "duet_getpath: Great! We found %s and copied %s\n",
-		p, cpath);
 	kfree(buf);
 done_put:
 	iput(p_inode);

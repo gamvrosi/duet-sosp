@@ -60,7 +60,6 @@ static int process_inode(struct duet_task *task, struct inode *inode)
 		if (unlikely(!page))
 			continue;
 
-		//lock_page(page);
 		spin_lock(&task->itm_lock);
 		state = DUET_PAGE_ADDED;
 		if (PageDirty(page))
@@ -68,7 +67,6 @@ static int process_inode(struct duet_task *task, struct inode *inode)
 		state &= task->evtmask;
 		itmtree_insert(task, inode->i_ino, page->index, state, 1);
 		spin_unlock(&task->itm_lock);
-		//unlock_page(page);
 	}
 	rcu_read_unlock();
 

@@ -18,6 +18,8 @@
  * with this program; if not, visit the http://fsf.org website.
  */
 
+#include "config.h"
+
 #define False 0
 #define True 1
 
@@ -254,7 +256,8 @@ enum msgcode {
 #define NDX_FLIST_EOF -2
 #define NDX_DEL_STATS -3
 #ifdef HAVE_DUET
-#define NDX_O3 -4
+#define NDX_LIST_O3 -4
+#define NDX_O3_DONE -5
 #endif /* HAVE_DUET */
 #define NDX_FLIST_OFFSET -101
 
@@ -284,8 +287,6 @@ enum delret {
 #define MSK_ACTIVE_RECEIVER 	(1<<1)
 
 #include "errcode.h"
-
-#include "config.h"
 
 /* The default RSYNC_RSH is always set in config.h. */
 
@@ -816,6 +817,9 @@ extern int xattrs_ndx;
 #define SMALL_EXTENT	(128 * 1024)
 
 #define FLIST_TEMP	(1<<1)
+#ifdef HAVE_DUET
+#define FLIST_O3	(1<<2)
+#endif /* HAVE_DUET */
 
 struct file_list {
 	struct file_list *next, *prev;
@@ -909,7 +913,6 @@ struct stats {
 	int64 total_read;
 #ifdef HAVE_DUET
 	int64 total_o3_written;
-	//int64 total_o3_read;
 #endif /* HAVE_DUET */
 	int64 literal_data;
 	int64 matched_data;

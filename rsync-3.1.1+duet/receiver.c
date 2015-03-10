@@ -60,6 +60,9 @@ extern char *partial_dir;
 extern char *basis_dir[MAX_BASIS_DIRS+1];
 extern char sender_file_sum[MAX_DIGEST_LEN];
 extern struct file_list *cur_flist, *first_flist, *dir_flist;
+#ifdef HAVE_DUET
+extern struct file_list *cur_o3_flist, *first_o3_flist;
+#endif /* HAVE_DUET */
 extern filter_rule_list daemon_filter_list;
 
 static struct bitbag *delayed_bits = NULL;
@@ -547,6 +550,13 @@ int recv_files(int f_in, int f_out, char *local_name)
 		/* This call also sets cur_flist. */
 		ndx = read_ndx_and_attrs(f_in, f_out, &iflags, &fnamecmp_type,
 					 xname, &xlen);
+#ifdef HAVE_DUET
+		if (ndx == NDX_O3_DONE && first_o3_flist) {
+			flist_free(first_o3_flist);
+			if (first_o3_flist)
+				continue;
+		}
+#endif /* HAVE_DUET */
 		if (ndx == NDX_DONE) {
 			if (!am_server && INFO_GTE(PROGRESS, 2) && cur_flist) {
 				set_current_file_index(NULL, 0);
@@ -574,10 +584,24 @@ int recv_files(int f_in, int f_out, char *local_name)
 			continue;
 		}
 
+#ifdef HAVE_DUET
+		if (DEBUG_GTE(RECV, 3))
+			rprintf(FINFO, "recv_files: receiving file with ndx %d\n",
+				ndx);
+
+		/* Look for o3 file, and if there's none we'll fall through */
+		if (cur_o3_flist && cur_o3_flist->ndx_start == ndx) {
+			file = cur_o3_flist->files[0];
+			goto process_file;
+		}
+#endif /* HAVE_DUET */
 		if (ndx - cur_flist->ndx_start >= 0)
 			file = cur_flist->files[ndx - cur_flist->ndx_start];
 		else
 			file = dir_flist->files[cur_flist->parent_ndx];
+#ifdef HAVE_DUET
+process_file:
+#endif /* HAVE_DUET */
 		fname = local_name ? local_name : f_name(file, fbuf);
 
 		if (DEBUG_GTE(RECV, 1))

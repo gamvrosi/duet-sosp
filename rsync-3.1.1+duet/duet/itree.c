@@ -16,10 +16,7 @@
  * Boston, MA 021110-1307, USA.
  */
 #include <stdio.h>
-//#include <unistd.h>
-//#include <string.h>
 #include <stdlib.h>
-//#include <errno.h>
 #include "duet.h"
 
 #define ITREE_DEBUG
@@ -258,6 +255,7 @@ int itree_fetch(struct inode_tree *itree, __u8 taskid, char *path)
 	struct itree_node *itnode;
 	unsigned long ino;
 
+	path[0] = '\0';
 again:
 	if (RB_EMPTY_ROOT(&itree->sorted))
 		return 0;
@@ -283,6 +281,14 @@ again:
 	if (duet_getpath(taskid, ino, path)) {
 		fprintf(stderr, "itree: inode path not found\n");
 		ret = 1;
+	}
+
+	/* If this isn't a child, mark to avoid, and retry */
+	if (path[0] == '\0') {
+		duet_mark(taskid, ino, 1);
+		fprintf(stdout, "itree: marking ino %lu for task %u to avoid\n",
+			ino, taskid);
+		goto again;
 	}
 
 	return ret;

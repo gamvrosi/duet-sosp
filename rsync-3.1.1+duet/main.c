@@ -23,9 +23,6 @@
 #include "rsync.h"
 #include "inums.h"
 #include "io.h"
-#ifdef HAVE_DUET
-#include "duet.h"
-#endif /* HAVE_DUET */
 #if defined CONFIG_LOCALE && defined HAVE_LOCALE_H
 #include <locale.h>
 #endif
@@ -106,10 +103,6 @@ int daemon_over_rsh = 0;
 mode_t orig_umask = 0;
 int batch_gen_fd = -1;
 int sender_keeps_checksum = 0;
-#ifdef HAVE_DUET
-__u8 tid;
-struct inode_tree itree;
-#endif /* HAVE_DUET */
 
 /* There's probably never more than at most 2 outstanding child processes,
  * but set it higher, just in case. */
@@ -132,7 +125,7 @@ struct pid_status {
 static time_t starttime, endtime;
 static int64 total_read, total_written;
 #ifdef HAVE_DUET
-static int64 total_o3_written; //total_o3_read
+static int64 total_o3_written;
 #endif /* HAVE_DUET */
 
 static void show_malloc_stats(void);
@@ -235,7 +228,6 @@ static void handle_stats(int f)
 	total_read = stats.total_read;
 	total_written = stats.total_written;
 #ifdef HAVE_DUET
-	//total_o3_read = stats.total_o3_read;
 	total_o3_written = stats.total_o3_written;
 #endif /* HAVE_DUET */
 
@@ -352,10 +344,6 @@ static void output_summary(void)
 #endif /* HAVE_DUET */
 		rprintf(FINFO,"Total bytes received: %s\n",
 			human_num(total_read));
-//#ifdef HAVE_DUET
-//		rprintf(FINFO,"Total bytes received out-of-order: %s\n",
-//			human_num(total_o3_read));
-//#endif /* HAVE_DUET */
 	}
 
 	if (INFO_GTE(STATS, 1)) {
@@ -365,10 +353,6 @@ static void output_summary(void)
 			human_num(total_written), human_num(total_read),
 			human_dnum((total_written + total_read)/(0.5 + (endtime - starttime)), 2));
 #ifdef HAVE_DUET
-		/* rprintf(FINFO,
-			"out-of-order sent %s bytes  received %s bytes  %s bytes/sec\n",
-			human_num(total_o3_written), human_num(total_o3_read),
-			human_dnum((total_o3_written + total_o3_read)/(0.5 + (endtime - starttime)), 2)); */
 		rprintf(FINFO,
 			"out-of-order sent %s bytes\n", human_num(total_o3_written));
 #endif /* HAVE_DUET */
@@ -1039,7 +1023,11 @@ static void do_server_recv(int f_in, int f_out, int argc, char *argv[])
 		filesfrom_fd = -1;
 	}
 
+#ifdef HAVE_DUET
+	flist = recv_file_list_o3(f_in, 0);
+#else
 	flist = recv_file_list(f_in);
+#endif /* HAVE_DUET */
 	if (!flist) {
 		rprintf(FERROR,"server_recv: recv_file_list error\n");
 		exit_cleanup(RERR_FILESELECT);
@@ -1213,7 +1201,11 @@ int client_run(int f_in, int f_out, pid_t pid, int argc, char *argv[])
 
 	if (write_batch && !am_server)
 		start_write_batch(f_in);
+#ifdef HAVE_DUET
+	flist = recv_file_list_o3(f_in, 0);
+#else
 	flist = recv_file_list(f_in);
+#endif /* HAVE_DUET */
 	if (inc_recurse && file_total == 1)
 		recv_additional_file_list(f_in);
 

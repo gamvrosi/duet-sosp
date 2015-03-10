@@ -3544,17 +3544,13 @@ char *d_get_path(struct inode *cnode, struct inode *pnode, char *buf, int len)
 	p_dentry = c_dentry = NULL;
 
 	if (!hlist_empty(&pnode->i_dentry)) {
-		//spin_lock(&p_inode->i_lock);
 		hlist_for_each_entry(alias, &pnode->i_dentry, d_alias) {
-			//spin_lock(&alias->d_lock);
  			if (!d_unhashed(alias) && !(IS_ROOT(alias) &&
 			    (alias->d_flags & DCACHE_DISCONNECTED))) {
 				p_dentry = alias;
 				break;
 			}
-			//spin_unlock(&alias->d_lock);
 		}
-		//spin_unlock(&inode->i_lock);
 	}
 
 	if (!p_dentry) {
@@ -3565,9 +3561,7 @@ char *d_get_path(struct inode *cnode, struct inode *pnode, char *buf, int len)
 	ret = 1;
 	res = NULL;
 	if (!hlist_empty(&cnode->i_dentry)) {
-		//spin_lock(&c_inode->i_lock);
 		hlist_for_each_entry(alias, &cnode->i_dentry, d_alias) {
-			//spin_lock(&alias->d_lock);
  			if (!d_unhashed(alias) && !(IS_ROOT(alias) &&
 			    (alias->d_flags & DCACHE_DISCONNECTED))) {
 				c_dentry = alias;
@@ -3579,9 +3573,7 @@ char *d_get_path(struct inode *cnode, struct inode *pnode, char *buf, int len)
 				if (!ret)
 					break;
 			}
-			//spin_unlock(&alias->d_lock);
 		}
-		//spin_unlock(&c_inode->i_lock);
 	}
 
 	if (ret)

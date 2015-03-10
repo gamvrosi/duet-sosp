@@ -157,12 +157,7 @@ static int update_itree_one(struct inode_tree *itree, unsigned long ino,
 		/* Ensure we're not already up-to-date */
 		if (cur->inmem == inmem)
 			return 0;
-#if 0
-		duet_dbg(KERN_DEBUG "itree: updating (i%lu,r%u,R%p,L%p,P%lu)\n",
-			cur->ino, cur->inmem, cur->sorted_node.rb_right,
-			cur->sorted_node.rb_left,
-			cur->sorted_node.__rb_parent_color);
-#endif
+
 		/* Remove the old node from the sorted tree; we'll reinsert */
 		rb_erase(&cur->sorted_node, &itree->sorted);
 		RB_CLEAR_NODE(&cur->sorted_node);

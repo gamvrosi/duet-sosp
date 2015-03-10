@@ -167,7 +167,7 @@ int duet_getpath(int taskid, unsigned long ino, char *path)
 	fd = open_dev();
 	if (fd == -1) {
 		fprintf(stderr, "duet: failed to open duet device\n");
-		return -1;
+		return 1;
 	}
 
 	memset(&args, 0, sizeof(args));
@@ -210,11 +210,11 @@ int duet_mark(int taskid, __u64 idx, __u32 num)
 	if (ret < 0)
 		perror("duet: mark ioctl error");
 
-	fprintf(stdout, "Successfully added blocks [%llu, %llu] to task #%d.\n",
-		args.itmidx, args.itmidx + args.itmnum, args.tid);
+	fprintf(stdout, "Successfully added blocks [%llu, %llu] to task #%d (ret = %u).\n",
+		args.itmidx, args.itmidx + args.itmnum, args.tid, args.ret);
 
 	close_dev(fd);
-	return ret;
+	return (ret < 0) ? ret : args.ret;
 }
 
 int duet_unmark(int taskid, __u64 idx, __u32 num)
@@ -238,11 +238,11 @@ int duet_unmark(int taskid, __u64 idx, __u32 num)
 	if (ret < 0)
 		perror("duet: unmark ioctl error");
 
-	fprintf(stdout, "Successfully removed blocks [%llu, %llu] to task #%d.\n",
-		args.itmidx, args.itmidx + args.itmnum, args.tid);
+	fprintf(stdout, "Successfully removed blocks [%llu, %llu] to task #%d (ret = %u).\n",
+		args.itmidx, args.itmidx + args.itmnum, args.tid, args.ret);
 
 	close_dev(fd);
-	return ret;
+	return (ret < 0) ? ret : args.ret;
 }
 
 int duet_check(int taskid, __u64 idx, __u32 num)
@@ -268,10 +268,10 @@ int duet_check(int taskid, __u64 idx, __u32 num)
 
 	fprintf(stdout, "Blocks [%llu, %llu] in task #%d were %sset.\n",
 		args.itmidx, args.itmidx + args.itmnum, args.tid,
-		args.ret ? "not " : " ");
+		args.ret ? "" : "not ");
 
 	close_dev(fd);
-	return ret;
+	return (ret < 0) ? ret : args.ret;
 }
 
 int duet_debug_printbit(int taskid)
