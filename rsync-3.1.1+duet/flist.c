@@ -164,11 +164,15 @@ void output_all_flists(const char *msg)
 		output_flist(cur_o3_flist);
 	}
 #endif /* HAVE_DUET */
-	rprintf(FINFO, "first_flist is:\n");
-	output_flist(first_flist);
+	if (first_flist) {
+		rprintf(FINFO, "first_flist is:\n");
+		output_flist(first_flist);
+	}
 
-	rprintf(FINFO, "cur_flist is:\n");
-	output_flist(cur_flist);
+	if (cur_flist) {
+		rprintf(FINFO, "cur_flist is:\n");
+		output_flist(cur_flist);
+	}
 	rprintf(FINFO, "[%s] %s: Done outputting file lists\n",
 		who_am_i(), msg);
 }
