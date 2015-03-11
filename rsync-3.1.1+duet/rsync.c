@@ -353,7 +353,7 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr,
 		if (ndx == NDX_FLIST_EOF) {
 			flist_eof = 1;
 			if (DEBUG_GTE(FLIST, 3))
-				rprintf(FINFO, "[%s] flist_eof=1\n", who_am_i());
+				rprintf(FINFO, "[%s] read_ndx_and_attrs flist_eof=1\n", who_am_i());
 			write_int(f_out, NDX_FLIST_EOF);
 			continue;
 		}
@@ -384,7 +384,7 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr,
 		/* Send all the data we read for this flist to the generator. */
 		start_flist_forward(ndx);
 #ifdef HAVE_DUET
-		flist = recv_file_list_o3(f_in, ndx == NDX_LIST_O3 ? 1 : 0);
+		flist = ndx == NDX_LIST_O3 ? recv_o3_file_list(f_in) : recv_file_list(f_in);
 #else
 		flist = recv_file_list(f_in);
 #endif /* HAVE_DUET */
@@ -396,10 +396,13 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr,
 	if (INFO_GTE(DUET, 2))
 		rprintf(FINFO, "read_ndx_and_attrs: out of read_loop [%s], ndx %d\n",
 			who_am_i(), ndx);
-#endif /* HAVE_DUET */
 
+	iflags = protocol_version >= 29 ? read_int(f_in)
+		   : ITEM_TRANSFER | ITEM_MISSING_DATA;
+#else
 	iflags = protocol_version >= 29 ? read_shortint(f_in)
 		   : ITEM_TRANSFER | ITEM_MISSING_DATA;
+#endif /* HAVE_DUET */
 
 	/* Support the protocol-29 keep-alive style. */
 	if (protocol_version < 30 && ndx == cur_flist->used && iflags == ITEM_IS_NEW) {
@@ -410,10 +413,16 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr,
 
 	flist = flist_for_ndx(ndx, "read_ndx_and_attrs");
 #ifdef HAVE_DUET
-	if (flist->parent_ndx != NDX_LIST_O3 && flist != cur_flist) {
-#else
-	if (flist != cur_flist) {
+	rprintf(FINFO, "flist_for_ndx picked this\n");
+	output_flist(flist);
+	if (flist->parent_ndx == NDX_LIST_O3) {
+		if (flist != cur_o3_flist)
+			cur_o3_flist = flist;
+		goto cur_set;
+	}
 #endif /* HAVE_DUET */
+
+	if (flist != cur_flist) {
 		cur_flist = flist;
 		if (am_sender) {
 			file_old_total = cur_flist->used;
@@ -422,6 +431,9 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr,
 		}
 	}
 
+#ifdef HAVE_DUET
+cur_set:
+#endif /* HAVE_DUET */
 	if (iflags & ITEM_BASIS_TYPE_FOLLOWS)
 		fnamecmp_type = read_byte(f_in);
 	*type_ptr = fnamecmp_type;
@@ -703,7 +715,7 @@ int finish_transfer(const char *fname, const char *fnametmp,
 
 	/* move tmp file over real file */
 	if (DEBUG_GTE(RECV, 1))
-		rprintf(FINFO, "renaming %s to %s\n", fnametmp, fname);
+		rprintf(FINFO, "[%s] renaming %s to %s\n", who_am_i(), fnametmp, fname);
 	ret = robust_rename(fnametmp, fname, temp_copy_name, file->mode);
 	if (ret < 0) {
 		rsyserr(FERROR_XFER, errno, "%s %s -> \"%s\"",
@@ -750,18 +762,21 @@ struct file_list *flist_for_ndx(int ndx, const char *fatal_error_loc)
 #ifdef HAVE_DUET
 	flist = cur_o3_flist;
 
-	if (!flist && !(flist = first_o3_flist))
-		goto not_o3;
+	if (!flist || flist->ndx_start != ndx) {
+		if (first_o3_flist)
+			flist = first_flist ? first_flist->prev : first_o3_flist->prev;
+		else
+			goto not_o3;
+	}
 
-	while (ndx < flist->ndx_start-1) {
+	while (ndx < flist->ndx_start) {
 		if (flist == first_o3_flist)
 			goto not_o3;
 		flist = flist->prev;
 	}
-	while (ndx >= flist->ndx_start + flist->used) {
-		if ((flist = flist->next) == first_flist)
-			goto not_o3;
-	}
+
+	if (ndx != flist->ndx_start)
+		goto not_o3;
 	return flist;
 
   not_o3:

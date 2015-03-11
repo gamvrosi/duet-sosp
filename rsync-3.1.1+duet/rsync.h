@@ -64,6 +64,9 @@
 #define XMIT_HLINK_FIRST (1<<12)	/* protocols 30 - now (HLINKED files only) */
 #define XMIT_IO_ERROR_ENDLIST (1<<12)	/* protocols 31*- now (w/XMIT_EXTENDED_FLAGS) (also protocol 30 w/'f' compat flag) */
 #define XMIT_MOD_NSEC (1<<13)		/* protocols 31 - now */
+#ifdef HAVE_DUET
+#define XMIT_O3 (1<<14)			/* file is being sent out of order */
+#endif /* HAVE_DUET */
 
 /* These flags are used in the live flist data. */
 
@@ -205,6 +208,10 @@
 #define ITEM_MISSING_DATA (1<<16)	   /* used by log_formatted() */
 #define ITEM_DELETED (1<<17)		   /* used by log_formatted() */
 #define ITEM_MATCHED (1<<18)		   /* used by itemize() */
+#ifdef HAVE_DUET
+/* These are used now that we've extended the iflags length */
+#define ITEM_SKIPPED (1<<19) /* Do not expect any data */
+#endif /* HAVE_DUET */
 
 #define SIGNIFICANT_ITEM_FLAGS (~(\
 	ITEM_BASIS_TYPE_FOLLOWS | ITEM_XNAME_FOLLOWS | ITEM_LOCAL_CHANGE))

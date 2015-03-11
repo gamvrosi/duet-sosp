@@ -39,6 +39,9 @@ extern int maybe_ATTRS_REPORT;
 extern int unsort_ndx;
 extern char *basis_dir[MAX_BASIS_DIRS+1];
 extern struct file_list *cur_flist;
+#ifdef HAVE_DUET
+extern struct file_list *cur_o3_flist;
+#endif /* HAVE_DUET */
 
 #ifdef SUPPORT_HARD_LINKS
 
@@ -325,7 +328,12 @@ int hard_link_check(struct file_struct *file, int ndx, char *fname,
 				F_HL_PREV(file) = F_HL_PREV(prev_file);
 				F_HL_PREV(prev_file) = ndx;
 				file->flags |= FLAG_FILE_SENT;
-				cur_flist->in_progress++;
+#ifdef HAVE_DUET
+				if (file->flags & FLAG_O3)
+					cur_o3_flist->in_progress++;
+				else
+#endif /* HAVE_DUET */
+					cur_flist->in_progress++;
 				if (DEBUG_GTE(HLINK, 2)) {
 					rprintf(FINFO, "hlink for %d (%s,%d): waiting for %d\n",
 						ndx, f_name(file, NULL), gnum, F_HL_PREV(file));

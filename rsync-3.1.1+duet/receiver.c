@@ -539,7 +539,7 @@ int recv_files(int f_in, int f_out, char *local_name)
 	int ndx, recv_ok;
 
 	if (DEBUG_GTE(RECV, 1))
-		rprintf(FINFO, "recv_files(%d) starting\n", cur_flist->used);
+		rprintf(FINFO, "[%s] recv_files(%d) starting\n", who_am_i(), cur_flist->used);
 
 	if (delay_updates)
 		delayed_bits = bitbag_create(cur_flist->used + 1);
@@ -551,10 +551,11 @@ int recv_files(int f_in, int f_out, char *local_name)
 		ndx = read_ndx_and_attrs(f_in, f_out, &iflags, &fnamecmp_type,
 					 xname, &xlen);
 #ifdef HAVE_DUET
-		if (ndx == NDX_O3_DONE && first_o3_flist) {
-			flist_free(first_o3_flist);
+		if (ndx == NDX_O3_DONE) {
 			if (first_o3_flist)
-				continue;
+				flist_free(first_o3_flist);
+			write_int(f_out, NDX_O3_DONE);
+			continue;
 		}
 #endif /* HAVE_DUET */
 		if (ndx == NDX_DONE) {
@@ -577,7 +578,7 @@ int recv_files(int f_in, int f_out, char *local_name)
 			if (++phase > max_phase)
 				break;
 			if (DEBUG_GTE(RECV, 1))
-				rprintf(FINFO, "recv_files phase=%d\n", phase);
+				rprintf(FINFO, "[%s] recv_files phase=%d\n", who_am_i(), phase);
 			if (phase == 2 && delay_updates)
 				handle_delayed_updates(local_name);
 			write_int(f_out, NDX_DONE);
@@ -586,13 +587,16 @@ int recv_files(int f_in, int f_out, char *local_name)
 
 #ifdef HAVE_DUET
 		if (DEBUG_GTE(RECV, 3))
-			rprintf(FINFO, "recv_files: receiving file with ndx %d\n",
-				ndx);
+			rprintf(FINFO, "[%s] recv_files: receiving file with ndx %d\n",
+				who_am_i(), ndx);
 
 		/* Look for o3 file, and if there's none we'll fall through */
 		if (cur_o3_flist && cur_o3_flist->ndx_start == ndx) {
 			file = cur_o3_flist->files[0];
-			goto process_file;
+			if (iflags & ITEM_SKIPPED)
+				goto skip_file;
+			else
+				goto process_file;
 		}
 #endif /* HAVE_DUET */
 		if (ndx - cur_flist->ndx_start >= 0)
@@ -600,12 +604,30 @@ int recv_files(int f_in, int f_out, char *local_name)
 		else
 			file = dir_flist->files[cur_flist->parent_ndx];
 #ifdef HAVE_DUET
+		if (iflags & ITEM_SKIPPED) {
+skip_file:
+			fname = local_name ? local_name : f_name(file, fbuf);
+
+			if (DEBUG_GTE(RECV, 1))
+				rprintf(FINFO, "[%s] recv_files(%s) getting skipped\n", who_am_i(), fname);
+
+#ifdef SUPPORT_XATTRS
+			if (preserve_xattrs && iflags & ITEM_REPORT_XATTR && do_xfers
+			 && !(want_xattr_optim && BITS_SET(iflags, ITEM_XNAME_FOLLOWS|ITEM_LOCAL_CHANGE)))
+				recv_xattr_request(file, f_in);
+#endif
+
+			send_msg_int(MSG_SUCCESS, ndx);
+			file->flags |= FLAG_FILE_SENT;
+			continue;
+		}
+
 process_file:
 #endif /* HAVE_DUET */
 		fname = local_name ? local_name : f_name(file, fbuf);
 
 		if (DEBUG_GTE(RECV, 1))
-			rprintf(FINFO, "recv_files(%s)\n", fname);
+			rprintf(FINFO, "[%s] recv_files(%s)\n", who_am_i(), fname);
 
 #ifdef SUPPORT_XATTRS
 		if (preserve_xattrs && iflags & ITEM_REPORT_XATTR && do_xfers
@@ -971,7 +993,7 @@ process_file:
 		handle_delayed_updates(local_name);
 
 	if (DEBUG_GTE(RECV, 1))
-		rprintf(FINFO,"recv_files finished\n");
+		rprintf(FINFO,"[%s] recv_files finished\n", who_am_i());
 
 	return 0;
 }

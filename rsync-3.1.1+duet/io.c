@@ -766,6 +766,7 @@ static char *perform_io(size_t needed, int flags)
 				len = iobuf.in.size - pos;
 			if ((n = read(iobuf.in_fd, iobuf.in.buf + pos, len)) <= 0) {
 				if (n == 0) {
+					rprintf(FINFO, "[%s] nothing in in_fd\n", who_am_i());
 					/* Signal that input has become invalid. */
 					if (!read_batch || batch_fd < 0 || am_generator)
 						iobuf.in_fd = -2;
@@ -1033,6 +1034,9 @@ static void got_flist_entry_status(enum festatus status, int ndx)
 
 	if (inc_recurse)
 		flist->in_progress--;
+
+	if (DEBUG_GTE(FLIST, 4))
+		output_all_flists("got_flist_entry_status.2");
 
 	switch (status) {
 	case FES_SUCCESS:
@@ -1667,12 +1671,13 @@ void wait_for_receiver(void)
 
 	if (iobuf.raw_input_ends_before) {
 		int ndx = read_int(iobuf.in_fd);
+		rprintf(FINFO, "[%s] wait_for_receiver got ndx = %d\n", who_am_i(), ndx);
 		if (ndx < 0) {
 			switch (ndx) {
 			case NDX_FLIST_EOF:
 				flist_eof = 1;
 				if (DEBUG_GTE(FLIST, 3))
-					rprintf(FINFO, "[%s] flist_eof=1\n", who_am_i());
+					rprintf(FINFO, "[%s] wait_for_receiver flist_eof=1\n", who_am_i());
 				break;
 			case NDX_DONE:
 				msgdone_cnt++;
@@ -1684,13 +1689,14 @@ void wait_for_receiver(void)
 					rprintf(FINFO, "[%s] receiving o3 flist\n",
 						who_am_i());
 				}
-				flist = recv_file_list_o3(iobuf.in_fd, 1);
+				flist = recv_o3_file_list(iobuf.in_fd);
 				flist->parent_ndx = ndx;
 #ifdef SUPPORT_HARD_LINKS
 				if (preserve_hard_links)
 					match_hard_links(flist);
 #endif
 				flist_receiving_enabled = True;
+			case NDX_O3_DONE: /* Nothing to do */
 				break;
 #endif /* HAVE_DUET */
 			default:
@@ -1702,11 +1708,7 @@ void wait_for_receiver(void)
 				rprintf(FINFO, "[%s] receiving flist for dir %d\n",
 					who_am_i(), ndx);
 			}
-#ifdef HAVE_DUET
-			flist = recv_file_list_o3(iobuf.in_fd, 0);
-#else
 			flist = recv_file_list(iobuf.in_fd);
-#endif /* HAVE_DUET */
 			flist->parent_ndx = ndx;
 #ifdef SUPPORT_HARD_LINKS
 			if (preserve_hard_links)

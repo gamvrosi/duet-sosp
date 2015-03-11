@@ -186,7 +186,11 @@ static void write_ndx_and_attrs(int f_out, int ndx, int iflags,
 	write_ndx(f_out, ndx);
 	if (protocol_version < 29)
 		return;
+#if HAVE_DUET
+	write_int(f_out, iflags);
+#else
 	write_shortint(f_out, iflags);
+#endif /* HAVE_DUET */
 	if (iflags & ITEM_BASIS_TYPE_FOLLOWS)
 		write_byte(f_out, fnamecmp_type);
 	if (iflags & ITEM_XNAME_FOLLOWS)
@@ -271,19 +275,22 @@ start_inorder:
 		}
 
 		/* This call also sets cur_flist. */
+		rprintf(FINFO, "send_files: read_ndx_and_attrs\n");
 		ndx = read_ndx_and_attrs(f_in, f_out, &iflags, &fnamecmp_type,
 					 xname, &xlen);
 		extra_flist_sending_enabled = False;
+		rprintf(FINFO, "send_files: read_ndx_and_attrs got %d\n", ndx);
 
 #ifdef HAVE_DUET
-		if (ndx == NDX_O3_DONE && first_o3_flist) {
-			flist_free(first_o3_flist);
+		if (ndx == NDX_O3_DONE)	{
 			if (first_o3_flist)
-				write_ndx(f_out, NDX_O3_DONE);
+				flist_free(first_o3_flist);
+			write_ndx(f_out, NDX_O3_DONE);
 			continue;
 		}
 #endif /* HAVE_DUET */
 		if (ndx == NDX_DONE) {
+			output_all_flists("send_files.NDX_DONE");
 			if (!am_server && INFO_GTE(PROGRESS, 2) && cur_flist) {
 				set_current_file_index(NULL, 0);
 				end_progress(0);
@@ -319,6 +326,9 @@ start_inorder:
 			file = cur_o3_flist->files[0];
 			goto process_file;
 		}
+
+		if (DEBUG_GTE(SEND, 4))
+			output_all_flists("send_files");
 #endif /* HAVE_DUET */
 		if (ndx - cur_flist->ndx_start >= 0)
 			file = cur_flist->files[ndx - cur_flist->ndx_start];
@@ -456,10 +466,16 @@ process_file:
 				if (INFO_GTE(DUET, 1))
 					rprintf(FINFO, "duet: skipping %s (ino %lu)\n",
 						fname, st.st_ino);
-				free_sums(s);
+
+				/* Tell the receiver to not expect any data */
+				iflags |= ITEM_SKIPPED;
+				write_ndx_and_attrs(f_out, ndx, iflags, fname, file,
+							fnamecmp_type, xname, xlen);
 				close(fd);
-				if (protocol_version >= 30)
-					send_msg_int(MSG_NO_SEND, ndx);
+				free_sums(s);
+
+				/* Flag that we actually sent this entry. */
+				file->flags |= FLAG_FILE_SENT;
 				continue;
 			}
 		}
@@ -509,6 +525,7 @@ process_file:
 					full_fname(fname));
 			}
 		}
+
 #ifdef HAVE_DUET
 		if (out_of_order) {
 			if (duet_mark(tid, st.st_ino, 1))
