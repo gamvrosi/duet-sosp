@@ -208,7 +208,7 @@ static void check_timeout(BOOL allow_keepalive, int keepalive_flags)
  * There is another case for older protocol versions (< 24) where the module
  * listing was not terminated, so we must ignore an EOF error in that case and
  * exit.  In this situation, kluge_around_eof will be > 0. */
-static NORETURN void whine_about_eof(BOOL allow_kluge, const char *msg)
+static NORETURN void whine_about_eof(BOOL allow_kluge)
 {
 	if (kluge_around_eof && allow_kluge) {
 		int i;
@@ -220,8 +220,8 @@ static NORETURN void whine_about_eof(BOOL allow_kluge, const char *msg)
 	}
 
 	rprintf(FERROR, RSYNC_NAME ": connection unexpectedly closed "
-		"(%s bytes received so far) [%s] -- %s\n",
-		big_num(stats.total_read), who_am_i(), msg);
+		"(%s bytes received so far) [%s]\n",
+		big_num(stats.total_read), who_am_i());
 
 	exit_cleanup(RERR_STREAMIO);
 }
@@ -707,7 +707,7 @@ static char *perform_io(size_t needed, int flags)
 				if (kluge_around_eof == 2)
 					exit_cleanup(0);
 				if (iobuf.in_fd == -2)
-					whine_about_eof(True, "PIO_NEED_INPUT");
+					whine_about_eof(True);
 				rprintf(FERROR, "error in perform_io: no fd for input.\n");
 				exit_cleanup(RERR_PROTOCOL);
 			case PIO_NEED_OUTROOM:
@@ -715,7 +715,7 @@ static char *perform_io(size_t needed, int flags)
 				msgs2stderr = 1;
 				drain_multiplex_messages();
 				if (iobuf.out_fd == -2)
-					whine_about_eof(True, "PIO_NEED_MSGROOM");
+					whine_about_eof(True);
 				rprintf(FERROR, "error in perform_io: no fd for output.\n");
 				exit_cleanup(RERR_PROTOCOL);
 			default:
@@ -766,7 +766,6 @@ static char *perform_io(size_t needed, int flags)
 				len = iobuf.in.size - pos;
 			if ((n = read(iobuf.in_fd, iobuf.in.buf + pos, len)) <= 0) {
 				if (n == 0) {
-					rprintf(FINFO, "[%s] nothing in in_fd\n", who_am_i());
 					/* Signal that input has become invalid. */
 					if (!read_batch || batch_fd < 0 || am_generator)
 						iobuf.in_fd = -2;
@@ -1671,13 +1670,15 @@ void wait_for_receiver(void)
 
 	if (iobuf.raw_input_ends_before) {
 		int ndx = read_int(iobuf.in_fd);
-		rprintf(FINFO, "[%s] wait_for_receiver got ndx = %d\n", who_am_i(), ndx);
+		if (INFO_GTE(FLIST, 4))
+			rprintf(FINFO, "[%s] wait_for_receiver got ndx %d\n",
+				who_am_i(), ndx);
 		if (ndx < 0) {
 			switch (ndx) {
 			case NDX_FLIST_EOF:
 				flist_eof = 1;
 				if (DEBUG_GTE(FLIST, 3))
-					rprintf(FINFO, "[%s] wait_for_receiver flist_eof=1\n", who_am_i());
+					rprintf(FINFO, "[%s] flist_eof=1\n", who_am_i());
 				break;
 			case NDX_DONE:
 				msgdone_cnt++;
@@ -1836,7 +1837,7 @@ void read_buf(int f, char *buf, size_t len)
 {
 	if (f != iobuf.in_fd) {
 		if (safe_read(f, buf, len) != len)
-			whine_about_eof(False, "read_buf"); /* Doesn't return. */
+			whine_about_eof(False); /* Doesn't return. */
 		goto batch_copy;
 	}
 

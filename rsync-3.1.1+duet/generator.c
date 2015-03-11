@@ -1733,8 +1733,6 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
 #ifdef SUPPORT_HARD_LINKS
 		if (preserve_hard_links && F_HLINK_NOT_LAST(file)) {
 #ifdef HAVE_DUET
-			rprintf(FINFO, "gen statret != 0 inc progress for %s\n",
-				full_fname(fname));
 			if (file->flags & FLAG_O3)
 				cur_o3_flist->in_progress++;
 			else
@@ -1823,8 +1821,6 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
 #ifdef SUPPORT_HARD_LINKS
 		if (preserve_hard_links && F_HLINK_NOT_LAST(file)) {
 #ifdef HAVE_DUET
-			rprintf(FINFO, "gen pretend_missing inc progress %s\n",
-				full_fname(fnamecmp));
 			if (file->flags & FLAG_O3)
 				cur_o3_flist->in_progress++;
 			else
@@ -1877,8 +1873,6 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
 		increment_active_files(ndx, itemizing, code);
 	if (inc_recurse && (!dry_run || write_batch < 0)) {
 #ifdef HAVE_DUET
-		rprintf(FINFO, "gen incrementing progress for %s (FLAG_O3 %s)\n",
-			fnamecmp, file->flags & FLAG_O3 ? "set" : "not set");
 		if (file->flags & FLAG_O3)
 			cur_o3_flist->in_progress++;
 		else
@@ -2286,11 +2280,9 @@ start_o3:
 			recv_generator(fbuf, fp, ndx, itemizing, code, f_out);
 
 			while (1) {
-				rprintf(FINFO, "check_for_finished_files in o3\n");
 				check_for_finished_files(itemizing, code, 1);
 				if (cur_o3_flist->next || cur_flist || flist_eof)
 					break;
-				rprintf(FINFO, "wait_for_receiver: cur_o3_flist\n");
 				wait_for_receiver();
 			}
 
@@ -2394,7 +2386,6 @@ more_o3:
 #endif /* HAVE_DUET */
 
 	while (1) {
-		rprintf(FINFO, "check_for_finished_files in phase=1\n");
 		check_for_finished_files(itemizing, code, 1);
 #ifdef HAVE_DUET
 		if (cur_o3_flist && cur_o3_flist->next && cur_o3_flist->next != first_flist) {
@@ -2432,7 +2423,6 @@ more_o3:
 
 	/* Read MSG_DONE for the redo phase (and any prior messages). */
 	while (1) {
-		rprintf(FINFO, "check_for_finished_files in phase=2\n");
 		check_for_finished_files(itemizing, code, 0);
 		if (msgdone_cnt > 1)
 			break;

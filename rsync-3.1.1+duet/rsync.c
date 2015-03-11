@@ -323,7 +323,7 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr,
 		ndx = read_ndx(f_in);
 
 #ifdef HAVE_DUET
-		if (INFO_GTE(DUET, 2))
+		if (INFO_GTE(FLIST, 4))
 			rprintf(FINFO, "[%s] read_ndx_and_attrs: Received ndx %d\n",
 				who_am_i(), ndx);
 		if (ndx == NDX_O3_DONE)
@@ -353,7 +353,7 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr,
 		if (ndx == NDX_FLIST_EOF) {
 			flist_eof = 1;
 			if (DEBUG_GTE(FLIST, 3))
-				rprintf(FINFO, "[%s] read_ndx_and_attrs flist_eof=1\n", who_am_i());
+				rprintf(FINFO, "[%s] flist_eof=1\n", who_am_i());
 			write_int(f_out, NDX_FLIST_EOF);
 			continue;
 		}
@@ -372,11 +372,6 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr,
 			exit_cleanup(RERR_PROTOCOL);
 		}
 
-#ifdef HAVE_DUET
-		if (ndx == NDX_LIST_O3 && INFO_GTE(DUET, 2))
-			rprintf(FINFO, "[%s] receiving flist out of order\n",
-				who_am_i());
-#endif /* HAVE_DUET */
 		if (DEBUG_GTE(FLIST, 2)) {
 			rprintf(FINFO, "[%s] receiving flist for dir %d\n",
 				who_am_i(), ndx);
@@ -393,10 +388,6 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr,
 	}
 
 #ifdef HAVE_DUET
-	if (INFO_GTE(DUET, 2))
-		rprintf(FINFO, "read_ndx_and_attrs: out of read_loop [%s], ndx %d\n",
-			who_am_i(), ndx);
-
 	iflags = protocol_version >= 29 ? read_int(f_in)
 		   : ITEM_TRANSFER | ITEM_MISSING_DATA;
 #else
@@ -413,8 +404,10 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr,
 
 	flist = flist_for_ndx(ndx, "read_ndx_and_attrs");
 #ifdef HAVE_DUET
-	rprintf(FINFO, "flist_for_ndx picked this\n");
-	output_flist(flist);
+	if (INFO_GTE(FLIST, 4)) {
+		rprintf(FINFO, "flist_for_ndx picked this\n");
+		output_flist(flist);
+	}
 	if (flist->parent_ndx == NDX_LIST_O3) {
 		if (flist != cur_o3_flist)
 			cur_o3_flist = flist;
@@ -715,7 +708,7 @@ int finish_transfer(const char *fname, const char *fnametmp,
 
 	/* move tmp file over real file */
 	if (DEBUG_GTE(RECV, 1))
-		rprintf(FINFO, "[%s] renaming %s to %s\n", who_am_i(), fnametmp, fname);
+		rprintf(FINFO, "renaming %s to %s\n", fnametmp, fname);
 	ret = robust_rename(fnametmp, fname, temp_copy_name, file->mode);
 	if (ret < 0) {
 		rsyserr(FERROR_XFER, errno, "%s %s -> \"%s\"",

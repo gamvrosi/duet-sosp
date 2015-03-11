@@ -89,7 +89,7 @@ int duet_register(__u8 *tid, const char *name, __u32 bitrange, __u8 evtmask,
 
 	*tid = args.tid;
 
-	fprintf(stdout, "Task '%s' registered successfully under ID %d.\n",
+	duet_dbg(stdout, "Task '%s' registered successfully under ID %d.\n",
 		args.name, args.tid);
 
 out:
@@ -116,7 +116,7 @@ int duet_deregister(int taskid)
 	if (ret < 0)
 		perror("duet: tasks deregister ioctl error");
 
-	fprintf(stdout, "Task with ID %d deregistered successfully.\n",
+	duet_dbg(stdout, "Task with ID %d deregistered successfully.\n",
 		args.tid);
 
 	close_dev(fd);
@@ -210,7 +210,7 @@ int duet_mark(int taskid, __u64 idx, __u32 num)
 	if (ret < 0)
 		perror("duet: mark ioctl error");
 
-	fprintf(stdout, "Successfully added blocks [%llu, %llu] to task #%d (ret = %u).\n",
+	duet_dbg("Successfully added blocks [%llu, %llu] to task #%d (ret = %u).\n",
 		args.itmidx, args.itmidx + args.itmnum, args.tid, args.ret);
 
 	close_dev(fd);
@@ -238,7 +238,7 @@ int duet_unmark(int taskid, __u64 idx, __u32 num)
 	if (ret < 0)
 		perror("duet: unmark ioctl error");
 
-	fprintf(stdout, "Successfully removed blocks [%llu, %llu] to task #%d (ret = %u).\n",
+	duet_dbg("Successfully removed blocks [%llu, %llu] to task #%d (ret = %u).\n",
 		args.itmidx, args.itmidx + args.itmnum, args.tid, args.ret);
 
 	close_dev(fd);
@@ -266,7 +266,7 @@ int duet_check(int taskid, __u64 idx, __u32 num)
 	if (ret < 0)
 		perror("duet: check ioctl error");
 
-	fprintf(stdout, "Blocks [%llu, %llu] in task #%d were %sset.\n",
+	duet_dbg("Blocks [%llu, %llu] in task #%d were %sset.\n",
 		args.itmidx, args.itmidx + args.itmnum, args.tid,
 		args.ret ? "" : "not ");
 

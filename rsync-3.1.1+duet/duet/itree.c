@@ -19,7 +19,7 @@
 #include <stdlib.h>
 #include "duet.h"
 
-#define ITREE_DEBUG
+//#define ITREE_DEBUG
 
 #ifdef ITREE_DEBUG
 #define itree_dbg(...)	fprintf(stderr, __VA_ARGS__)
@@ -102,9 +102,9 @@ static int update_itree_one(struct inode_tree *itree, unsigned long ino,
 		}
 	}
 
-	fprintf(stderr, "itree: %s inode tree: (i%lu,p%lu) => (i%lu,p%lu)\n",
+	itree_dbg("itree: %s inode tree: (i%lu,p%lu) => (i%lu,p%lu)\n",
 		found ? "updating" : "inserting", found ? cur->ino : 0,
-		found ? cur->inmem : 0, ino, count); //DEBUG
+		found ? cur->inmem : 0, ino, count);
 
 	if (found) {
 		/* Remove the old node from the sorted tree */
@@ -160,9 +160,9 @@ static int update_itree_one(struct inode_tree *itree, unsigned long ino,
 		}
 	}
 
-	fprintf(stderr, "itree: %s sorted tree: (i%lu,p%lu) => (i%lu,p%lu)\n",
+	itree_dbg("itree: %s sorted tree: (i%lu,p%lu) => (i%lu,p%lu)\n",
 		found ? "updating" : "inserting", found ? cur->ino : 0,
-		found ? cur->inmem : 0, itnode->ino, itnode->inmem); //DEBUG
+		found ? cur->inmem : 0, itnode->ino, itnode->inmem);
 
 	if (found) {
 		fprintf(stderr, "itree: node (i%lu,p%lu) already in sorted "
@@ -286,7 +286,7 @@ again:
 	/* If this isn't a child, mark to avoid, and retry */
 	if (path[0] == '\0') {
 		duet_mark(taskid, ino, 1);
-		fprintf(stdout, "itree: marking ino %lu for task %u to avoid\n",
+		itree_dbg("itree: marking ino %lu for task %u to avoid\n",
 			ino, taskid);
 		goto again;
 	}

@@ -26,6 +26,13 @@
 		const typeof( ((type *)0)->member  ) *__mptr = (ptr);	\
 		(type *)( (char *)__mptr - offsetof(type,member)  ); })
 
+//#define DUET_DEBUG
+#ifdef DUET_DEBUG
+#define duet_dbg(...) fprintf(stdout, __VA_ARGS__)
+#else
+#define duet_dbg(...)
+#endif /* DUET_DEBUG */
+
 /*
  * Duet can be either state- or event-based. State-based Duet monitors changes
  * in the page cache, specifically whether a page EXISTS and whether it has
