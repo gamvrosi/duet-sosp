@@ -95,6 +95,7 @@ dev_t filesystem_dev; /* used to implement -x */
 struct file_list *cur_flist, *first_flist, *dir_flist;
 #ifdef HAVE_DUET
 struct file_list *cur_o3_flist, *first_o3_flist;
+int current_o3_files = 0;
 #endif /* HAVE_DUET */
 int send_dir_ndx = -1, send_dir_depth = -1;
 int flist_cnt = 0; /* how many (non-tmp) file list objects exist */
@@ -711,8 +712,11 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
   the_end:
 #endif
 	strlcpy(lastname, fname, MAXPATHLEN);
-
+#ifdef HAVE_DUET
+	if (!(file->flags & FLAG_O3) && (S_ISREG(mode) || S_ISLNK(mode)))
+#else
 	if (S_ISREG(mode) || S_ISLNK(mode))
+#endif /* HAVE_DUET */
 		stats.total_size += F_LENGTH(file);
 }
 
@@ -1177,7 +1181,11 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
 		receive_xattr(f, file);
 #endif
 
+#ifdef HAVE_DUET
+	if (!(file->flags & FLAG_O3) && (S_ISREG(mode) || S_ISLNK(mode)))
+#else
 	if (S_ISREG(mode) || S_ISLNK(mode))
+#endif /* HAVE_DUET */
 		stats.total_size += file_length;
 
 	return file;
@@ -2522,9 +2530,7 @@ struct file_list *recv_o3_file_list(int f)
 {
 	struct file_list *flist;
 	int flags;
-	int64 start_read;
 
-	start_read = stats.total_read;
 	flist = flist_new(FLIST_O3, "recv_o3_file_list");
 
 	while ((flags = read_byte(f)) != 0) {
@@ -2587,9 +2593,6 @@ struct file_list *recv_o3_file_list(int f)
 
 	if (DEBUG_GTE(FLIST, 2))
 		rprintf(FINFO, "recv_o3_file_list done\n");
-
-	stats.flist_size += stats.total_read - start_read;
-	stats.num_files += flist->used;
 
 	return flist;
 }

@@ -51,7 +51,7 @@ extern struct stats stats;
 extern struct file_list *cur_flist, *first_flist, *dir_flist;
 #ifdef HAVE_DUET
 extern struct file_list *cur_o3_flist, *first_o3_flist;
-extern int out_of_order;
+extern int out_of_order, current_o3_files;
 
 __u8 tid;
 struct inode_tree itree;
@@ -473,6 +473,10 @@ process_file:
 				iflags |= ITEM_SKIPPED;
 				write_ndx_and_attrs(f_out, ndx, iflags, fname, file,
 							fnamecmp_type, xname, xlen);
+				stats.xferred_files--;
+				stats.total_transferred_size -= F_LENGTH(file);
+				if (iflags & ITEM_IS_NEW)
+					stats.created_files--;
 				close(fd);
 				free_sums(s);
 
@@ -539,6 +543,7 @@ process_file:
 					rprintf(FINFO, "duet: sending %lu bytes"
 						" out of order\n", st.st_size);
 				stats.total_o3_written += st.st_size;
+				current_o3_files++;
 			}
 
 			if (INFO_GTE(DUET, 1))

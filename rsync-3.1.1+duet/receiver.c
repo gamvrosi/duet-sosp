@@ -62,6 +62,7 @@ extern char sender_file_sum[MAX_DIGEST_LEN];
 extern struct file_list *cur_flist, *first_flist, *dir_flist;
 #ifdef HAVE_DUET
 extern struct file_list *cur_o3_flist, *first_o3_flist;
+extern int current_o3_files;
 #endif /* HAVE_DUET */
 extern filter_rule_list daemon_filter_list;
 
@@ -595,8 +596,10 @@ int recv_files(int f_in, int f_out, char *local_name)
 			file = cur_o3_flist->files[0];
 			if (iflags & ITEM_SKIPPED)
 				goto skip_file;
-			else
+			else {
+				current_o3_files++;
 				goto process_file;
+			}	
 		}
 #endif /* HAVE_DUET */
 		if (ndx - cur_flist->ndx_start >= 0)
