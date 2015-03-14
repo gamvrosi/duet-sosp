@@ -51,7 +51,7 @@ extern struct stats stats;
 extern struct file_list *cur_flist, *first_flist, *dir_flist;
 #ifdef HAVE_DUET
 extern struct file_list *cur_o3_flist, *first_o3_flist;
-extern int out_of_order, current_o3_files;
+extern int out_of_order, current_files;
 
 __u8 tid;
 struct inode_tree itree;
@@ -489,6 +489,7 @@ process_file:
 		if (INFO_GTE(DUET, 1))
 			rprintf(FINFO, "sending %s (ino %lu)\n", fname,
 				st.st_ino);
+		current_files++;
 #endif /* HAVE_DUET */
 
 		if (st.st_size) {
@@ -543,7 +544,6 @@ process_file:
 					rprintf(FINFO, "duet: sending %lu bytes"
 						" out of order\n", st.st_size);
 				stats.total_o3_written += st.st_size;
-				current_o3_files++;
 			}
 
 			if (INFO_GTE(DUET, 1))

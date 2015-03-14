@@ -183,7 +183,10 @@ static int duet_getpath(__u8 tid, unsigned long c_ino, char *cpath)
 	}
 
 	p = d_get_path(c_inode, p_inode, buf, len);
-	if (!p) {
+	if (IS_ERR(p)) {
+		ret = 1;
+		cpath[0] = '\0';
+	} else if (!p) {
 		duet_dbg(KERN_INFO "duet_getpath: no path found\n");
 		ret = 0;
 		cpath[0] = '\0';

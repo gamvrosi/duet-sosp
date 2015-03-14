@@ -802,6 +802,7 @@ AC_MSG_CHECKING([included duet lib])
 AC_MSG_RESULT($srcdir/duet)
 BUILD_DUET='$(duet_OBJS)'
 CFLAGS="-I$srcdir/duet $CFLAGS"
+AC_DEFINE(HAVE_DUET, 1, [Define to 1 if you want to include duet framework support])
 
 AC_CACHE_CHECK([for unsigned char],rsync_cv_SIGNED_CHAR_OK,[
 AC_TRY_COMPILE([],[signed char *s = ""],

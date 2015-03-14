@@ -30,7 +30,7 @@ extern int output_needs_newline;
 extern struct stats stats;
 extern struct file_list *cur_flist;
 #ifdef HAVE_DUET
-extern int current_o3_files;
+extern int current_files;
 #endif /* HAVE_DUET */
 
 #define PROGRESS_HISTORY_SECS 5
@@ -79,9 +79,10 @@ static void rprint_progress(OFF_T ofs, OFF_T size, struct timeval *now,
 			" (xfr#%d, %s-chk=%d/%d)\n",
 			stats.xferred_files, flist_eof ? "to" : "ir",
 #ifdef HAVE_DUET
-			current_o3_files +
-#endif /* HAVE_DUET */
+			stats.num_files - current_files,
+#else
 			stats.num_files - current_file_index - 1,
+#endif /* HAVE_DUET */
 			stats.num_files);
 		if (INFO_GTE(PROGRESS, 2)) {
 			static int last_len = 0;

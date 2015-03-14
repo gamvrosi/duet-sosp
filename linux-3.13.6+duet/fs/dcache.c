@@ -3555,7 +3555,7 @@ char *d_get_path(struct inode *cnode, struct inode *pnode, char *buf, int len)
 
 	if (!p_dentry) {
 		printk(KERN_ERR "d_get_path: no dentry for parent inode\n");
-		return NULL;
+		return ERR_PTR(-ENOENT);
 	}
 
 	ret = 1;

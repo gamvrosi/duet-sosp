@@ -285,9 +285,9 @@ again:
 
 	/* If this isn't a child, mark to avoid, and retry */
 	if (path[0] == '\0') {
-		duet_mark(taskid, ino, 1);
-		itree_dbg("itree: marking ino %lu for task %u to avoid\n",
-			ino, taskid);
+		//duet_mark(taskid, ino, 1);
+		//itree_dbg("itree: marking ino %lu for task %u to avoid\n",
+		//	ino, taskid);
 		goto again;
 	}
 

@@ -95,7 +95,7 @@ dev_t filesystem_dev; /* used to implement -x */
 struct file_list *cur_flist, *first_flist, *dir_flist;
 #ifdef HAVE_DUET
 struct file_list *cur_o3_flist, *first_o3_flist;
-int current_o3_files = 0;
+int current_files = 0;
 #endif /* HAVE_DUET */
 int send_dir_ndx = -1, send_dir_depth = -1;
 int flist_cnt = 0; /* how many (non-tmp) file list objects exist */

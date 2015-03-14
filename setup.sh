@@ -17,7 +17,7 @@ while getopts ":dci" opt; do
 
 		# Install tool dependencies
 		sudo apt-get install uuid-dev libblkid-dev libz-dev liblzo2-dev \
-			libattr1-dev libacl1-dev e2fslibs-dev
+			libattr1-dev libacl1-dev e2fslibs-dev autoconf yodl
 
 		echo "Done processing dependencies. Exiting."
 		exit 0
@@ -41,13 +41,13 @@ while getopts ":dci" opt; do
 
 		# ...and (re)compile the duet tools
 		cd ../duet-progs
-		make clean
+		#make clean
 		make
 
 		# ...and (re)compile rsync
 		cd ../rsync-3.1.1+duet
-		make clean
-		make reconfigure
+		#make clean
+		#make reconfigure
 		make
 
 		cd ..
