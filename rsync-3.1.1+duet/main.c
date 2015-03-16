@@ -336,6 +336,8 @@ static void output_summary(void)
 				"File list transfer time: %s seconds\n",
 				comma_dnum((double)stats.flist_xfertime / 1000, 3));
 		}
+		rprintf(FINFO,"Total runtime: %s seconds\n",
+			comma_dnum((double)stats.total_runtime / 1000, 3));
 		rprintf(FINFO,"Total bytes sent: %s\n",
 			human_num(total_written));
 #ifdef HAVE_DUET
@@ -1113,6 +1115,7 @@ int client_run(int f_in, int f_out, pid_t pid, int argc, char *argv[])
 	struct file_list *flist = NULL;
 	int exit_code = 0, exit_code2 = 0;
 	char *local_name = NULL;
+	struct timeval start_tv, end_tv;
 
 	cleanup_child_pid = pid;
 	if (!read_batch) {
@@ -1134,6 +1137,9 @@ int client_run(int f_in, int f_out, pid_t pid, int argc, char *argv[])
 	set_blocking(STDERR_FILENO);
 
 	if (am_sender) {
+		/* Record start time */
+		gettimeofday(&start_tv, NULL);
+
 		keep_dirlinks = 0; /* Must be disabled on the sender. */
 
 		if (always_checksum
@@ -1174,6 +1180,12 @@ int client_run(int f_in, int f_out, pid_t pid, int argc, char *argv[])
 			io_flush(FULL_FLUSH);
 			wait_process_with_flush(pid, &exit_code);
 		}
+
+		/* Record end time */
+		gettimeofday(&end_tv, NULL);
+		stats.total_runtime = (int64)(end_tv.tv_sec - start_tv.tv_sec) * 1000
+					+ (end_tv.tv_usec - start_tv.tv_usec) / 1000;
+
 		output_summary();
 		io_flush(FULL_FLUSH);
 		exit_cleanup(exit_code);

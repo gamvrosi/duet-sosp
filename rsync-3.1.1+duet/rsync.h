@@ -923,6 +923,7 @@ struct stats {
 #endif /* HAVE_DUET */
 	int64 literal_data;
 	int64 matched_data;
+	int64 total_runtime;
 	int64 flist_buildtime;
 	int64 flist_xfertime;
 	int64 flist_size;
