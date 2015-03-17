@@ -107,14 +107,14 @@ int duet_shutdown(void)
 }
 
 /* Scan through the page cache, and populate the task's tree. */
-static int find_get_inodes(struct super_block *sb, unsigned long p_ino,
-	unsigned long c_ino, struct inode **p_inode, struct inode **c_inode)
+static int find_get_inode(struct super_block *sb, unsigned long c_ino,
+	struct inode **c_inode)
 {
 	unsigned int loop;
 	struct hlist_head *head;
 	struct inode *inode = NULL;
 
-	*p_inode = *c_inode = NULL;
+	*c_inode = NULL;
 	for (loop = 0; loop < (1U << *duet_i_hash_shift); loop++) {
 		head = *duet_inode_hashtable + loop;
 		spin_lock(duet_inode_hash_lock);
@@ -125,31 +125,19 @@ static int find_get_inodes(struct super_block *sb, unsigned long p_ino,
 				continue;
 
 			spin_lock(&inode->i_lock);
-			if (!*p_inode && inode->i_ino == p_ino) {
-				__iget(inode);
-				*p_inode = inode;
-			}
-
 			if (!*c_inode && inode->i_ino == c_ino) {
 				__iget(inode);
 				*c_inode = inode;
-			}
-			spin_unlock(&inode->i_lock);
-
-			if (*p_inode && *c_inode) {
+				spin_unlock(&inode->i_lock);
 				spin_unlock(duet_inode_hash_lock);
 				return 0;
 			}
+			spin_unlock(&inode->i_lock);
 		}
 		spin_unlock(duet_inode_hash_lock);
 	}
 
 	/* We shouldn't get here unless we failed */
-	if (*p_inode)
-		iput(*p_inode);
-	if (*c_inode)
-		iput(*c_inode);
-
 	return 1;
 }
 
@@ -157,7 +145,7 @@ static int duet_getpath(__u8 tid, unsigned long c_ino, char *cpath)
 {
 	int len, ret = 0;
 	struct duet_task *task = duet_find_task(tid);
-	struct inode *c_inode, *p_inode;
+	struct inode *c_inode;
 	char *p, *buf;
 
 	if (!task) {
@@ -165,13 +153,22 @@ static int duet_getpath(__u8 tid, unsigned long c_ino, char *cpath)
 		return 1;	
 	}
 
+	if (!task->p_inode) {
+		printk(KERN_ERR "duet_getpath: task was not registered under a parent inode\n");
+		return 1;
+	}
+
 	/* First, we need to find struct inode for child and parent */
-	if (find_get_inodes(task->f_sb, task->p_ino, c_ino,
-			    &p_inode, &c_inode)) {
-		printk(KERN_ERR "duet_getpath: failed to find inodes\n");
+	if (find_get_inode(task->f_sb, c_ino, &c_inode)) {
+		printk(KERN_ERR "duet_getpath: failed to find child inode\n");
 		ret = 1;
 		goto done;
 	}
+
+	printk(KERN_INFO "duet_getpath: parent inode has ino %lu, sb %p\n",
+		task->p_inode->i_ino, task->p_inode->i_sb);
+	printk(KERN_INFO "duet_getpath: child inode has ino %lu, sb %p\n",
+		c_inode->i_ino, c_inode->i_sb);
 
 	/* Now get the path */
 	len = MAX_PATH;
@@ -182,22 +179,23 @@ static int duet_getpath(__u8 tid, unsigned long c_ino, char *cpath)
 		goto done_put;
 	}
 
-	p = d_get_path(c_inode, p_inode, buf, len);
+	p = d_get_path(c_inode, task->p_inode, buf, len);
 	if (IS_ERR(p)) {
+		printk(KERN_INFO "duet_getpath: parent dentry not found\n");
 		ret = 1;
 		cpath[0] = '\0';
 	} else if (!p) {
-		duet_dbg(KERN_INFO "duet_getpath: no path found\n");
+		duet_dbg(KERN_INFO "duet_getpath: no connecting path found\n");
 		ret = 0;
 		cpath[0] = '\0';
 	} else {
+		printk(KERN_INFO "duet_getpath: got %s\n", p);
 		p++;
 		memcpy(cpath, p, len - (p - buf) + 1);
 	}
 
 	kfree(buf);
 done_put:
-	iput(p_inode);
 	iput(c_inode);
 done:
 	/* decref and wake up cleaner if needed */
@@ -311,9 +309,9 @@ static int duet_ioctl_cmd(void __user *arg)
 
 		ca->ret = duet_register(&ca->tid, ca->name, ca->evtmask,
 					ca->bitrange, file->f_inode->i_sb,
-					file->f_inode->i_ino);
-		printk(KERN_INFO "duet: registered under %s, ino %lu\n",
-			ca->path, file->f_inode->i_ino);
+					file->f_inode);
+		printk(KERN_INFO "duet: registered under %s, ino %lu, sb %p\n",
+			ca->path, file->f_inode->i_ino, file->f_inode->i_sb);
 
 reg_put:
 		fput(file);

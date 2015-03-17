@@ -757,15 +757,15 @@ struct file_list *flist_for_ndx(int ndx, const char *fatal_error_loc)
 
 	if (!flist || flist->ndx_start != ndx) {
 		if (first_o3_flist)
-			flist = first_flist ? first_flist->prev : first_o3_flist->prev;
+			flist = first_o3_flist;
 		else
 			goto not_o3;
 	}
 
-	while (ndx < flist->ndx_start) {
-		if (flist == first_o3_flist)
+	while (ndx > flist->ndx_start) {
+		if (flist->next == first_flist || !flist->next)
 			goto not_o3;
-		flist = flist->prev;
+		flist = flist->next;
 	}
 
 	if (ndx != flist->ndx_start)

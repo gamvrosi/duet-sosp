@@ -182,18 +182,12 @@ static int update_itree_one(struct inode_tree *itree, unsigned long ino,
 /* Process all pending page events for given task, and update the inode tree */
 int itree_update(struct inode_tree *itree, __u8 taskid)
 {
-	int i, itret, ret=0;
-	struct duet_item *itm;
+	int i, itret, ret=0, last_was_processed = 0;
 	unsigned long count, last_ino = 0;
-
-	itm = calloc(MAX_ITEMS, sizeof(struct duet_item));
-	if (!itm) {
-		fprintf(stderr, "itree: failed to allocate item buffer\n");
-		return 1;
-	}
+	struct duet_item *buf = itree->buf;
 
 again:
-	if (duet_fetch(taskid, MAX_ITEMS, itm, &itret)) {
+	if (duet_fetch(taskid, MAX_ITEMS, buf, &itret)) {
 		fprintf(stderr, "itree: duet_fetch failed\n");
 		ret = 1;
 		goto out;
@@ -206,29 +200,29 @@ again:
 	count = 0;
 	for (i = 0; i < itret; i++) {
 		/* We only process add/remove events, skip processed inodes */
-		if (!(itm[i].state & (DUET_PAGE_ADDED | DUET_PAGE_REMOVED)) ||
-		    duet_check(taskid, itm[i].ino, 1) == 1)
+		if (!(buf[i].state & (DUET_PAGE_ADDED | DUET_PAGE_REMOVED)))
 			continue;
 
 		itree_dbg("itree: ino=%lu, evt=%s\n", itm[i].ino,
 			itm[i].state & DUET_PAGE_ADDED ? "ADD" : "REM");
 
 		/* Update the trees */
-		if (last_ino != itm[i].ino) {
-			if (last_ino && count &&
+		if (last_ino != buf[i].ino) {
+			if (last_ino && count && !last_was_processed &&
 			    update_itree_one(itree, last_ino, count)) {
 				fprintf(stderr, "itree: failed to update itree node\n");
 				ret = 1;
 				goto out;
 			}
+			last_was_processed = duet_check(taskid, buf[i].ino, 1);
+			last_ino = buf[i].ino;
 			count = 0;
 		}
 
-		count += (itm[i].state & DUET_PAGE_ADDED ? 1 : -1);
-		last_ino = itm[i].ino;
+		count += (buf[i].state & DUET_PAGE_ADDED ? 1 : -1);
 	}
 
-	if (count && update_itree_one(itree, last_ino, count)) {
+	if (count && !last_was_processed && update_itree_one(itree, last_ino, count)) {
 		fprintf(stderr, "itree: failed to update itree node\n");
 		ret = 1;
 		goto out;
@@ -238,7 +232,6 @@ again:
 	if (itret == MAX_ITEMS)
 		goto again;
 out:
-	free(itm);
 	return ret;
 }
 
@@ -279,8 +272,8 @@ again:
 
 	/* Get the path for this inode */
 	if (duet_getpath(taskid, ino, path)) {
-		fprintf(stderr, "itree: inode path not found\n");
-		ret = 1;
+		//fprintf(stderr, "itree: inode path not found\n");
+		goto again;
 	}
 
 	/* If this isn't a child, mark to avoid, and retry */

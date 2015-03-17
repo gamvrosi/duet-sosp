@@ -22,7 +22,7 @@
 #include "common.h"
 
 #define MAX_TASKS	32
-#define MAX_ITEMS	256
+#define MAX_ITEMS	512
 #define MAX_NAME	128
 #define MAX_PATH	1024
 #define DUET_IOC_MAGIC	0xDE

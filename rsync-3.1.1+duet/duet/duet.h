@@ -19,7 +19,7 @@
 #include <stddef.h>
 #include "rbtree.h"
 
-#define MAX_ITEMS	256	/* From ioctl.h */
+#define MAX_ITEMS	512	/* From ioctl.h */
 
 //#define offsetof(TYPE, MEMBER) ((size_t) &((TYPE *)0)->MEMBER)
 #define container_of(ptr, type, member) ({				\
@@ -76,7 +76,7 @@ struct inode_tree {
 	struct rb_root inodes;
 
 	/* scratch space for fetched items */
-	struct duet_item itm[256];
+	struct duet_item buf[MAX_ITEMS];
 };
 
 /* InodeTree interface functions */
