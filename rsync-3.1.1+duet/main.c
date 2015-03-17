@@ -26,7 +26,11 @@
 #if defined CONFIG_LOCALE && defined HAVE_LOCALE_H
 #include <locale.h>
 #endif
+#ifdef HAVE_DUET
+#include "duet/duet.h"
 
+extern int out_of_order;
+#endif /* HAVE_DUET */
 extern int dry_run;
 extern int list_only;
 extern int io_timeout;
@@ -103,6 +107,10 @@ int daemon_over_rsh = 0;
 mode_t orig_umask = 0;
 int batch_gen_fd = -1;
 int sender_keeps_checksum = 0;
+#ifdef HAVE_DUET
+__u8 tid;
+struct inode_tree itree;
+#endif /* HAVE_DUET */
 
 /* There's probably never more than at most 2 outstanding child processes,
  * but set it higher, just in case. */
@@ -1648,6 +1656,25 @@ int main(int argc,char *argv[])
 		exit_cleanup(RERR_SYNTAX);
 	}
 
+#ifdef HAVE_DUET
+//	rprintf(FINFO, "main got %d arguments\n", argc);
+//	for (int i=0; i<argc; i++)
+//		rprintf(FINFO, "client_run argument %d is %s\n",
+//			i, argv[i]);
+//	return 0;
+
+	if (!out_of_order)
+		goto start;
+
+	itree_init(&itree);
+
+	if (duet_register(&tid, "rsync", 1, DUET_PAGE_EXISTS, argv[0])) {
+		rprintf(FERROR, "failed to register with Duet\n");
+		exit_cleanup(RERR_DUET);
+	}
+start:
+#endif /* HAVE_DUET */
+
 	if (am_server) {
 		set_nonblocking(STDIN_FILENO);
 		set_nonblocking(STDOUT_FILENO);
@@ -1657,6 +1684,24 @@ int main(int argc,char *argv[])
 	}
 
 	ret = start_client(argc, argv);
+
+#ifdef HAVE_DUET
+	if (!out_of_order)
+		goto end;
+
+	if (INFO_GTE(DUET, 1))
+		rprintf(FINFO, "deregistering with DUET\n");
+
+	if (INFO_GTE(DUET, 2) && duet_debug_printbit(tid))
+		rprintf(FERROR, "failed to print BitTree\n");
+
+	if (duet_deregister(tid))
+		rprintf(FERROR, "failed to deregister with Duet\n");
+
+	itree_teardown(&itree);
+end:
+#endif /* HAVE_DUET */
+
 	if (ret == -1)
 		exit_cleanup(RERR_STARTCLIENT);
 	else

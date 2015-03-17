@@ -605,6 +605,10 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
 			xflags |= S_ISDIR(mode) ? XMIT_LONG_NAME : XMIT_TOP_DIR;
 		write_byte(f, xflags);
 	}
+#ifdef HAVE_DUET
+	/* Before anything else, transmit the inode number */
+	write_varlong(f, file->src_ino, 8);
+#endif /* HAVE_DUET */
 	if (xflags & XMIT_SAME_NAME)
 		write_byte(f, l1);
 	if (xflags & XMIT_LONG_NAME)
@@ -747,7 +751,12 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
 	struct file_struct *file;
 	alloc_pool_t *pool;
 	char *bp;
+#ifdef HAVE_DUET
+	int64 src_ino;
 
+	/* First, receive inode number */
+	src_ino = read_varlong(f, 8);
+#endif /* HAVE_DUET */
 	if (xflags & XMIT_SAME_NAME)
 		l1 = read_byte(f);
 
@@ -1047,6 +1056,7 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
 #ifdef HAVE_DUET
 	if (xflags & XMIT_O3)
 		file->flags |= FLAG_O3;
+	file->src_ino = src_ino;
 #endif /* HAVE_DUET */
 	if (S_ISDIR(mode)) {
 		if (basename_len == 1+1 && *basename == '.') /* +1 for '\0' */
@@ -1484,6 +1494,18 @@ static struct file_struct *send_file_name(int f, struct file_list *flist,
 	file = make_file(fname, flist, stp, flags, filter_level);
 	if (!file)
 		return NULL;
+#ifdef HAVE_DUET
+	if (!stp) {
+		STRUCT_STAT st;
+		if (do_stat(fname, &st)) {
+			rsyserr(FERROR_XFER, errno, "do_stat %s failed", fname);
+			return NULL;
+		}
+		file->src_ino = st.st_ino;
+	} else {
+		file->src_ino = stp->st_ino;
+	}
+#endif /* HAVE_DUET */
 
 	if (chmod_modes && !S_ISLNK(file->mode) && file->mode)
 		file->mode = tweak_mode(file->mode, chmod_modes);
@@ -3245,11 +3267,19 @@ void output_flist(struct file_list *flist)
 		} else
 			root = dir = slash = name = trail = "";
 		rprintf(FINFO,
+#ifdef HAVE_DUET
+			"[%s] i=%d %s %s%s%s%s mode=0%o len=%s%s%s flags=%x src_ino=%lu\n",
+#else
 			"[%s] i=%d %s %s%s%s%s mode=0%o len=%s%s%s flags=%x\n",
+#endif /* HAVE_DUET */
 			who, i + flist->ndx_start,
 			root, dir, slash, name, trail,
 			(int)file->mode, comma_num(F_LENGTH(file)),
+#ifdef HAVE_DUET
+			uidbuf, gidbuf, file->flags, file->src_ino);
+#else
 			uidbuf, gidbuf, file->flags);
+#endif /* HAVE_DUET */
 	}
 }
 

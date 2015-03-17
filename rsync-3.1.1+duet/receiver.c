@@ -612,11 +612,11 @@ skip_file:
 			if (DEBUG_GTE(RECV, 1))
 				rprintf(FINFO, "[%s] recv_files(%s) getting skipped\n", who_am_i(), fname);
 
-#ifdef SUPPORT_XATTRS
-			if (preserve_xattrs && iflags & ITEM_REPORT_XATTR && do_xfers
-			 && !(want_xattr_optim && BITS_SET(iflags, ITEM_XNAME_FOLLOWS|ITEM_LOCAL_CHANGE)))
-				recv_xattr_request(file, f_in);
-#endif
+//#ifdef SUPPORT_XATTRS
+//			if (preserve_xattrs && iflags & ITEM_REPORT_XATTR && do_xfers
+//			 && !(want_xattr_optim && BITS_SET(iflags, ITEM_XNAME_FOLLOWS|ITEM_LOCAL_CHANGE)))
+//				recv_xattr_request(file, f_in);
+//#endif
 
 			send_msg_int(MSG_SUCCESS, ndx);
 			file->flags |= FLAG_FILE_SENT;

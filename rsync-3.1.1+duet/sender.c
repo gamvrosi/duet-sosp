@@ -22,7 +22,7 @@
 #include "rsync.h"
 #include "inums.h"
 #ifdef HAVE_DUET
-#include "duet.h"
+#include "duet/duet.h"
 #endif /* HAVE_DUET */
 
 extern int do_xfers;
@@ -52,9 +52,8 @@ extern struct file_list *cur_flist, *first_flist, *dir_flist;
 #ifdef HAVE_DUET
 extern struct file_list *cur_o3_flist, *first_o3_flist;
 extern int out_of_order, current_files;
-
-__u8 tid;
-struct inode_tree itree;
+extern __u8 tid;
+extern struct inode_tree itree;
 #endif /* HAVE_DUET */
 BOOL extra_flist_sending_enabled;
 
@@ -220,25 +219,7 @@ void send_files(int f_in, int f_out)
 	int save_io_error = io_error;
 	int ndx, j;
 #ifdef HAVE_DUET
-	char *cwd, buf[PATH_MAX];
-
-	if (!out_of_order)
-		goto start;
-
-	cwd = getcwd(buf, PATH_MAX);
-	if (!cwd) {
-		rprintf(FERROR, "failed to get current working directory\n");
-		return;
-	}
-
-	itree_init(&itree);
-
-	if (duet_register(&tid, "rsync", 1, DUET_PAGE_EXISTS, cwd)) {
-		rprintf(FERROR, "failed to register with Duet\n");
-		exit_cleanup(RERR_DUET);
-	}
-
-start:
+	char buf[PATH_MAX];
 #endif /* HAVE_DUET */
 
 	if (DEBUG_GTE(SEND, 1))
@@ -352,6 +333,44 @@ process_file:
 		if (DEBUG_GTE(SEND, 1))
 			rprintf(FINFO, "send_files(%d, %s%s%s)\n", ndx, path,slash,fname);
 
+#ifdef HAVE_DUET
+		if (out_of_order) {
+			if (iflags & ITEM_SKIPPED) {
+				if (INFO_GTE(DUET, 1))
+					rprintf(FINFO, "duet: sender skipping %s (ino %lu)\n",
+						fname, file->src_ino);
+
+				/* Tell the receiver to not expect any data */
+				iflags = ITEM_SKIPPED;
+				//write_ndx_and_attrs(f_out, ndx, iflags, fname, file,
+				//			fnamecmp_type, xname, xlen);
+
+				if (DEBUG_GTE(SEND, 4))
+					rprintf(FINFO, "writing skipped ndx %d\n", ndx);
+
+				write_ndx(f_out, ndx);
+				//if (protocol_version < 29)
+				//	return;
+				write_int(f_out, iflags);
+
+				/* Flag that we actually sent this entry. */
+				file->flags |= FLAG_FILE_SENT;
+				continue;
+			}
+
+			if (file->flags & FLAG_O3) {
+				if (INFO_GTE(DUET, 1))
+					rprintf(FINFO, "duet: sending %lu bytes"
+						" out of order\n", st.st_size);
+				stats.total_o3_written += st.st_size;
+			}
+		}
+
+		if (INFO_GTE(DUET, 1))
+			rprintf(FINFO, "sending %s (ino %lu)\n", fname,
+				st.st_ino);
+		current_files++;
+#endif /* HAVE_DUET */
 #ifdef SUPPORT_XATTRS
 		if (preserve_xattrs && iflags & ITEM_REPORT_XATTR && do_xfers
 		 && !(want_xattr_optim && BITS_SET(iflags, ITEM_XNAME_FOLLOWS|ITEM_LOCAL_CHANGE)))
@@ -458,40 +477,6 @@ process_file:
 			exit_cleanup(RERR_FILEIO);
 		}
 
-#ifdef HAVE_DUET
-		if (out_of_order) {
-			if (INFO_GTE(DUET, 1))
-				rprintf(FINFO, "duet: Checking %s (ino %lu)\n", fname,
-					st.st_ino);
-
-			if (duet_check(tid, st.st_ino, 1) == 1) {
-				if (INFO_GTE(DUET, 1))
-					rprintf(FINFO, "duet: Skipping %s (ino %lu)\n",
-						fname, st.st_ino);
-
-				/* Tell the receiver to not expect any data */
-				iflags |= ITEM_SKIPPED;
-				write_ndx_and_attrs(f_out, ndx, iflags, fname, file,
-							fnamecmp_type, xname, xlen);
-				stats.xferred_files--;
-				stats.total_transferred_size -= F_LENGTH(file);
-				if (iflags & ITEM_IS_NEW)
-					stats.created_files--;
-				close(fd);
-				free_sums(s);
-
-				/* Flag that we actually sent this entry. */
-				file->flags |= FLAG_FILE_SENT;
-				continue;
-			}
-		}
-
-		if (INFO_GTE(DUET, 1))
-			rprintf(FINFO, "sending %s (ino %lu)\n", fname,
-				st.st_ino);
-		current_files++;
-#endif /* HAVE_DUET */
-
 		if (st.st_size) {
 			int32 read_size = MAX(s->blength * 3, MAX_MAP_SIZE);
 			mbuf = map_file(fd, st.st_size, read_size, s->blength);
@@ -533,24 +518,6 @@ process_file:
 			}
 		}
 
-#ifdef HAVE_DUET
-		if (out_of_order) {
-			if (duet_mark(tid, st.st_ino, 1))
-				rprintf(FERROR, "duet: failed to mark %s "
-					"(ino %lu)\n", fname, st.st_ino);
-
-			if (file->flags & FLAG_O3) {
-				if (INFO_GTE(DUET, 1))
-					rprintf(FINFO, "duet: sending %lu bytes"
-						" out of order\n", st.st_size);
-				stats.total_o3_written += st.st_size;
-			}
-
-			if (INFO_GTE(DUET, 1))
-				rprintf(FINFO, "duet: Marked %s (ino %lu)\n",
-					 fname,	st.st_ino);
-		}
-#endif /* HAVE_DUET */
 		close(fd);
 
 		free_sums(s);
@@ -569,22 +536,7 @@ process_file:
 
 	if (DEBUG_GTE(SEND, 1))
 		rprintf(FINFO, "send files finished\n");
-#ifdef HAVE_DUET
-	if (!out_of_order)
-		goto end;
 
-	if (INFO_GTE(DUET, 1))
-		rprintf(FINFO, "deregistering with DUET\n");
-
-	if (INFO_GTE(DUET, 2) && duet_debug_printbit(tid))
-		rprintf(FERROR, "failed to print BitTree\n");
-
-	if (duet_deregister(tid))
-		rprintf(FERROR, "failed to deregister with Duet\n");
-
-	itree_teardown(&itree);
-end:
-#endif /* HAVE_DUET */
 	match_report();
 
 	write_ndx(f_out, NDX_DONE);
