@@ -716,6 +716,9 @@ struct file_struct {
 	uint32 len32;		/* Lowest 32 bits of the file's length */
 	uint16 mode;		/* The item's type and permissions */
 	uint16 flags;		/* The FLAG_* bits for this item */
+#ifdef HAVE_DUET
+	int64 src_ino;		/* inode number of file at the sender side */
+#endif /* HAVE_DUET */
 	const char basename[1];	/* The basename (AKA filename) follows */
 };
 
