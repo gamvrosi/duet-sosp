@@ -56,7 +56,7 @@ struct duet_task {
 
 	/* Optional heuristics to filter the events received */
 	struct super_block	*f_sb;		/* Filesystem of task */
-	unsigned long		p_ino;		/* Parent inode number */
+	struct inode		*p_inode;	/* Parent inode */
 
 	/* BitTree -- progress bitmap tree */
 	__u32			bitrange;	/* range per bmap bit */

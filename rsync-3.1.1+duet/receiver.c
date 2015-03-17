@@ -62,7 +62,7 @@ extern char sender_file_sum[MAX_DIGEST_LEN];
 extern struct file_list *cur_flist, *first_flist, *dir_flist;
 #ifdef HAVE_DUET
 extern struct file_list *cur_o3_flist, *first_o3_flist;
-extern int current_files;
+extern int current_files, out_of_order;
 #endif /* HAVE_DUET */
 extern filter_rule_list daemon_filter_list;
 
@@ -211,17 +211,17 @@ int open_tmpfile(char *fnametmp, const char *fname, struct file_struct *file)
 	 * (Thanks to snabb@epipe.fi for pointing this out.) */
 	fd = do_mkstemp(fnametmp, (file->mode|added_perms) & INITACCESSPERMS);
 
-#if 0
+#ifdef HAVE_DUET
 	/* In most cases parent directories will already exist because their
 	 * information should have been previously transferred, but that may
-	 * not be the case with -R */
-	if (fd == -1 && relative_paths && errno == ENOENT
+	 * not be the case with -R, or when we're sending files out of order */
+	if (fd == -1 && (relative_paths || out_of_order) && errno == ENOENT
 	 && make_path(fnametmp, MKP_SKIP_SLASH | MKP_DROP_NAME) == 0) {
 		/* Get back to name with XXXXXX in it. */
 		get_tmpname(fnametmp, fname, False);
 		fd = do_mkstemp(fnametmp, (file->mode|added_perms) & INITACCESSPERMS);
 	}
-#endif
+#endif /* HAVE_DUET */
 
 	if (fd == -1) {
 		rsyserr(FERROR_XFER, errno, "mkstemp %s failed",

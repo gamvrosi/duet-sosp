@@ -3545,8 +3545,8 @@ char *d_get_path(struct inode *cnode, struct inode *pnode, char *buf, int len)
 
 	if (!hlist_empty(&pnode->i_dentry)) {
 		hlist_for_each_entry(alias, &pnode->i_dentry, d_alias) {
- 			if (!d_unhashed(alias) && !(IS_ROOT(alias) &&
-			    (alias->d_flags & DCACHE_DISCONNECTED))) {
+ 			if ((S_ISDIR(pnode->i_mode) || !d_unhashed(alias)) &&
+			    !(IS_ROOT(alias) && (alias->d_flags & DCACHE_DISCONNECTED))) {
 				p_dentry = alias;
 				break;
 			}
@@ -3562,8 +3562,8 @@ char *d_get_path(struct inode *cnode, struct inode *pnode, char *buf, int len)
 	res = NULL;
 	if (!hlist_empty(&cnode->i_dentry)) {
 		hlist_for_each_entry(alias, &cnode->i_dentry, d_alias) {
- 			if (!d_unhashed(alias) && !(IS_ROOT(alias) &&
-			    (alias->d_flags & DCACHE_DISCONNECTED))) {
+ 			if ((S_ISDIR(pnode->i_mode) || !d_unhashed(alias)) &&
+			    !(IS_ROOT(alias) && (alias->d_flags & DCACHE_DISCONNECTED))) {
 				c_dentry = alias;
 				res = buf + len;
 				tlen = len;

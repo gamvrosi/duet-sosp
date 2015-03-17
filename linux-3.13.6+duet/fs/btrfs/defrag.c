@@ -394,7 +394,7 @@ long btrfs_ioctl_defrag_start(struct file *file, void __user *arg_)
 
 	/* Register the task with the Duet framework */
 	if (duet_online() && duet_register(&dctx->taskid, "btrfs-defrag",
-	    DUET_PAGE_EXISTS, 1, fs_info->sb, 0)) {
+	    DUET_PAGE_EXISTS, 1, fs_info->sb, NULL)) {
 		printk(KERN_ERR "defrag: failed to register with duet\n");
 		ret = -EFAULT;
 		goto out;
