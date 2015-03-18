@@ -605,7 +605,7 @@ int recv_files(int f_in, int f_out, char *local_name)
 		else
 			file = dir_flist->files[cur_flist->parent_ndx];
 #ifdef HAVE_DUET
-		if (iflags & ITEM_SKIPPED) {
+		if (out_of_order && (iflags & ITEM_SKIPPED)) {
 skip_file:
 			fname = local_name ? local_name : f_name(file, fbuf);
 
@@ -618,7 +618,7 @@ skip_file:
 //				recv_xattr_request(file, f_in);
 //#endif
 
-			send_msg_int(MSG_SUCCESS, ndx);
+			//send_msg_int(MSG_SUCCESS, ndx);
 			file->flags |= FLAG_FILE_SENT;
 			continue;
 		}

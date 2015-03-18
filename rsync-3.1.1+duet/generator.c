@@ -1210,7 +1210,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
 		   : inc_recurse && ndx != cur_flist->ndx_start - 1 ? -1
 		   : 1;
 #ifdef HAVE_DUET
-	if (out_of_order) {
+	if (out_of_order && S_ISREG(file->mode)) {
 		if (INFO_GTE(DUET, 1))
 			rprintf(FINFO, "duet: Checking %s (ino %lu)\n", fname,
 				file->src_ino);
@@ -1223,11 +1223,20 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
 					fname, file->src_ino);
 
 			/* Tell the sender about this file */
-			write_ndx(f_out, ndx);
+			//write_ndx(f_out, ndx);
 			write_ndx(sock_f_out, ndx);
 			write_int(sock_f_out, iflags);
 			return;
 		}
+
+		if (duet_mark(tid, file->src_ino, 1))
+			rprintf(FERROR, "duet: failed to mark %s (ino %ld)\n",
+				fname, file->src_ino);
+
+		if (INFO_GTE(DUET, 1))
+			rprintf(FINFO, "duet: Marked %s (ino %ld)\n",
+				fname, file->src_ino);
+
 	}
 #endif /* HAVE_DUET */
 
@@ -2304,14 +2313,6 @@ start_o3:
 				output_all_flists("generate_o3_files");
 			}
 			recv_generator(fbuf, fp, ndx, itemizing, code, f_out);
-
-			if (duet_mark(tid, fp->src_ino, 1))
-				rprintf(FERROR, "duet: failed to mark %s "
-					"(ino %ld)\n", fbuf, fp->src_ino);
-
-			if (INFO_GTE(DUET, 1))
-				rprintf(FINFO, "duet: Marked %s (ino %ld)\n",
-					 fbuf, fp->src_ino);
 
 			while (1) {
 				check_for_finished_files(itemizing, code, 1);

@@ -357,18 +357,11 @@ process_file:
 				file->flags |= FLAG_FILE_SENT;
 				continue;
 			}
-
-			if (file->flags & FLAG_O3) {
-				if (INFO_GTE(DUET, 1))
-					rprintf(FINFO, "duet: sending %lu bytes"
-						" out of order\n", st.st_size);
-				stats.total_o3_written += st.st_size;
-			}
 		}
 
 		if (INFO_GTE(DUET, 1))
 			rprintf(FINFO, "sending %s (ino %lu)\n", fname,
-				st.st_ino);
+				file->src_ino);
 		current_files++;
 #endif /* HAVE_DUET */
 #ifdef SUPPORT_XATTRS
@@ -476,6 +469,15 @@ process_file:
 			close(fd);
 			exit_cleanup(RERR_FILEIO);
 		}
+
+#ifdef HAVE_DUET
+		if (out_of_order && (file->flags & FLAG_O3)) {
+			if (INFO_GTE(DUET, 1))
+				rprintf(FINFO, "duet: sending %lu bytes"
+					" out of order\n", st.st_size);
+			stats.total_o3_written += st.st_size;
+		}
+#endif /* HAVE_DUET */
 
 		if (st.st_size) {
 			int32 read_size = MAX(s->blength * 3, MAX_MAP_SIZE);

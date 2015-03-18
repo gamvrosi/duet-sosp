@@ -53,24 +53,23 @@ int duet_fetch(__u8 taskid, __u16 itreq, struct duet_item *items, __u16 *itret)
 	/* We'll either run out of items, or grab itreq items. */
 	*itret = 0;
 
-again:
 	spin_lock(&task->itm_lock);
+again:
 
 	/* Grab first item from the tree */
 	if (!RB_EMPTY_ROOT(&task->itmtree)) {
 		rbnode = rb_first(&task->itmtree);
 		tnode = rb_entry(rbnode, struct item_rbnode, node);
 		rb_erase(rbnode, &task->itmtree);
-		spin_unlock(&task->itm_lock);
 	} else {
-		spin_unlock(&task->itm_lock);
 		goto done;
 	}
 
 	/* Copy fields off to items array */
-	items[*itret].ino = tnode->item->ino;
-	items[*itret].idx = tnode->item->idx;
-	items[*itret].state = tnode->item->state;
+	items[*itret] = tnode->item;
+	//items[*itret].ino = tnode->item->ino;
+	//items[*itret].idx = tnode->item->idx;
+	//items[*itret].state = tnode->item->state;
 
 	duet_dbg(KERN_INFO "duet_fetch: sending (ino%lu, idx%lu, %x)\n",
 		items[*itret].ino, items[*itret].idx, items[*itret].state);
@@ -82,6 +81,7 @@ again:
 		goto again;
 
 done:
+	spin_unlock(&task->itm_lock);
 	/* decref and wake up cleaner if needed */
 	if (atomic_dec_and_test(&task->refcount))
 		wake_up(&task->cleaner_queue);

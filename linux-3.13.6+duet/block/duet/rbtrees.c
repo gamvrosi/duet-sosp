@@ -269,16 +269,10 @@ static struct item_rbnode *tnode_init(struct duet_task *task, unsigned long ino,
 	if (!tnode)
 		return NULL;
 
-	tnode->item = kzalloc(sizeof(struct duet_item), GFP_ATOMIC);
-	if (!tnode->item) {
-		kfree(tnode);
-		return NULL;
-	}
-
 	RB_CLEAR_NODE(&tnode->node);
-	tnode->item->ino = ino;
-	tnode->item->idx = idx;
-	tnode->item->state = state;
+	tnode->item.ino = ino;
+	tnode->item.idx = idx;
+	tnode->item.state = state;
 	return tnode;
 }
 
@@ -287,7 +281,6 @@ void tnode_dispose(struct item_rbnode *tnode, struct rb_node *rbnode,
 {
 	if (rbnode && root)
 		rb_erase(rbnode, root);
-	kfree(tnode->item);
 	kfree(tnode);
 }
 
@@ -309,15 +302,15 @@ int itmtree_insert(struct duet_task *task, unsigned long ino,
 		cur = rb_entry(parent, struct item_rbnode, node);
 
 		/* We order based on (inode, page index) */
-		if (cur->item->ino > ino) {
+		if (cur->item.ino > ino) {
 			link = &(*link)->rb_left;
-		} else if (cur->item->ino < ino) {
+		} else if (cur->item.ino < ino) {
 			link = &(*link)->rb_right;
 		} else {
 			/* Found inode, look for index */
-			if (cur->item->idx > index) {
+			if (cur->item.idx > index) {
 				link = &(*link)->rb_left;
-			} else if (cur->item->idx < index) {
+			} else if (cur->item.idx < index) {
 				link = &(*link)->rb_right;
 			} else {
 				found = 1;
@@ -335,26 +328,26 @@ int itmtree_insert(struct duet_task *task, unsigned long ino,
 		return 0;
 
 	if (found && replace) {
-		cur->item->state = state;
+		cur->item.state = state;
 	} else if (found) {
-		cur->item->state |= state;
+		cur->item.state |= state;
 
 		/* Negate previous events and remove if needed */
 		if (task->evtmask & DUET_PAGE_EXISTS) {
-			if ((cur->item->state & DUET_PAGE_ADDED) &&
-			    (cur->item->state & DUET_PAGE_REMOVED))
-				cur->item->state &= ~(DUET_PAGE_ADDED |
+			if ((cur->item.state & DUET_PAGE_ADDED) &&
+			    (cur->item.state & DUET_PAGE_REMOVED))
+				cur->item.state &= ~(DUET_PAGE_ADDED |
 						      DUET_PAGE_REMOVED);
 		}
 
 		if (task->evtmask & DUET_PAGE_MODIFIED) {
-			if ((cur->item->state & DUET_PAGE_DIRTY) &&
-			    (cur->item->state & DUET_PAGE_FLUSHED))
-				cur->item->state &= ~(DUET_PAGE_DIRTY |
+			if ((cur->item.state & DUET_PAGE_DIRTY) &&
+			    (cur->item.state & DUET_PAGE_FLUSHED))
+				cur->item.state &= ~(DUET_PAGE_DIRTY |
 						      DUET_PAGE_FLUSHED);
 		}
 
-		if (!cur->item->state)
+		if (!cur->item.state)
 			tnode_dispose(cur, parent, &task->itmtree);
 	} else if (!found) {
 		/* Create the node */

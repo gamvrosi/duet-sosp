@@ -43,7 +43,7 @@ struct bmap_rbnode {
 
 struct item_rbnode {
 	struct rb_node		node;
-	struct duet_item	*item;
+	struct duet_item	item;
 };
 
 struct duet_task {
