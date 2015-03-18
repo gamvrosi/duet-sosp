@@ -51,7 +51,7 @@ extern struct stats stats;
 extern struct file_list *cur_flist, *first_flist, *dir_flist;
 #ifdef HAVE_DUET
 extern struct file_list *cur_o3_flist, *first_o3_flist;
-extern int out_of_order, current_files;
+extern int out_of_order, current_files, pending_o3_files;
 extern __u8 tid;
 extern struct inode_tree itree;
 #endif /* HAVE_DUET */
@@ -220,6 +220,7 @@ void send_files(int f_in, int f_out)
 	int ndx, j;
 #ifdef HAVE_DUET
 	char buf[PATH_MAX];
+	unsigned long ino;
 #endif /* HAVE_DUET */
 
 	if (DEBUG_GTE(SEND, 1))
@@ -228,6 +229,10 @@ void send_files(int f_in, int f_out)
 	while (1) {
 #ifdef HAVE_DUET
 		if (out_of_order) {
+start_another:
+			if (pending_o3_files >= MAX_PENDING_O3)
+				goto start_inorder;
+
 			/* Update the itree */
 			if (itree_update(&itree, tid)) {
 				rprintf(FERROR, "itree_update failed\n");
@@ -235,7 +240,7 @@ void send_files(int f_in, int f_out)
 			}
 
 			/* Send a file out of order */
-			if (itree_fetch(&itree, tid, buf)) {
+			if (itree_fetch(&itree, tid, buf, &ino)) {
 				if (INFO_GTE(DUET, 3))
 					rprintf(FERROR, "duet: nothing to fetch\n");
 				exit_cleanup(RERR_DUET);
@@ -250,25 +255,42 @@ void send_files(int f_in, int f_out)
 			if (INFO_GTE(DUET, 1))
 				rprintf(FINFO, "duet: Sending %s out of order\n", buf);
 			send_o3_file(f_out, buf);
+			pending_o3_files++;
+
+			if (duet_mark(tid, ino, 1))
+				rprintf(FERROR, "duet: failed to mark %s (ino %ld)\n",
+					buf, ino);
+
+			if (INFO_GTE(DUET, 1))
+				rprintf(FINFO, "duet: Marked %s (ino %ld)\n",
+					buf, ino);
+
+			goto start_another;
 		}
 start_inorder:
-#endif /* HAVE_DUET */
+		if (inc_recurse && !pending_o3_files) {
+#else
 		if (inc_recurse) {
+#endif /* HAVE_DUET */
 			send_extra_file_list(f_out, MIN_FILECNT_LOOKAHEAD);
 			extra_flist_sending_enabled = !flist_eof;
 		}
 
+//#ifdef HAVE_DUET
+//make_progress:
+//#endif /* HAVE_DUET */
 		/* This call also sets cur_flist. */
+		rprintf(FINFO, "[%s] calling read_ndx_and_attrs\n", who_am_i());
 		ndx = read_ndx_and_attrs(f_in, f_out, &iflags, &fnamecmp_type,
 					 xname, &xlen);
 		extra_flist_sending_enabled = False;
-		if (DEBUG_GTE(SEND, 3))
-			rprintf(FINFO, "send_files: read_ndx_and_attrs ndx %d\n", ndx);
+		rprintf(FINFO, "[%s] read_ndx_and_attrs got ndx %d\n", who_am_i(), ndx);
 
 #ifdef HAVE_DUET
 		if (ndx == NDX_O3_DONE)	{
 			if (first_o3_flist)
 				flist_free(first_o3_flist);
+			pending_o3_files--;
 			write_ndx(f_out, NDX_O3_DONE);
 			continue;
 		}
@@ -295,14 +317,18 @@ start_inorder:
 			write_ndx(f_out, NDX_DONE);
 			continue;
 		}
-
+#ifdef HAVE_DUET
+		if (inc_recurse && !pending_o3_files)
+#else
 		if (inc_recurse)
+#endif /* HAVE_DUET */
 			send_extra_file_list(f_out, MIN_FILECNT_LOOKAHEAD);
 
 #ifdef HAVE_DUET
 		if (DEBUG_GTE(SEND, 3))
 			rprintf(FINFO, "send_files: sending file with ndx %d\n",
 				ndx);
+		rprintf(FINFO, "send_files: pending_o3_files = %d\n", pending_o3_files);
 
 		/* Look for o3 file, and if there's none we'll fall through */
 		if (cur_o3_flist && cur_o3_flist->ndx_start == ndx) {
@@ -357,18 +383,11 @@ process_file:
 				file->flags |= FLAG_FILE_SENT;
 				continue;
 			}
-
-			if (file->flags & FLAG_O3) {
-				if (INFO_GTE(DUET, 1))
-					rprintf(FINFO, "duet: sending %lu bytes"
-						" out of order\n", st.st_size);
-				stats.total_o3_written += st.st_size;
-			}
 		}
 
 		if (INFO_GTE(DUET, 1))
 			rprintf(FINFO, "sending %s (ino %lu)\n", fname,
-				st.st_ino);
+				file->src_ino);
 		current_files++;
 #endif /* HAVE_DUET */
 #ifdef SUPPORT_XATTRS
@@ -477,6 +496,15 @@ process_file:
 			exit_cleanup(RERR_FILEIO);
 		}
 
+#ifdef HAVE_DUET
+		if (out_of_order && (file->flags & FLAG_O3)) {
+			if (INFO_GTE(DUET, 1))
+				rprintf(FINFO, "duet: sending %lu bytes"
+					" out of order\n", st.st_size);
+			stats.total_o3_written += st.st_size;
+		}
+#endif /* HAVE_DUET */
+
 		if (st.st_size) {
 			int32 read_size = MAX(s->blength * 3, MAX_MAP_SIZE);
 			mbuf = map_file(fd, st.st_size, read_size, s->blength);
@@ -492,9 +520,6 @@ process_file:
 				    fnamecmp_type, xname, xlen);
 		write_sum_head(f_xfer, s);
 
-		if (DEBUG_GTE(DELTASUM, 2))
-			rprintf(FINFO, "calling match_sums %s%s%s\n", path,slash,fname);
-
 		if (log_before_transfer)
 			log_item(FCLIENT, file, iflags, NULL);
 		else if (!am_server && INFO_GTE(NAME, 1) && INFO_EQ(PROGRESS, 1))
@@ -502,7 +527,14 @@ process_file:
 
 		set_compression(fname);
 
+		if (DEBUG_GTE(DELTASUM, 2))
+			rprintf(FINFO, "calling match_sums %s%s%s\n", path,slash,fname);
+
 		match_sums(f_xfer, s, mbuf, st.st_size);
+
+		if (DEBUG_GTE(DELTASUM, 2))
+			rprintf(FINFO, "completed match_sums %s%s%s\n", path,slash,fname);
+
 		if (INFO_GTE(PROGRESS, 1))
 			end_progress(st.st_size);
 

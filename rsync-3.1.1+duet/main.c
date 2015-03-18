@@ -1657,12 +1657,6 @@ int main(int argc,char *argv[])
 	}
 
 #ifdef HAVE_DUET
-//	rprintf(FINFO, "main got %d arguments\n", argc);
-//	for (int i=0; i<argc; i++)
-//		rprintf(FINFO, "client_run argument %d is %s\n",
-//			i, argv[i]);
-//	return 0;
-
 	if (!out_of_order)
 		goto start;
 
@@ -1684,24 +1678,6 @@ start:
 	}
 
 	ret = start_client(argc, argv);
-
-#ifdef HAVE_DUET
-	if (!out_of_order)
-		goto end;
-
-	if (INFO_GTE(DUET, 1))
-		rprintf(FINFO, "deregistering with DUET\n");
-
-	if (INFO_GTE(DUET, 2) && duet_debug_printbit(tid))
-		rprintf(FERROR, "failed to print BitTree\n");
-
-	if (duet_deregister(tid))
-		rprintf(FERROR, "failed to deregister with Duet\n");
-
-	itree_teardown(&itree);
-end:
-#endif /* HAVE_DUET */
-
 	if (ret == -1)
 		exit_cleanup(RERR_STARTCLIENT);
 	else

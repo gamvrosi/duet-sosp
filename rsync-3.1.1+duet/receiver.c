@@ -214,9 +214,13 @@ int open_tmpfile(char *fnametmp, const char *fname, struct file_struct *file)
 #ifdef HAVE_DUET
 	/* In most cases parent directories will already exist because their
 	 * information should have been previously transferred, but that may
-	 * not be the case with -R, or when we're sending files out of order */
-	if (fd == -1 && (relative_paths || out_of_order) && errno == ENOENT
-	 && make_path(fnametmp, MKP_SKIP_SLASH | MKP_DROP_NAME) == 0) {
+	 * not be the case when we're sending files out of order */
+	if (fd == -1 && out_of_order) {
+		if (errno != ENOENT)
+			rsyserr(FERROR_XFER, errno, "mkstemp %s failed -- retrying",
+				full_fname(fnametmp));
+		if (make_path(fnametmp, MKP_DROP_NAME) < 0)
+			rsyserr(FERROR, errno, "make_path failed for %s\n", fnametmp);
 		/* Get back to name with XXXXXX in it. */
 		get_tmpname(fnametmp, fname, False);
 		fd = do_mkstemp(fnametmp, (file->mode|added_perms) & INITACCESSPERMS);
@@ -226,6 +230,7 @@ int open_tmpfile(char *fnametmp, const char *fname, struct file_struct *file)
 	if (fd == -1) {
 		rsyserr(FERROR_XFER, errno, "mkstemp %s failed",
 			full_fname(fnametmp));
+		exit_cleanup(RERR_DUET);
 		return -1;
 	}
 
@@ -548,9 +553,12 @@ int recv_files(int f_in, int f_out, char *local_name)
 	while (1) {
 		cleanup_disable();
 
+		rprintf(FINFO, "[%s] calling read_ndx_and_attrs\n", who_am_i());
 		/* This call also sets cur_flist. */
 		ndx = read_ndx_and_attrs(f_in, f_out, &iflags, &fnamecmp_type,
 					 xname, &xlen);
+		rprintf(FINFO, "[%s] read_ndx_and_attrs got ndx %d\n", who_am_i(), ndx);
+
 #ifdef HAVE_DUET
 		if (ndx == NDX_O3_DONE) {
 			if (first_o3_flist)
@@ -605,7 +613,7 @@ int recv_files(int f_in, int f_out, char *local_name)
 		else
 			file = dir_flist->files[cur_flist->parent_ndx];
 #ifdef HAVE_DUET
-		if (iflags & ITEM_SKIPPED) {
+		if (out_of_order && (iflags & ITEM_SKIPPED)) {
 skip_file:
 			fname = local_name ? local_name : f_name(file, fbuf);
 
@@ -618,7 +626,7 @@ skip_file:
 //				recv_xattr_request(file, f_in);
 //#endif
 
-			send_msg_int(MSG_SUCCESS, ndx);
+			//send_msg_int(MSG_SUCCESS, ndx);
 			file->flags |= FLAG_FILE_SENT;
 			continue;
 		}

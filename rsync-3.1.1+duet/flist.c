@@ -96,6 +96,7 @@ struct file_list *cur_flist, *first_flist, *dir_flist;
 #ifdef HAVE_DUET
 struct file_list *cur_o3_flist, *first_o3_flist;
 int current_files = 0;
+int pending_o3_files = 0; /* total active o3 items over all o3 file-lists */
 #endif /* HAVE_DUET */
 int send_dir_ndx = -1, send_dir_depth = -1;
 int flist_cnt = 0; /* how many (non-tmp) file list objects exist */
@@ -605,10 +606,6 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
 			xflags |= S_ISDIR(mode) ? XMIT_LONG_NAME : XMIT_TOP_DIR;
 		write_byte(f, xflags);
 	}
-#ifdef HAVE_DUET
-	/* Before anything else, transmit the inode number */
-	write_varlong(f, file->src_ino, 8);
-#endif /* HAVE_DUET */
 	if (xflags & XMIT_SAME_NAME)
 		write_byte(f, l1);
 	if (xflags & XMIT_LONG_NAME)
@@ -625,6 +622,10 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
 	}
 #endif
 
+#ifdef HAVE_DUET
+	/* Before anything else, transmit the inode number */
+	write_varlong30(f, file->src_ino, 8);
+#endif /* HAVE_DUET */
 	write_varlong30(f, F_LENGTH(file), 3);
 	if (!(xflags & XMIT_SAME_TIME)) {
 		if (protocol_version >= 30)
@@ -752,11 +753,9 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
 	alloc_pool_t *pool;
 	char *bp;
 #ifdef HAVE_DUET
-	int64 src_ino;
-
-	/* First, receive inode number */
-	src_ino = read_varlong(f, 8);
+	int64 src_ino = 0;
 #endif /* HAVE_DUET */
+
 	if (xflags & XMIT_SAME_NAME)
 		l1 = read_byte(f);
 
@@ -858,6 +857,10 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
 	}
 #endif
 
+#ifdef HAVE_DUET
+	/* First, receive inode number */
+	src_ino = read_varlong30(f, 8);
+#endif /* HAVE_DUET */
 	file_length = read_varlong30(f, 3);
 	if (!(xflags & XMIT_SAME_TIME)) {
 		if (protocol_version >= 30) {
@@ -1020,6 +1023,9 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
 		file->flags |= FLAG_HLINKED;
 #endif
 	file->modtime = (time_t)modtime;
+#ifdef HAVE_DUET
+	file->src_ino = src_ino;
+#endif /* HAVE_DUET */
 #ifdef HAVE_UTIMENSAT
 	if (modtime_nsec) {
 		file->flags |= FLAG_MOD_NSEC;
@@ -1056,7 +1062,6 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
 #ifdef HAVE_DUET
 	if (xflags & XMIT_O3)
 		file->flags |= FLAG_O3;
-	file->src_ino = src_ino;
 #endif /* HAVE_DUET */
 	if (S_ISDIR(mode)) {
 		if (basename_len == 1+1 && *basename == '.') /* +1 for '\0' */
@@ -1496,12 +1501,12 @@ static struct file_struct *send_file_name(int f, struct file_list *flist,
 		return NULL;
 #ifdef HAVE_DUET
 	if (!stp) {
-		STRUCT_STAT st;
-		if (do_stat(fname, &st)) {
+		STRUCT_STAT sbuf;
+		if (do_stat(fname, &sbuf)) {
 			rsyserr(FERROR_XFER, errno, "do_stat %s failed", fname);
 			return NULL;
 		}
-		file->src_ino = st.st_ino;
+		file->src_ino = sbuf.st_ino;
 	} else {
 		file->src_ino = stp->st_ino;
 	}
