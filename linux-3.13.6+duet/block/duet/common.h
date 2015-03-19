@@ -56,7 +56,7 @@ struct duet_task {
 
 	/* Optional heuristics to filter the events received */
 	struct super_block	*f_sb;		/* Filesystem of task */
-	struct inode		*p_inode;	/* Parent inode */
+	struct dentry		*p_dentry;	/* Parent dentry */
 
 	/* BitTree -- progress bitmap tree */
 	__u32			bitrange;	/* range per bmap bit */
@@ -107,8 +107,8 @@ extern duet_hook_t *duet_hook_cache_fp;
 extern unsigned int *duet_i_hash_shift;
 extern struct hlist_head **duet_inode_hashtable;
 extern spinlock_t *duet_inode_hash_lock;
-extern char *d_get_path(struct inode *cnode, struct inode *pnode, char *buf,
-			int len);
+extern char *d_get_path(struct inode *cnode, struct dentry *p_dentry,
+			char *buf, int len);
 
 /* bmap.c */
 __u32 duet_bmap_count(__u8 *bmap, __u32 byte_len);

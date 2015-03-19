@@ -1215,7 +1215,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
 			rprintf(FINFO, "duet: Checking %s (ino %lu)\n", fname,
 				file->src_ino);
 
-		if (duet_check(tid, file->src_ino, 1) == 1) {
+		if (!(file->flags & FLAG_O3) && duet_check(tid, file->src_ino, 1) == 1) {
 			int iflags = ITEM_SKIPPED;
 
 			if (INFO_GTE(DUET, 1))
@@ -1236,7 +1236,6 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
 		if (INFO_GTE(DUET, 1))
 			rprintf(FINFO, "duet: Marked %s (ino %ld)\n",
 				fname, file->src_ino);
-
 	}
 #endif /* HAVE_DUET */
 
@@ -2242,6 +2241,9 @@ void generate_files(int f_out, const char *local_name)
 	enum logcode code;
 	int save_info_flist = info_levels[INFO_FLIST];
 	int save_info_progress = info_levels[INFO_PROGRESS];
+#ifdef HAVE_DUET
+	int done_flist = 0;
+#endif /* HAVE_DUET */
 
 	if (protocol_version >= 29) {
 		itemizing = 1;
@@ -2292,7 +2294,7 @@ void generate_files(int f_out, const char *local_name)
 
 	dflt_perms = (ACCESSPERMS & ~orig_umask);
 
-	do {
+	while (1) {
 #ifdef SUPPORT_HARD_LINKS
 		if (preserve_hard_links && inc_recurse) {
 			while (!flist_eof && file_total < MIN_FILECNT_LOOKAHEAD/2)
@@ -2301,7 +2303,6 @@ void generate_files(int f_out, const char *local_name)
 #endif
 
 #ifdef HAVE_DUET
-start_o3:
 		if (cur_o3_flist) {
 			struct file_struct *fp = cur_o3_flist->files[0];
 
@@ -2314,20 +2315,10 @@ start_o3:
 			}
 			recv_generator(fbuf, fp, ndx, itemizing, code, f_out);
 
-			while (1) {
-				check_for_finished_files(itemizing, code, 1);
-				if (cur_o3_flist->next || cur_flist || flist_eof)
-					break;
-				wait_for_receiver();
-			}
-
-			if (cur_o3_flist->next && cur_o3_flist->next != first_flist) {
-				cur_o3_flist = cur_o3_flist->next;
-				goto start_o3;
-			} else {
-				cur_o3_flist = NULL;
-			}
-		}
+			/* Move forward now, because we're done */
+			cur_o3_flist = (cur_o3_flist->next == first_flist) ?
+					NULL : cur_o3_flist->next;
+		} else if (!done_flist) {
 #endif /* HAVE_DUET */
 		if (inc_recurse && cur_flist->parent_ndx >= 0) {
 			struct file_struct *fp = dir_flist->files[cur_flist->parent_ndx];
@@ -2337,10 +2328,10 @@ start_o3:
 				f_name(fp, fbuf);
 			ndx = cur_flist->ndx_start - 1;
 
-			if (DEBUG_GTE(FLIST, 4)) {
+			//if (DEBUG_GTE(FLIST, 4)) {
 				rprintf(FINFO, "generate_files: ndx=%d, parent=%d\n", ndx, cur_flist->parent_ndx);
 				output_all_flists("generate_files");
-			}
+			//}
 
 			recv_generator(fbuf, fp, ndx, itemizing, code, f_out);
 			if (delete_during && dry_run < 2 && !list_only
@@ -2389,14 +2380,32 @@ start_o3:
 			write_ndx(f_out, NDX_DONE);
 			break;
 		}
+#ifdef HAVE_DUET
+			done_flist = 1;
+		}
+#endif /* HAVE_DUET */
 
 		while (1) {
 			check_for_finished_files(itemizing, code, 1);
+#ifdef HAVE_DUET
+			if (cur_o3_flist || cur_flist->next || flist_eof)
+#else
 			if (cur_flist->next || flist_eof)
+#endif /* HAVE_DUET */
 				break;
 			wait_for_receiver();
 		}
-	} while ((cur_flist = cur_flist->next) != NULL);
+
+#ifdef HAVE_DUET
+		if (done_flist && !cur_o3_flist && (cur_flist->next || flist_eof)) {
+#endif /* HAVE_DUET */
+			if (!(cur_flist = cur_flist->next))
+				break;
+#ifdef HAVE_DUET
+			done_flist = 0;
+		}	
+#endif /* HAVE_DUET */
+	}
 
 	if (delete_during)
 		delete_in_dir(NULL, NULL, &dev_zero);

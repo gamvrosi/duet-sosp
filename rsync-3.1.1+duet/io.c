@@ -1669,9 +1669,9 @@ void wait_for_receiver(void)
 		read_a_msg();
 
 	if (iobuf.raw_input_ends_before) {
+		rprintf(FINFO, "[%s] wait_for_receiver reading ndx\n", who_am_i());
 		int ndx = read_int(iobuf.in_fd);
-		if (INFO_GTE(FLIST, 4))
-			rprintf(FINFO, "[%s] wait_for_receiver got ndx %d\n",
+		rprintf(FINFO, "[%s] wait_for_receiver got ndx %d\n",
 				who_am_i(), ndx);
 		if (ndx < 0) {
 			switch (ndx) {

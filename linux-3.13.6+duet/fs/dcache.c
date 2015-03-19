@@ -3532,38 +3532,18 @@ restart:
 
 /*
  * We assume that:
- * 1) The p_inode points to a directory. No hard links, no hard feelings.
+ * 1) The p_dentry points to the parent dir. No hard links, no hard feelings.
  * 2) You already hold a refcount on both c_inode and p_inode, so we go lockless
  */
-char *d_get_path(struct inode *cnode, struct inode *pnode, char *buf, int len)
+char *d_get_path(struct inode *cnode, struct dentry *p_dentry, char *buf, int len)
 {
-	char *res;
-	int tlen, ret = 0;
-	struct dentry *alias, *p_dentry, *c_dentry;
+	char *res = NULL;
+	int tlen, ret = 1;
+	struct dentry *alias, *c_dentry = NULL;
 
-	p_dentry = c_dentry = NULL;
-
-	if (!hlist_empty(&pnode->i_dentry)) {
-		hlist_for_each_entry(alias, &pnode->i_dentry, d_alias) {
- 			if ((S_ISDIR(pnode->i_mode) || !d_unhashed(alias)) &&
-			    !(IS_ROOT(alias) && (alias->d_flags & DCACHE_DISCONNECTED))) {
-				p_dentry = alias;
-				break;
-			}
-		}
-	}
-
-	if (!p_dentry) {
-		printk(KERN_ERR "d_get_path: no dentry for parent inode\n");
-		return ERR_PTR(-ENOENT);
-	}
-
-	ret = 1;
-	res = NULL;
 	if (!hlist_empty(&cnode->i_dentry)) {
 		hlist_for_each_entry(alias, &cnode->i_dentry, d_alias) {
- 			if ((S_ISDIR(pnode->i_mode) || !d_unhashed(alias)) &&
-			    !(IS_ROOT(alias) && (alias->d_flags & DCACHE_DISCONNECTED))) {
+ 			if (!(IS_ROOT(alias) && (alias->d_flags & DCACHE_DISCONNECTED))) {
 				c_dentry = alias;
 				res = buf + len;
 				tlen = len;

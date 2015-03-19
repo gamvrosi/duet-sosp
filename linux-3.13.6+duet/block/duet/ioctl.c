@@ -153,8 +153,8 @@ static int duet_getpath(__u8 tid, unsigned long c_ino, char *cpath)
 		return 1;	
 	}
 
-	if (!task->p_inode) {
-		printk(KERN_ERR "duet_getpath: task was not registered under a parent inode\n");
+	if (!task->p_dentry) {
+		printk(KERN_ERR "duet_getpath: task has no parent dentry\n");
 		return 1;
 	}
 
@@ -165,11 +165,6 @@ static int duet_getpath(__u8 tid, unsigned long c_ino, char *cpath)
 		goto done;
 	}
 
-	printk(KERN_INFO "duet_getpath: parent inode has ino %lu, sb %p\n",
-		task->p_inode->i_ino, task->p_inode->i_sb);
-	printk(KERN_INFO "duet_getpath: child inode has ino %lu, sb %p\n",
-		c_inode->i_ino, c_inode->i_sb);
-
 	/* Now get the path */
 	len = MAX_PATH;
 	buf = kmalloc(MAX_PATH, GFP_NOFS);
@@ -179,7 +174,7 @@ static int duet_getpath(__u8 tid, unsigned long c_ino, char *cpath)
 		goto done_put;
 	}
 
-	p = d_get_path(c_inode, task->p_inode, buf, len);
+	p = d_get_path(c_inode, task->p_dentry, buf, len);
 	if (IS_ERR(p)) {
 		printk(KERN_INFO "duet_getpath: parent dentry not found\n");
 		ret = 1;
@@ -241,6 +236,7 @@ static int duet_ioctl_cmd(void __user *arg)
 {
 	struct duet_ioctl_cmd_args *ca;
 	struct file *file;
+	struct dentry *dentry;
 	mm_segment_t old_fs;
 	int fd;
 
@@ -307,9 +303,14 @@ static int duet_ioctl_cmd(void __user *arg)
 			goto reg_put;
 		}
 
+		if (!(dentry = d_find_alias(file->f_inode))) {
+			printk(KERN_ERR "duet: couldn't find dentry\n");
+			goto reg_put;
+		}
+
 		ca->ret = duet_register(&ca->tid, ca->name, ca->evtmask,
 					ca->bitrange, file->f_inode->i_sb,
-					file->f_inode);
+					dentry);
 		printk(KERN_INFO "duet: registered under %s, ino %lu, sb %p\n",
 			ca->path, file->f_inode->i_ino, file->f_inode->i_sb);
 

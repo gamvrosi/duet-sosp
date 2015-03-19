@@ -1657,7 +1657,7 @@ int main(int argc,char *argv[])
 	}
 
 #ifdef HAVE_DUET
-	if (!out_of_order && am_sender)
+	if (!out_of_order)
 		goto start;
 
 	itree_init(&itree);

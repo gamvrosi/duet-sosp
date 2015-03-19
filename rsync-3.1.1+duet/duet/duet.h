@@ -82,7 +82,8 @@ struct inode_tree {
 /* InodeTree interface functions */
 void itree_init(struct inode_tree *itree);
 int itree_update(struct inode_tree *itree, __u8 taskid);
-int itree_fetch(struct inode_tree *itree, __u8 taskid, char *path);
+int itree_fetch(struct inode_tree *itree, __u8 taskid, char *path,
+	unsigned long *ino);
 void itree_teardown(struct inode_tree *itree);
 
 int duet_register(__u8 *tid, const char *name, __u32 bitrange, __u8 evtmask,

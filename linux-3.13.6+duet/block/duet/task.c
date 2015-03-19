@@ -328,7 +328,7 @@ EXPORT_SYMBOL_GPL(duet_mark);
 /* Properly allocate and initialize a task struct */
 static int duet_task_init(struct duet_task **task, const char *name,
 	__u8 evtmask, __u32 bitrange, struct super_block *f_sb,
-	struct inode *p_inode)
+	struct dentry *p_dentry)
 {
 	*task = kzalloc(sizeof(**task), GFP_NOFS);
 	if (!(*task))
@@ -369,7 +369,7 @@ static int duet_task_init(struct duet_task **task, const char *name,
 
 	(*task)->evtmask = evtmask;
 	(*task)->f_sb = f_sb;
-	(*task)->p_inode = p_inode;
+	(*task)->p_dentry = p_dentry;
 
 	if (bitrange)
 		(*task)->bitrange = bitrange;
@@ -407,13 +407,13 @@ void duet_task_dispose(struct duet_task *task)
 		tnode_dispose(tnode, rbnode, &task->itmtree);
 	}
 
-	if (task->p_inode)
-		iput(task->p_inode);
+	if (task->p_dentry)
+		dput(task->p_dentry);
 	kfree(task);
 }
 
 int duet_register(__u8 *taskid, const char *name, __u8 evtmask, __u32 bitrange,
-	struct super_block *f_sb, struct inode *p_inode)
+	struct super_block *f_sb, struct dentry *p_dentry)
 {
 	int ret;
 	struct list_head *last;
@@ -424,7 +424,7 @@ int duet_register(__u8 *taskid, const char *name, __u8 evtmask, __u32 bitrange,
 		return -EINVAL;
 	}
 
-	ret = duet_task_init(&task, name, evtmask, bitrange, f_sb, p_inode);
+	ret = duet_task_init(&task, name, evtmask, bitrange, f_sb, p_dentry);
 	if (ret) {
 		printk(KERN_ERR "duet: failed to initialize task\n");
 		return ret;

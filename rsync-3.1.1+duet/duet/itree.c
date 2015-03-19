@@ -241,13 +241,14 @@ out:
  * errors occurred, otherwise the inode is returned with its refcount
  * updated.
  */
-int itree_fetch(struct inode_tree *itree, __u8 taskid, char *path)
+int itree_fetch(struct inode_tree *itree, __u8 taskid, char *path,
+	unsigned long *ino)
 {
 	int ret = 0;
 	struct rb_node *rbnode;
 	struct itree_node *itnode;
-	unsigned long ino;
 
+	*ino = 0;
 	path[0] = '\0';
 again:
 	if (RB_EMPTY_ROOT(&itree->sorted))
@@ -259,19 +260,19 @@ again:
 	rb_erase(&itnode->sorted_node, &itree->sorted);
 	rb_erase(&itnode->inodes_node, &itree->inodes);
 
-	ino = itnode->ino;
+	*ino = itnode->ino;
 	free(itnode);
 
-	itree_dbg("itree: fetch picked inode %lu\n", ino);
+	itree_dbg("itree: fetch picked inode %lu\n", *ino);
 
 	/* Check if we've processed it before */
-	if (duet_check(taskid, ino, 1) == 1)
+	if (duet_check(taskid, *ino, 1) == 1)
 		goto again;
 
-	itree_dbg("itree: fetching inode %lu\n", ino);
+	itree_dbg("itree: fetching inode %lu\n", *ino);
 
 	/* Get the path for this inode */
-	if (duet_getpath(taskid, ino, path)) {
+	if (duet_getpath(taskid, *ino, path)) {
 		//fprintf(stderr, "itree: inode path not found\n");
 		goto again;
 	}
