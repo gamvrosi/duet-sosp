@@ -45,6 +45,7 @@
 #define DUET_PAGE_FLUSHED	(1 << 3)
 #define DUET_PAGE_MODIFIED	(1 << 4)
 #define DUET_PAGE_EXISTS	(1 << 5)
+#define DUET_USE_IMAP		(1 << 7)
 
 /*
  * Item struct returned for processing. For both state- and event- based duet,

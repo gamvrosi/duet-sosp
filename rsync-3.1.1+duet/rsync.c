@@ -52,6 +52,7 @@ extern int make_backups;
 extern struct file_list *cur_flist, *first_flist, *dir_flist;
 #ifdef HAVE_DUET
 extern struct file_list *cur_o3_flist, *first_o3_flist;
+extern int out_of_order;
 #endif /* HAVE_DUET */
 extern struct chmod_mode_struct *daemon_chmod_modes;
 #ifdef ICONV_OPTION
@@ -317,6 +318,7 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr,
 	struct file_list *flist;
 	uchar fnamecmp_type = FNAMECMP_FNAME;
 	int ndx;
+	int is_o3 = 0;
 
   read_loop:
 	while (1) {
@@ -328,6 +330,10 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr,
 				who_am_i(), ndx);
 		if (ndx == NDX_O3_DONE)
 			return ndx;
+		if (ndx == NDX_IS_O3) {
+			is_o3 = 1;
+			goto read_loop;
+		}
 #endif /* HAVE_DUET */
 		if (ndx >= 0)
 			break;
@@ -402,7 +408,7 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr,
 		goto read_loop;
 	}
 
-	flist = flist_for_ndx(ndx, "read_ndx_and_attrs");
+	flist = flist_for_ndx(ndx, "read_ndx_and_attrs", is_o3);
 #ifdef HAVE_DUET
 	if (INFO_GTE(FLIST, 4)) {
 		rprintf(FINFO, "flist_for_ndx picked this\n");
@@ -742,7 +748,7 @@ int finish_transfer(const char *fname, const char *fnametmp,
 	return 1;
 }
 
-struct file_list *flist_for_ndx(int ndx, const char *fatal_error_loc)
+struct file_list *flist_for_ndx(int ndx, const char *fatal_error_loc, int is_o3)
 {
 	struct file_list *flist = cur_flist;
 
@@ -753,6 +759,9 @@ struct file_list *flist_for_ndx(int ndx, const char *fatal_error_loc)
 	}
 
 #ifdef HAVE_DUET
+	if (!is_o3)
+		goto not_o3;
+
 	flist = cur_o3_flist;
 
 	if (!flist || flist->ndx_start != ndx) {
@@ -803,6 +812,9 @@ struct file_list *flist_for_ndx(int ndx, const char *fatal_error_loc)
 		rprintf(FERROR,
 			"File-list index %d not in %d - %d (%s) [%s]\n",
 			ndx, first, last, fatal_error_loc, who_am_i());
+#ifdef HAVE_DUET
+		if (!out_of_order)
+#endif /* HAVE_DUET */
 		exit_cleanup(RERR_PROTOCOL);
 	}
 	return NULL;

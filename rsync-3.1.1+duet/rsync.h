@@ -135,9 +135,9 @@
 #define MAX_PROTOCOL_VERSION 40
 
 #ifdef HAVE_DUET
-#define MAX_PENDING_O3 10
+#define MAX_PENDING_O3 100
 #endif /* HAVE_DUET */
-#define MIN_FILECNT_LOOKAHEAD 1000
+#define MIN_FILECNT_LOOKAHEAD 100 //1000
 #define MAX_FILECNT_LOOKAHEAD 10000
 
 #define RSYNC_PORT 873
@@ -268,6 +268,7 @@ enum msgcode {
 #ifdef HAVE_DUET
 #define NDX_LIST_O3 -4
 #define NDX_O3_DONE -5
+#define NDX_IS_O3 -6
 #endif /* HAVE_DUET */
 #define NDX_FLIST_OFFSET -101
 
@@ -926,6 +927,7 @@ struct stats {
 	int64 total_read;
 #ifdef HAVE_DUET
 	int64 total_o3_written;
+	int64 total_o3_pages;
 #endif /* HAVE_DUET */
 	int64 literal_data;
 	int64 matched_data;

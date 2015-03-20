@@ -30,6 +30,9 @@
 #include "rsync.h"
 #include "ifuncs.h"
 #include "inums.h"
+#ifdef HAVE_DUET
+#include "duet/duet.h"
+#endif /* HAVE_DUET */
 
 /** If no timeout is specified then use a 60 second select timeout */
 #define SELECT_TIMEOUT 60
@@ -64,6 +67,11 @@ extern struct file_list *cur_flist;
 extern int filesfrom_convert;
 extern iconv_t ic_send, ic_recv;
 #endif
+#ifdef HAVE_DUET
+extern int out_of_order, duet_fd;
+extern __u8 tid;
+extern struct inode_tree itree;
+#endif /* HAVE_DUET */
 
 int csum_length = SHORT_SUM_LENGTH; /* initial value */
 int allowed_lull = 0;
@@ -748,6 +756,13 @@ static char *perform_io(size_t needed, int flags)
 			}
 			if (extra_flist_sending_enabled) {
 				extra_flist_sending_enabled = False;
+//#ifdef HAVE_DUET
+//				/* Update the itree now that we're chilling */
+//				if (out_of_order && itree_update(&itree, tid, duet_fd)) {
+//					rprintf(FERROR, "itree_update failed\n");
+//					exit_cleanup(RERR_DUET);
+//				}
+//#endif /* HAVE_DUET */
 				send_extra_file_list(sock_f_out, -1);
 				extra_flist_sending_enabled = !flist_eof;
 			} else
@@ -1024,7 +1039,11 @@ void send_msg_int(enum msgcode code, int num)
 
 static void got_flist_entry_status(enum festatus status, int ndx)
 {
-	struct file_list *flist = flist_for_ndx(ndx, "got_flist_entry_status");
+	struct file_list *flist = flist_for_ndx(ndx, "got_flist_entry_status", 1);
+#ifdef HAVE_DUET
+	if (!flist)
+		return;
+#endif /* HAVE_DUET */
 
 	if (remove_source_files) {
 		active_filecnt--;
@@ -1669,10 +1688,7 @@ void wait_for_receiver(void)
 		read_a_msg();
 
 	if (iobuf.raw_input_ends_before) {
-		rprintf(FINFO, "[%s] wait_for_receiver reading ndx\n", who_am_i());
 		int ndx = read_int(iobuf.in_fd);
-		rprintf(FINFO, "[%s] wait_for_receiver got ndx %d\n",
-				who_am_i(), ndx);
 		if (ndx < 0) {
 			switch (ndx) {
 			case NDX_FLIST_EOF:

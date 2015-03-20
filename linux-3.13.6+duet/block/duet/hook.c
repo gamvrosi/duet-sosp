@@ -94,6 +94,7 @@ static void __handle_event(struct work_struct *work)
 {
 	struct evtwork *ework = (struct evtwork *)work;
 	struct duet_task *cur;
+	int ret;
 
 	/* Look for tasks interested in this event type and invoke callbacks */
 	rcu_read_lock();
@@ -102,6 +103,17 @@ static void __handle_event(struct work_struct *work)
 		if (cur->f_sb && cur->f_sb != ework->isb) {
 			duet_dbg(KERN_INFO "duet: event sb not matching\n");
 			continue;
+		}
+
+		/* Use the inode bitmap to filter this event out, if needed */
+		if (cur->evtmask & DUET_USE_IMAP) {
+			mutex_lock(&cur->bittree_lock);
+			ret = bittree_check(&cur->bittree, cur->bitrange,
+					cur->bmapsize, ework->ino, 1, cur);
+			mutex_unlock(&cur->bittree_lock);
+
+			if (ret == 1)
+				continue;
 		}
 
 		/* Update the ItemTree */

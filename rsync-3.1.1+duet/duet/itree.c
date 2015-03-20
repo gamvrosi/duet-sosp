@@ -30,8 +30,8 @@
 struct itree_node {
 	struct rb_node	inodes_node;
 	struct rb_node	sorted_node;
-	unsigned long	ino;
-	unsigned long	inmem;	/* pages currently in memory */
+	long long	ino;
+	long long	inmem;	/* pages currently in memory */
 };
 
 static void print_itree(struct inode_tree *itree)
@@ -40,11 +40,11 @@ static void print_itree(struct inode_tree *itree)
 
 	fprintf(stdout, "itree: printing inodes tree\n");
 	rbtree_postorder_for_each_entry_safe(cur, tmp, &itree->inodes, inodes_node)
-		fprintf(stdout, "\tinode %lu: %lu pages in memory\n", cur->ino, cur->inmem);
+		fprintf(stdout, "\tinode %lld: %lld pages in memory\n", cur->ino, cur->inmem);
 
 	fprintf(stdout, "itree: printing sorted tree\n");
 	rbtree_postorder_for_each_entry_safe(cur, tmp, &itree->sorted, sorted_node)
-		fprintf(stdout, "\tinode %lu: %lu pages in memory\n", cur->ino, cur->inmem);
+		fprintf(stdout, "\tinode %lld: %lld pages in memory\n", cur->ino, cur->inmem);
 }
 
 void itree_init(struct inode_tree *itree)
@@ -73,8 +73,8 @@ static struct itree_node *itnode_init(unsigned long ino, unsigned long inmem)
  * and updates the tree. Then, it repeated the process for the sorted tree,
  * using the inmem count. Returns 1 on failure.
  */
-static int update_itree_one(struct inode_tree *itree, unsigned long ino,
-	unsigned long count)
+static int update_itree_one(struct inode_tree *itree, long long ino,
+	long long count)
 {
 	int found = 0;
 	struct rb_node **link, *parent = NULL;
@@ -165,7 +165,7 @@ static int update_itree_one(struct inode_tree *itree, unsigned long ino,
 		found ? cur->inmem : 0, itnode->ino, itnode->inmem);
 
 	if (found) {
-		fprintf(stderr, "itree: node (i%lu,p%lu) already in sorted "
+		fprintf(stderr, "itree: node (i%lld,p%lld) already in sorted "
 				"itree (bug!)\n", itnode->ino, itnode->inmem);
 		print_itree(itree);
 		rb_erase(&itnode->inodes_node, &itree->inodes);
@@ -180,14 +180,14 @@ static int update_itree_one(struct inode_tree *itree, unsigned long ino,
 }
 
 /* Process all pending page events for given task, and update the inode tree */
-int itree_update(struct inode_tree *itree, __u8 taskid)
+int itree_update(struct inode_tree *itree, __u8 taskid, int duet_fd)
 {
 	int i, itret, ret=0, last_was_processed = 0;
-	unsigned long count, last_ino = 0;
+	long long count, last_ino = 0;
 	struct duet_item *buf = itree->buf;
 
 again:
-	if (duet_fetch(taskid, MAX_ITEMS, buf, &itret)) {
+	if (duet_fetch(taskid, duet_fd, MAX_ITEMS, buf, &itret)) {
 		fprintf(stderr, "itree: duet_fetch failed\n");
 		ret = 1;
 		goto out;
@@ -214,7 +214,7 @@ again:
 				ret = 1;
 				goto out;
 			}
-			last_was_processed = duet_check(taskid, buf[i].ino, 1);
+			last_was_processed = 0; //duet_check(taskid, duet_fd, buf[i].ino, 1);
 			last_ino = buf[i].ino;
 			count = 0;
 		}
@@ -241,8 +241,8 @@ out:
  * errors occurred, otherwise the inode is returned with its refcount
  * updated.
  */
-int itree_fetch(struct inode_tree *itree, __u8 taskid, char *path,
-	unsigned long *ino)
+int itree_fetch(struct inode_tree *itree, __u8 taskid, int duet_fd, char *path,
+	long long *ino, long long *inmem)
 {
 	int ret = 0;
 	struct rb_node *rbnode;
@@ -261,18 +261,19 @@ again:
 	rb_erase(&itnode->inodes_node, &itree->inodes);
 
 	*ino = itnode->ino;
+	*inmem = itnode->inmem;
 	free(itnode);
 
 	itree_dbg("itree: fetch picked inode %lu\n", *ino);
 
 	/* Check if we've processed it before */
-	if (duet_check(taskid, *ino, 1) == 1)
+	if (duet_check(taskid, duet_fd, *ino, 1) == 1)
 		goto again;
 
 	itree_dbg("itree: fetching inode %lu\n", *ino);
 
 	/* Get the path for this inode */
-	if (duet_getpath(taskid, *ino, path)) {
+	if (duet_getpath(taskid, duet_fd, *ino, path)) {
 		//fprintf(stderr, "itree: inode path not found\n");
 		goto again;
 	}

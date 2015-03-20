@@ -26,7 +26,7 @@
 
 extern __u8 tid;
 extern struct inode_tree itree;
-extern int out_of_order;
+extern int out_of_order, duet_fd;
 extern int am_sender;
 #endif /* HAVE_DUET */
 extern int am_server;
@@ -273,18 +273,19 @@ NORETURN void _exit_cleanup(int code, const char *file, int line)
 	}
 
 #ifdef HAVE_DUET
-	if (!out_of_order || am_sender)
+	if (!out_of_order || !am_sender)
 		goto end;
 
 	if (INFO_GTE(DUET, 1))
 		rprintf(FINFO, "deregistering with DUET\n");
 
-	if (INFO_GTE(DUET, 2) && duet_debug_printbit(tid))
+	if (INFO_GTE(DUET, 2) && duet_debug_printbit(tid, duet_fd))
 		rprintf(FERROR, "failed to print BitTree\n");
 
-	if (duet_deregister(tid))
+	if (duet_deregister(tid, duet_fd))
 		rprintf(FERROR, "failed to deregister with Duet\n");
 
+	close_duet_dev(duet_fd);
 	itree_teardown(&itree);
 end:
 #endif /* HAVE_DUET */

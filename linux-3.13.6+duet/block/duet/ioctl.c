@@ -146,7 +146,7 @@ static int duet_getpath(__u8 tid, unsigned long c_ino, char *cpath)
 	int len, ret = 0;
 	struct duet_task *task = duet_find_task(tid);
 	struct inode *c_inode;
-	char *p, *buf;
+	char *p;
 
 	if (!task) {
 		printk(KERN_ERR "duet_getpath: invalid taskid (%d)\n", tid);
@@ -167,14 +167,7 @@ static int duet_getpath(__u8 tid, unsigned long c_ino, char *cpath)
 
 	/* Now get the path */
 	len = MAX_PATH;
-	buf = kmalloc(MAX_PATH, GFP_NOFS);
-	if (!buf) {
-		printk(KERN_ERR "duet_getpath: failed to allocate path buf\n");
-		ret = 1;
-		goto done_put;
-	}
-
-	p = d_get_path(c_inode, task->p_dentry, buf, len);
+	p = d_get_path(c_inode, task->p_dentry, task->pathbuf, len);
 	if (IS_ERR(p)) {
 		printk(KERN_INFO "duet_getpath: parent dentry not found\n");
 		ret = 1;
@@ -184,12 +177,11 @@ static int duet_getpath(__u8 tid, unsigned long c_ino, char *cpath)
 		ret = 0;
 		cpath[0] = '\0';
 	} else {
-		printk(KERN_INFO "duet_getpath: got %s\n", p);
+		duet_dbg(KERN_INFO "duet_getpath: got %s\n", p);
 		p++;
-		memcpy(cpath, p, len - (p - buf) + 1);
+		memcpy(cpath, p, len - (p - task->pathbuf) + 1);
 	}
 
-	kfree(buf);
 done_put:
 	iput(c_inode);
 done:
@@ -308,7 +300,8 @@ static int duet_ioctl_cmd(void __user *arg)
 			goto reg_put;
 		}
 
-		ca->ret = duet_register(&ca->tid, ca->name, ca->evtmask,
+		ca->ret = duet_register(&ca->tid, ca->name,
+					ca->evtmask | DUET_USE_IMAP,
 					ca->bitrange, file->f_inode->i_sb,
 					dentry);
 		printk(KERN_INFO "duet: registered under %s, ino %lu, sb %p\n",

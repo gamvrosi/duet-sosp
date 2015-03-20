@@ -51,7 +51,8 @@ extern struct stats stats;
 extern struct file_list *cur_flist, *first_flist, *dir_flist;
 #ifdef HAVE_DUET
 extern struct file_list *cur_o3_flist, *first_o3_flist;
-extern int out_of_order, current_files, pending_o3_files;
+extern int out_of_order, current_files, pending_o3_files, duet_fd;
+extern int file_total, file_old_total;
 extern __u8 tid;
 extern struct inode_tree itree;
 #endif /* HAVE_DUET */
@@ -140,7 +141,7 @@ void successful_send(int ndx)
 	if (!remove_source_files)
 		return;
 
-	flist = flist_for_ndx(ndx, "successful_send");
+	flist = flist_for_ndx(ndx, "successful_send", 1);
 	file = flist->files[ndx - flist->ndx_start];
 	if (!change_pathname(file, NULL, 0))
 		return;
@@ -180,6 +181,9 @@ static void write_ndx_and_attrs(int f_out, int ndx, int iflags,
 #ifdef HAVE_DUET
 	if (DEBUG_GTE(SEND, 4))
 		rprintf(FINFO, "write_ndx_and_attrs: writing ndx %d\n", ndx);
+
+	if (file->flags & FLAG_O3)
+		write_ndx(f_out, NDX_IS_O3);
 #endif /* HAVE_DUET */
 
 	write_ndx(f_out, ndx);
@@ -220,7 +224,10 @@ void send_files(int f_in, int f_out)
 	int ndx, j;
 #ifdef HAVE_DUET
 	char buf[PATH_MAX];
-	unsigned long ino;
+	long long ino;
+	long long inmem;
+	struct timeval start_tv, end_tv;
+	int64 total_update_time = 0, total_fetch_time = 0;
 #endif /* HAVE_DUET */
 
 	if (DEBUG_GTE(SEND, 1))
@@ -233,18 +240,27 @@ start_another:
 			if (pending_o3_files >= MAX_PENDING_O3)
 				goto start_inorder;
 
+			gettimeofday(&start_tv, NULL);
 			/* Update the itree */
-			if (itree_update(&itree, tid)) {
+			if (itree_update(&itree, tid, duet_fd)) {
 				rprintf(FERROR, "itree_update failed\n");
 				exit_cleanup(RERR_DUET);
 			}
+			gettimeofday(&end_tv, NULL);
+			total_update_time += (int64)(end_tv.tv_sec - start_tv.tv_sec) * 1000
+					+ (end_tv.tv_usec - start_tv.tv_usec) / 1000;
 
 			/* Send a file out of order */
-			if (itree_fetch(&itree, tid, buf, &ino)) {
+			gettimeofday(&start_tv, NULL);
+			if (itree_fetch(&itree, tid, duet_fd, buf, &ino, &inmem)) {
 				if (INFO_GTE(DUET, 3))
 					rprintf(FERROR, "duet: nothing to fetch\n");
 				exit_cleanup(RERR_DUET);
 			}
+			stats.total_o3_pages += inmem;
+			gettimeofday(&end_tv, NULL);
+			total_fetch_time += (int64)(end_tv.tv_sec - start_tv.tv_sec) * 1000
+					+ (end_tv.tv_usec - start_tv.tv_usec) / 1000;
 
 			if (buf[0] == '\0') {
 				if (INFO_GTE(DUET, 3))
@@ -252,42 +268,45 @@ start_another:
 				goto start_inorder;
 			}
 
-			if (INFO_GTE(DUET, 1))
-				rprintf(FINFO, "duet: Sending %s out of order\n", buf);
 			send_o3_file(f_out, buf);
 			pending_o3_files++;
-
-			if (duet_mark(tid, ino, 1))
-				rprintf(FERROR, "duet: failed to mark %s (ino %ld)\n",
-					buf, ino);
-
 			if (INFO_GTE(DUET, 1))
-				rprintf(FINFO, "duet: Marked %s (ino %ld)\n",
+				rprintf(FINFO, "duet: Sending %s out of order "
+					"(inmem = %lld) -- pending-o3=%d, "
+					"file_total=%d, file_old_total=%d\n",
+					buf, inmem, pending_o3_files, file_total,
+					file_old_total);
+
+			if (duet_mark(tid, duet_fd, ino, 1))
+				rprintf(FERROR, "duet: failed to mark %s (ino %lld)\n",
 					buf, ino);
 
+			if (INFO_GTE(DUET, 3))
+				rprintf(FINFO, "duet: Marked %s (ino %lld)\n",
+					buf, ino);
+
+			/* If we had less than 800KB in memory there's no point bothering */
+//			if (inmem > 100)
 			goto start_another;
+//			else
+//				send_extra_file_list(f_out, -2);
 		}
 start_inorder:
-		if (inc_recurse && !pending_o3_files) {
-#else
-		if (inc_recurse) {
 #endif /* HAVE_DUET */
+		if (inc_recurse) {
 			send_extra_file_list(f_out, MIN_FILECNT_LOOKAHEAD);
 			extra_flist_sending_enabled = !flist_eof;
 		}
 
-//#ifdef HAVE_DUET
-//make_progress:
-//#endif /* HAVE_DUET */
 		/* This call also sets cur_flist. */
-		rprintf(FINFO, "[%s] calling read_ndx_and_attrs\n", who_am_i());
 		ndx = read_ndx_and_attrs(f_in, f_out, &iflags, &fnamecmp_type,
 					 xname, &xlen);
 		extra_flist_sending_enabled = False;
-		rprintf(FINFO, "[%s] read_ndx_and_attrs got ndx %d\n", who_am_i(), ndx);
 
 #ifdef HAVE_DUET
 		if (ndx == NDX_O3_DONE)	{
+			if (!am_server && INFO_GTE(PROGRESS, 2))
+				end_progress(0);
 			if (first_o3_flist)
 				flist_free(first_o3_flist);
 			pending_o3_files--;
@@ -317,18 +336,14 @@ start_inorder:
 			write_ndx(f_out, NDX_DONE);
 			continue;
 		}
-#ifdef HAVE_DUET
-		if (inc_recurse && !pending_o3_files)
-#else
 		if (inc_recurse)
-#endif /* HAVE_DUET */
 			send_extra_file_list(f_out, MIN_FILECNT_LOOKAHEAD);
 
 #ifdef HAVE_DUET
-		if (DEBUG_GTE(SEND, 3))
-			rprintf(FINFO, "send_files: sending file with ndx %d\n",
-				ndx);
-		rprintf(FINFO, "send_files: pending_o3_files = %d\n", pending_o3_files);
+		if (DEBUG_GTE(SEND, 3)) {
+			rprintf(FINFO, "send_files: sending file with ndx %d\n", ndx);
+			rprintf(FINFO, "send_files: pending_o3_files = %d\n", pending_o3_files);
+		}
 
 		/* Look for o3 file, and if there's none we'll fall through */
 		if (cur_o3_flist && cur_o3_flist->ndx_start == ndx) {
@@ -336,7 +351,7 @@ start_inorder:
 			goto process_file;
 		}
 
-		if (DEBUG_GTE(SEND, 4))
+		if (DEBUG_GTE(FLIST, 4))
 			output_all_flists("send_files");
 #endif /* HAVE_DUET */
 		if (ndx - cur_flist->ndx_start >= 0)
@@ -363,20 +378,14 @@ process_file:
 		if (out_of_order) {
 			if (iflags & ITEM_SKIPPED) {
 				if (INFO_GTE(DUET, 1))
-					rprintf(FINFO, "duet: sender skipping %s (ino %lu)\n",
-						fname, file->src_ino);
+					rprintf(FINFO, "duet: sender skipping ino %lu\n",
+						file->src_ino);
 
 				/* Tell the receiver to not expect any data */
-				iflags = ITEM_SKIPPED;
-				//write_ndx_and_attrs(f_out, ndx, iflags, fname, file,
-				//			fnamecmp_type, xname, xlen);
-
-				if (DEBUG_GTE(SEND, 4))
-					rprintf(FINFO, "writing skipped ndx %d\n", ndx);
-
+				iflags |= ITEM_SKIPPED;
+				if (file->flags & FLAG_O3)
+					write_ndx(f_out, NDX_IS_O3);
 				write_ndx(f_out, ndx);
-				//if (protocol_version < 29)
-				//	return;
 				write_int(f_out, iflags);
 
 				/* Flag that we actually sent this entry. */
@@ -385,9 +394,8 @@ process_file:
 			}
 		}
 
-		if (INFO_GTE(DUET, 1))
-			rprintf(FINFO, "sending %s (ino %lu)\n", fname,
-				file->src_ino);
+		if (INFO_GTE(DUET, 3))
+			rprintf(FINFO, "sending ino %lu\n", file->src_ino);
 		current_files++;
 #endif /* HAVE_DUET */
 #ifdef SUPPORT_XATTRS
@@ -520,6 +528,9 @@ process_file:
 				    fnamecmp_type, xname, xlen);
 		write_sum_head(f_xfer, s);
 
+		if (DEBUG_GTE(DELTASUM, 2))
+			rprintf(FINFO, "calling match_sums %s%s%s\n", path,slash,fname);
+
 		if (log_before_transfer)
 			log_item(FCLIENT, file, iflags, NULL);
 		else if (!am_server && INFO_GTE(NAME, 1) && INFO_EQ(PROGRESS, 1))
@@ -527,14 +538,7 @@ process_file:
 
 		set_compression(fname);
 
-		if (DEBUG_GTE(DELTASUM, 2))
-			rprintf(FINFO, "calling match_sums %s%s%s\n", path,slash,fname);
-
 		match_sums(f_xfer, s, mbuf, st.st_size);
-
-		if (DEBUG_GTE(DELTASUM, 2))
-			rprintf(FINFO, "completed match_sums %s%s%s\n", path,slash,fname);
-
 		if (INFO_GTE(PROGRESS, 1))
 			end_progress(st.st_size);
 
@@ -549,7 +553,6 @@ process_file:
 					full_fname(fname));
 			}
 		}
-
 		close(fd);
 
 		free_sums(s);
@@ -572,4 +575,8 @@ process_file:
 	match_report();
 
 	write_ndx(f_out, NDX_DONE);
+	rprintf(FINFO, "Total time spent updating inode tree: %s seconds.\n",
+			comma_dnum((double)total_update_time / 1000, 3));
+	rprintf(FINFO, "Total time spent fetching o3 inodes: %s seconds.\n",
+			comma_dnum((double)total_fetch_time / 1000, 3));
 }

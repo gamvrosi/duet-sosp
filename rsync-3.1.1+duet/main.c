@@ -109,6 +109,7 @@ int batch_gen_fd = -1;
 int sender_keeps_checksum = 0;
 #ifdef HAVE_DUET
 __u8 tid;
+int duet_fd;
 struct inode_tree itree;
 #endif /* HAVE_DUET */
 
@@ -351,6 +352,8 @@ static void output_summary(void)
 #ifdef HAVE_DUET
 		rprintf(FINFO,"Total bytes sent out-of-order: %s\n",
 			human_num(total_o3_written));
+		rprintf(FINFO,"Total pages found in memory: %s\n",
+			human_num(stats.total_o3_pages * 4096));
 #endif /* HAVE_DUET */
 		rprintf(FINFO,"Total bytes received: %s\n",
 			human_num(total_read));
@@ -1662,7 +1665,12 @@ int main(int argc,char *argv[])
 
 	itree_init(&itree);
 
-	if (duet_register(&tid, "rsync", 1, DUET_PAGE_EXISTS, argv[0])) {
+	if ((duet_fd = open_duet_dev()) == -1) {
+		rprintf(FERROR, "failed to open Duet device\n");
+		exit_cleanup(RERR_DUET);
+	}
+
+	if (duet_register(&tid, duet_fd, "rsync", 1, DUET_PAGE_EXISTS, argv[0])) {
 		rprintf(FERROR, "failed to register with Duet\n");
 		exit_cleanup(RERR_DUET);
 	}
