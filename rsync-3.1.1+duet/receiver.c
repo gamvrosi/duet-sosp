@@ -230,7 +230,6 @@ int open_tmpfile(char *fnametmp, const char *fname, struct file_struct *file)
 	if (fd == -1) {
 		rsyserr(FERROR_XFER, errno, "mkstemp %s failed",
 			full_fname(fnametmp));
-		exit_cleanup(RERR_DUET);
 		return -1;
 	}
 
@@ -553,14 +552,13 @@ int recv_files(int f_in, int f_out, char *local_name)
 	while (1) {
 		cleanup_disable();
 
-		rprintf(FINFO, "[%s] calling read_ndx_and_attrs\n", who_am_i());
 		/* This call also sets cur_flist. */
 		ndx = read_ndx_and_attrs(f_in, f_out, &iflags, &fnamecmp_type,
 					 xname, &xlen);
-		rprintf(FINFO, "[%s] read_ndx_and_attrs got ndx %d\n", who_am_i(), ndx);
-
 #ifdef HAVE_DUET
 		if (ndx == NDX_O3_DONE) {
+			if (!am_server && INFO_GTE(PROGRESS, 2))
+				end_progress(0);
 			if (first_o3_flist)
 				flist_free(first_o3_flist);
 			write_int(f_out, NDX_O3_DONE);
@@ -616,18 +614,10 @@ int recv_files(int f_in, int f_out, char *local_name)
 		if (out_of_order && (iflags & ITEM_SKIPPED)) {
 skip_file:
 			fname = local_name ? local_name : f_name(file, fbuf);
+			file->flags |= FLAG_FILE_SENT;
 
 			if (DEBUG_GTE(RECV, 1))
 				rprintf(FINFO, "[%s] recv_files(%s) getting skipped\n", who_am_i(), fname);
-
-//#ifdef SUPPORT_XATTRS
-//			if (preserve_xattrs && iflags & ITEM_REPORT_XATTR && do_xfers
-//			 && !(want_xattr_optim && BITS_SET(iflags, ITEM_XNAME_FOLLOWS|ITEM_LOCAL_CHANGE)))
-//				recv_xattr_request(file, f_in);
-//#endif
-
-			//send_msg_int(MSG_SUCCESS, ndx);
-			file->flags |= FLAG_FILE_SENT;
 			continue;
 		}
 

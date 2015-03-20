@@ -1211,31 +1211,29 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
 		   : 1;
 #ifdef HAVE_DUET
 	if (out_of_order && S_ISREG(file->mode)) {
-		if (INFO_GTE(DUET, 1))
-			rprintf(FINFO, "duet: Checking %s (ino %lu)\n", fname,
-				file->src_ino);
+		if (INFO_GTE(DUET, 3))
+			rprintf(FINFO, "duet: Checking ino %lu\n", file->src_ino);
 
 		if (!(file->flags & FLAG_O3) && duet_check(tid, file->src_ino, 1) == 1) {
 			int iflags = ITEM_SKIPPED;
 
 			if (INFO_GTE(DUET, 1))
-				rprintf(FINFO, "duet: generator skipping %s (ino %lu)\n",
-					fname, file->src_ino);
+				rprintf(FINFO, "duet: generator skipping ino %lu\n",
+					file->src_ino);
 
 			/* Tell the sender about this file */
-			//write_ndx(f_out, ndx);
 			write_ndx(sock_f_out, ndx);
 			write_int(sock_f_out, iflags);
 			return;
 		}
 
 		if (duet_mark(tid, file->src_ino, 1))
-			rprintf(FERROR, "duet: failed to mark %s (ino %ld)\n",
-				fname, file->src_ino);
+			rprintf(FERROR, "duet: failed to mark ino %ld\n",
+				file->src_ino);
 
-		if (INFO_GTE(DUET, 1))
-			rprintf(FINFO, "duet: Marked %s (ino %ld)\n",
-				fname, file->src_ino);
+		if (INFO_GTE(DUET, 2))
+			rprintf(FINFO, "duet: Marked ino %ld\n",
+				file->src_ino);
 	}
 #endif /* HAVE_DUET */
 
@@ -2204,6 +2202,9 @@ void check_for_finished_files(int itemizing, enum logcode code, int check_redo)
 			goto normal_redo;
 
 		write_ndx(sock_f_out, NDX_O3_DONE);
+		if (!read_batch && !flist_eof)
+			maybe_flush_socket(!flist_eof);
+
 		flist_free(first_o3_flist);
 		continue;
 
@@ -2243,6 +2244,7 @@ void generate_files(int f_out, const char *local_name)
 	int save_info_progress = info_levels[INFO_PROGRESS];
 #ifdef HAVE_DUET
 	int done_flist = 0;
+	static int o3_counter = 0;
 #endif /* HAVE_DUET */
 
 	if (protocol_version >= 29) {
@@ -2315,6 +2317,16 @@ void generate_files(int f_out, const char *local_name)
 			}
 			recv_generator(fbuf, fp, ndx, itemizing, code, f_out);
 
+			check_for_finished_files(itemizing, code, 0);
+
+			if (++o3_counter >= MAX_PENDING_O3) {
+				if (allowed_lull)
+					maybe_send_keepalive(time(NULL), MSK_ALLOW_FLUSH);
+				else
+					maybe_flush_socket(0);
+				o3_counter = 0;
+			}
+
 			/* Move forward now, because we're done */
 			cur_o3_flist = (cur_o3_flist->next == first_flist) ?
 					NULL : cur_o3_flist->next;
@@ -2328,10 +2340,10 @@ void generate_files(int f_out, const char *local_name)
 				f_name(fp, fbuf);
 			ndx = cur_flist->ndx_start - 1;
 
-			//if (DEBUG_GTE(FLIST, 4)) {
+			if (DEBUG_GTE(FLIST, 4)) {
 				rprintf(FINFO, "generate_files: ndx=%d, parent=%d\n", ndx, cur_flist->parent_ndx);
 				output_all_flists("generate_files");
-			//}
+			}
 
 			recv_generator(fbuf, fp, ndx, itemizing, code, f_out);
 			if (delete_during && dry_run < 2 && !list_only

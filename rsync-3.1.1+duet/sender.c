@@ -247,7 +247,7 @@ start_another:
 			}
 
 			if (buf[0] == '\0') {
-				if (INFO_GTE(DUET, 3))
+				if (INFO_GTE(DUET, 2))
 					rprintf(FINFO, "duet: fetch got nothing\n");
 				goto start_inorder;
 			}
@@ -261,7 +261,7 @@ start_another:
 				rprintf(FERROR, "duet: failed to mark %s (ino %ld)\n",
 					buf, ino);
 
-			if (INFO_GTE(DUET, 1))
+			if (INFO_GTE(DUET, 3))
 				rprintf(FINFO, "duet: Marked %s (ino %ld)\n",
 					buf, ino);
 
@@ -276,18 +276,15 @@ start_inorder:
 			extra_flist_sending_enabled = !flist_eof;
 		}
 
-//#ifdef HAVE_DUET
-//make_progress:
-//#endif /* HAVE_DUET */
 		/* This call also sets cur_flist. */
-		rprintf(FINFO, "[%s] calling read_ndx_and_attrs\n", who_am_i());
 		ndx = read_ndx_and_attrs(f_in, f_out, &iflags, &fnamecmp_type,
 					 xname, &xlen);
 		extra_flist_sending_enabled = False;
-		rprintf(FINFO, "[%s] read_ndx_and_attrs got ndx %d\n", who_am_i(), ndx);
 
 #ifdef HAVE_DUET
 		if (ndx == NDX_O3_DONE)	{
+			if (!am_server && INFO_GTE(PROGRESS, 2))
+				end_progress(0);
 			if (first_o3_flist)
 				flist_free(first_o3_flist);
 			pending_o3_files--;
@@ -325,10 +322,10 @@ start_inorder:
 			send_extra_file_list(f_out, MIN_FILECNT_LOOKAHEAD);
 
 #ifdef HAVE_DUET
-		if (DEBUG_GTE(SEND, 3))
-			rprintf(FINFO, "send_files: sending file with ndx %d\n",
-				ndx);
-		rprintf(FINFO, "send_files: pending_o3_files = %d\n", pending_o3_files);
+		if (DEBUG_GTE(SEND, 3)) {
+			rprintf(FINFO, "send_files: sending file with ndx %d\n", ndx);
+			rprintf(FINFO, "send_files: pending_o3_files = %d\n", pending_o3_files);
+		}
 
 		/* Look for o3 file, and if there's none we'll fall through */
 		if (cur_o3_flist && cur_o3_flist->ndx_start == ndx) {
@@ -336,7 +333,7 @@ start_inorder:
 			goto process_file;
 		}
 
-		if (DEBUG_GTE(SEND, 4))
+		if (DEBUG_GTE(FLIST, 4))
 			output_all_flists("send_files");
 #endif /* HAVE_DUET */
 		if (ndx - cur_flist->ndx_start >= 0)
@@ -363,20 +360,12 @@ process_file:
 		if (out_of_order) {
 			if (iflags & ITEM_SKIPPED) {
 				if (INFO_GTE(DUET, 1))
-					rprintf(FINFO, "duet: sender skipping %s (ino %lu)\n",
-						fname, file->src_ino);
+					rprintf(FINFO, "duet: sender skipping ino %lu\n",
+						file->src_ino);
 
 				/* Tell the receiver to not expect any data */
-				iflags = ITEM_SKIPPED;
-				//write_ndx_and_attrs(f_out, ndx, iflags, fname, file,
-				//			fnamecmp_type, xname, xlen);
-
-				if (DEBUG_GTE(SEND, 4))
-					rprintf(FINFO, "writing skipped ndx %d\n", ndx);
-
+				iflags |= ITEM_SKIPPED;
 				write_ndx(f_out, ndx);
-				//if (protocol_version < 29)
-				//	return;
 				write_int(f_out, iflags);
 
 				/* Flag that we actually sent this entry. */
@@ -385,9 +374,8 @@ process_file:
 			}
 		}
 
-		if (INFO_GTE(DUET, 1))
-			rprintf(FINFO, "sending %s (ino %lu)\n", fname,
-				file->src_ino);
+		if (INFO_GTE(DUET, 3))
+			rprintf(FINFO, "sending ino %lu\n", file->src_ino);
 		current_files++;
 #endif /* HAVE_DUET */
 #ifdef SUPPORT_XATTRS
@@ -520,6 +508,9 @@ process_file:
 				    fnamecmp_type, xname, xlen);
 		write_sum_head(f_xfer, s);
 
+		if (DEBUG_GTE(DELTASUM, 2))
+			rprintf(FINFO, "calling match_sums %s%s%s\n", path,slash,fname);
+
 		if (log_before_transfer)
 			log_item(FCLIENT, file, iflags, NULL);
 		else if (!am_server && INFO_GTE(NAME, 1) && INFO_EQ(PROGRESS, 1))
@@ -527,14 +518,7 @@ process_file:
 
 		set_compression(fname);
 
-		if (DEBUG_GTE(DELTASUM, 2))
-			rprintf(FINFO, "calling match_sums %s%s%s\n", path,slash,fname);
-
 		match_sums(f_xfer, s, mbuf, st.st_size);
-
-		if (DEBUG_GTE(DELTASUM, 2))
-			rprintf(FINFO, "completed match_sums %s%s%s\n", path,slash,fname);
-
 		if (INFO_GTE(PROGRESS, 1))
 			end_progress(st.st_size);
 
@@ -549,7 +533,6 @@ process_file:
 					full_fname(fname));
 			}
 		}
-
 		close(fd);
 
 		free_sums(s);

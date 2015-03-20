@@ -273,7 +273,7 @@ NORETURN void _exit_cleanup(int code, const char *file, int line)
 	}
 
 #ifdef HAVE_DUET
-	if (!out_of_order || am_sender)
+	if (!out_of_order || !am_sender)
 		goto end;
 
 	if (INFO_GTE(DUET, 1))

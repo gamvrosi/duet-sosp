@@ -97,6 +97,7 @@ struct file_list *cur_flist, *first_flist, *dir_flist;
 struct file_list *cur_o3_flist, *first_o3_flist;
 int current_files = 0;
 int pending_o3_files = 0; /* total active o3 items over all o3 file-lists */
+int max_ndx_start = -1, max_flist_num = -1;
 #endif /* HAVE_DUET */
 int send_dir_ndx = -1, send_dir_depth = -1;
 int flist_cnt = 0; /* how many (non-tmp) file list objects exist */
@@ -2077,7 +2078,16 @@ void send_extra_file_list(int f, int at_least)
 	if (flist_eof)
 		return;
 
+	if (DEBUG_GTE(FLIST, 5))
+		rprintf(FINFO, "file_total = %d, file_old_total = %d, "
+			"at_least = %d\n", file_total, file_old_total,
+			at_least);
+
+#ifdef HAVE_DUET
+	if (at_least < 0 && (file_total - file_old_total < MIN_FILECNT_LOOKAHEAD))
+#else
 	if (at_least < 0)
+#endif /* HAVE_DUET */
 		at_least = file_total - file_old_total + 1;
 
 	/* Keep sending data until we have the requested number of
@@ -2906,9 +2916,12 @@ void clear_file(struct file_struct *file)
 }
 
 #ifdef HAVE_DUET
-#define max(a,b) ({ __typeof__ (a) _a = (a); \
-		__typeof__ (b) _b = (b); \
-		_a > _b ? _a : _b;  })
+#define max(x, y) ({			\
+	typeof(x) _max1 = (x);		\
+	typeof(y) _max2 = (y);		\
+	(void) (&_max1 == &_max2);	\
+	_max1 > _max2 ? _max1 : _max2;	})
+#define max3(x, y, z) max((typeof(x))max(x, y), z)
 #endif /* HAVE_DUET */
 
 /* Allocate a new file list. */
@@ -2944,15 +2957,23 @@ struct file_list *flist_new(int flags, char *msg)
 
 #ifdef HAVE_DUET
 			if (!first_o3_flist) {
-				flist->ndx_start = prev->ndx_start + prev->used + 1;
-				flist->flist_num = prev->flist_num + 1;
+				flist->ndx_start =
+					max(prev->ndx_start + prev->used,
+					max_ndx_start) + 1;
+				flist->flist_num =
+					max(prev->flist_num, max_flist_num) + 1;
 			} else {
-				flist->ndx_start = max(prev->ndx_start + prev->used,
+				flist->ndx_start =
+					max3(prev->ndx_start + prev->used,
 					first_o3_flist->prev->ndx_start +
-					first_o3_flist->prev->used) + 1;
-				flist->flist_num = max(prev->flist_num,
-					first_o3_flist->prev->flist_num) + 1;
+					first_o3_flist->prev->used,
+					max_ndx_start) + 1;
+				flist->flist_num = max3(prev->flist_num,
+					first_o3_flist->prev->flist_num,
+					max_flist_num) + 1;
 			}
+			max_ndx_start = flist->ndx_start;
+			max_flist_num = flist->flist_num;
 
 			if (flags & FLIST_O3) {
 				/* Add before first_flist */
@@ -2999,6 +3020,11 @@ struct file_list *flist_new(int flags, char *msg)
 /* Free up all elements in a flist. */
 void flist_free(struct file_list *flist)
 {
+#ifdef HAVE_DUET
+	if (flist->ndx_start + flist->used > max_ndx_start)
+		max_ndx_start = flist->ndx_start + flist->used;
+#endif /* HAVE_DUET */
+
 	if (!flist->prev) {
 		/* Was FLIST_TEMP dir-list. */
 	} else if (flist == flist->prev) {
@@ -3044,7 +3070,10 @@ void flist_free(struct file_list *flist)
 			}
 		}
 		flist->next->prev = flist->prev;
-		file_total -= flist->used;
+#ifdef HAVE_DUET
+		if (flist->parent_ndx != NDX_LIST_O3)
+#endif /* HAVE_DUET */
+			file_total -= flist->used;
 		flist_cnt--;
 	}
 
