@@ -2327,6 +2327,8 @@ void generate_files(int f_out, const char *local_name)
 
 #ifdef HAVE_DUET
 		if (cur_o3_flist) {
+			if (!cur_o3_flist->used)
+				goto o3_empty;
 			struct file_struct *fp = cur_o3_flist->files[0];
 
 			f_name(fp, fbuf);
@@ -2347,7 +2349,7 @@ void generate_files(int f_out, const char *local_name)
 //					maybe_flush_socket(0);
 //				o3_counter = 0;
 //			}
-
+o3_empty:
 			/* Move forward now, because we're done */
 			cur_o3_flist = (cur_o3_flist->next == first_flist) ?
 					NULL : cur_o3_flist->next;
@@ -2449,6 +2451,8 @@ void generate_files(int f_out, const char *local_name)
 #ifdef HAVE_DUET
 more_o3:
 	if (cur_o3_flist) {
+		if (!cur_o3_flist->used)
+			goto o3_empty_2;
 		struct file_struct *fp = cur_o3_flist->files[0];
 
 		f_name(fp, fbuf);
@@ -2469,7 +2473,7 @@ more_o3:
 //				maybe_flush_socket(0);
 //			o3_counter = 0;
 //		}
-
+o3_empty_2:
 		/* Move forward now, because we're done */
 		cur_o3_flist = (cur_o3_flist->next == first_flist) ?
 				NULL : cur_o3_flist->next;
@@ -2511,6 +2515,8 @@ more_o3:
 #ifdef HAVE_DUET
 more_o3_2:
 	if (cur_o3_flist) {
+		if (!cur_o3_flist->used)
+			goto o3_empty_3;
 		struct file_struct *fp = cur_o3_flist->files[0];
 
 		f_name(fp, fbuf);
@@ -2531,7 +2537,7 @@ more_o3_2:
 //				maybe_flush_socket(0);
 //			o3_counter = 0;
 //		}
-
+o3_empty_3:
 		/* Move forward now, because we're done */
 		cur_o3_flist = (cur_o3_flist->next == first_flist) ?
 				NULL : cur_o3_flist->next;

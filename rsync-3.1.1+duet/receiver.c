@@ -599,6 +599,8 @@ int recv_files(int f_in, int f_out, char *local_name)
 
 		/* Look for o3 file, and if there's none we'll fall through */
 		if (cur_o3_flist && cur_o3_flist->ndx_start == ndx) {
+			if (!cur_o3_flist->used)
+				continue;
 			file = cur_o3_flist->files[0];
 			if (iflags & ITEM_SKIPPED)
 				goto skip_file;
