@@ -352,6 +352,8 @@ static void output_summary(void)
 #ifdef HAVE_DUET
 		rprintf(FINFO,"Total bytes sent out-of-order: %s\n",
 			human_num(total_o3_written));
+		rprintf(FINFO,"Total pages found in memory: %s\n",
+			human_num(stats.total_o3_pages * 4096));
 #endif /* HAVE_DUET */
 		rprintf(FINFO,"Total bytes received: %s\n",
 			human_num(total_read));

@@ -2107,8 +2107,7 @@ void send_extra_file_list(int f, int at_least)
 			at_least);
 
 #ifdef HAVE_DUET
-	if (at_least == -2 || (at_least < 0 &&
-	   (pending_o3_files + file_total - file_old_total < MIN_FILECNT_LOOKAHEAD)))
+	if (at_least < 0 && (pending_o3_files + file_total - file_old_total < MIN_FILECNT_LOOKAHEAD))
 		at_least = pending_o3_files + file_total - file_old_total + 1;
 #else
 	if (at_least < 0)

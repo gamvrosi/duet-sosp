@@ -257,6 +257,7 @@ start_another:
 					rprintf(FERROR, "duet: nothing to fetch\n");
 				exit_cleanup(RERR_DUET);
 			}
+			stats.total_o3_pages += inmem;
 			gettimeofday(&end_tv, NULL);
 			total_fetch_time += (int64)(end_tv.tv_sec - start_tv.tv_sec) * 1000
 					+ (end_tv.tv_usec - start_tv.tv_usec) / 1000;
@@ -285,10 +286,10 @@ start_another:
 					buf, ino);
 
 			/* If we had less than 800KB in memory there's no point bothering */
-			if (inmem > 200)
-				goto start_another;
-			else
-				send_extra_file_list(f_out, -2);
+//			if (inmem > 100)
+			goto start_another;
+//			else
+//				send_extra_file_list(f_out, -2);
 		}
 start_inorder:
 #endif /* HAVE_DUET */

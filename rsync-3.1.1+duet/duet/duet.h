@@ -48,12 +48,9 @@
 #define DUET_PAGE_REMOVED	(1 << 1)
 #define DUET_PAGE_DIRTY		(1 << 2)
 #define DUET_PAGE_FLUSHED	(1 << 3)
-#define DUET_EVENT_BASED	(1 << 4)
-#define DUET_CACHE_STATE	(1 << 5)
-
-#define DUET_PAGE_MODIFIED	(DUET_PAGE_DIRTY | DUET_PAGE_FLUSHED)
-#define DUET_PAGE_EXISTS	(DUET_PAGE_ADDED | DUET_PAGE_REMOVED)
-#define DUET_PAGE_EVENTS	(DUET_PAGE_MODIFIED | DUET_PAGE_EXISTS)
+#define DUET_PAGE_MODIFIED	(1 << 4)
+#define DUET_PAGE_EXISTS	(1 << 5)
+#define DUET_USE_IMAP		(1 << 7)
 
 /*
  * Item struct returned for processing. For both state- and event- based duet,
