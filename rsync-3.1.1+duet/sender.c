@@ -237,7 +237,7 @@ void send_files(int f_in, int f_out)
 #ifdef HAVE_DUET
 		if (out_of_order) {
 start_another:
-			if (pending_o3_files + file_total - file_old_total >= MIN_FILECNT_LOOKAHEAD)
+			if (pending_o3_files >= MAX_PENDING_O3)
 				goto start_inorder;
 
 			gettimeofday(&start_tv, NULL);
