@@ -53,10 +53,12 @@ struct duet_task {
 	wait_queue_head_t	cleaner_queue;
 	atomic_t		refcount;
 	__u8			evtmask;	/* Mask of subscribed events */
+	char			*pathbuf;	/* Buffer for getpath */
 
 	/* Optional heuristics to filter the events received */
 	struct super_block	*f_sb;		/* Filesystem of task */
 	struct dentry		*p_dentry;	/* Parent dentry */
+	__u8			use_imap;	/* Use the inode bitmap */
 
 	/* BitTree -- progress bitmap tree */
 	__u32			bitrange;	/* range per bmap bit */

@@ -68,7 +68,7 @@ extern int filesfrom_convert;
 extern iconv_t ic_send, ic_recv;
 #endif
 #ifdef HAVE_DUET
-extern int out_of_order;
+extern int out_of_order, duet_fd;
 extern __u8 tid;
 extern struct inode_tree itree;
 #endif /* HAVE_DUET */
@@ -756,13 +756,13 @@ static char *perform_io(size_t needed, int flags)
 			}
 			if (extra_flist_sending_enabled) {
 				extra_flist_sending_enabled = False;
-#ifdef HAVE_DUET
-				/* Update the itree now that we're chilling */
-				if (out_of_order && itree_update(&itree, tid)) {
-					rprintf(FERROR, "itree_update failed\n");
-					exit_cleanup(RERR_DUET);
-				}
-#endif /* HAVE_DUET */
+//#ifdef HAVE_DUET
+//				/* Update the itree now that we're chilling */
+//				if (out_of_order && itree_update(&itree, tid, duet_fd)) {
+//					rprintf(FERROR, "itree_update failed\n");
+//					exit_cleanup(RERR_DUET);
+//				}
+//#endif /* HAVE_DUET */
 				send_extra_file_list(sock_f_out, -1);
 				extra_flist_sending_enabled = !flist_eof;
 			} else
@@ -1039,7 +1039,7 @@ void send_msg_int(enum msgcode code, int num)
 
 static void got_flist_entry_status(enum festatus status, int ndx)
 {
-	struct file_list *flist = flist_for_ndx(ndx, "got_flist_entry_status");
+	struct file_list *flist = flist_for_ndx(ndx, "got_flist_entry_status", 1);
 
 	if (remove_source_files) {
 		active_filecnt--;

@@ -25,6 +25,9 @@
 #include "rounding.h"
 #include "inums.h"
 #include "io.h"
+#ifdef HAVE_DUET
+#include "duet/duet.h"
+#endif /* HAVE_DUET */
 
 extern int am_root;
 extern int am_server;
@@ -73,6 +76,10 @@ extern uid_t our_uid;
 extern struct stats stats;
 extern char *filesfrom_host;
 extern char *usermap, *groupmap;
+#ifdef HAVE_DUET
+extern int out_of_order, duet_fd;
+extern __u8 tid;
+#endif /* HAVE_DUET */
 
 extern char curr_dir[MAXPATHLEN];
 
@@ -1496,10 +1503,8 @@ static struct file_struct *send_file_name(int f, struct file_list *flist,
 					  int flags, int filter_level)
 {
 	struct file_struct *file;
+	int64 src_ino;
 
-	file = make_file(fname, flist, stp, flags, filter_level);
-	if (!file)
-		return NULL;
 #ifdef HAVE_DUET
 	if (!stp) {
 		STRUCT_STAT sbuf;
@@ -1507,10 +1512,28 @@ static struct file_struct *send_file_name(int f, struct file_list *flist,
 			rsyserr(FERROR_XFER, errno, "do_stat %s failed", fname);
 			return NULL;
 		}
-		file->src_ino = sbuf.st_ino;
+		src_ino = sbuf.st_ino;
+
+		if (S_ISREG(sbuf.st_mode) && out_of_order &&
+		    duet_check(tid, duet_fd, src_ino, 1) == 1)
+			return NULL;
 	} else {
-		file->src_ino = stp->st_ino;
+		src_ino = stp->st_ino;
+
+		if (S_ISREG(stp->st_mode) && out_of_order &&
+		    duet_check(tid, duet_fd, src_ino, 1) == 1)
+			return NULL;
 	}
+
+	/* Check if we need to skip this file */
+#endif /* HAVE_DUET */
+
+	file = make_file(fname, flist, stp, flags, filter_level);
+	if (!file)
+		return NULL;
+
+#ifdef HAVE_DUET
+	file->src_ino = src_ino;
 #endif /* HAVE_DUET */
 
 	if (chmod_modes && !S_ISLNK(file->mode) && file->mode)
@@ -2084,15 +2107,21 @@ void send_extra_file_list(int f, int at_least)
 			at_least);
 
 #ifdef HAVE_DUET
-	if (at_least < 0 && (file_total - file_old_total < MIN_FILECNT_LOOKAHEAD))
+	if (at_least == -2 || (at_least < 0 &&
+	   (pending_o3_files + file_total - file_old_total < MIN_FILECNT_LOOKAHEAD)))
+		at_least = pending_o3_files + file_total - file_old_total + 1;
 #else
 	if (at_least < 0)
-#endif /* HAVE_DUET */
 		at_least = file_total - file_old_total + 1;
+#endif /* HAVE_DUET */
 
 	/* Keep sending data until we have the requested number of
 	 * files in the upcoming file-lists. */
+#ifdef HAVE_DUET
+	while (pending_o3_files + file_total - file_old_total < at_least) {
+#else
 	while (file_total - file_old_total < at_least) {
+#endif /* HAVE_DUET */
 		struct file_struct *file = dir_flist->sorted[send_dir_ndx];
 		int dir_ndx, dstart = stats.num_dirs;
 		const char *pathname = F_PATHNAME(file);
@@ -2592,9 +2621,7 @@ struct file_list *recv_o3_file_list(int f)
 
 		flist_expand(flist, 1);
 		file = recv_file_entry(f, flist, flags);
-
 		flist->files[flist->used++] = file;
-		maybe_emit_filelist_progress(flist->used);
 
 		if (DEBUG_GTE(FLIST, 2)) {
 			char *name = f_name(file, NULL);
@@ -2605,9 +2632,6 @@ struct file_list *recv_o3_file_list(int f)
 
 	if (DEBUG_GTE(FLIST, 2))
 		rprintf(FINFO, "received %d names\n", flist->used);
-
-	if (show_filelist_p())
-		finish_filelist_progress(flist);
 
 	flist->sorted = flist->files;
 	flist_done_allocating(flist);

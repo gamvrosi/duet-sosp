@@ -334,6 +334,13 @@ static int duet_task_init(struct duet_task **task, const char *name,
 	if (!(*task))
 		return -ENOMEM;
 
+	(*task)->pathbuf = kmalloc(4096, GFP_NOFS);
+	if (!(*task)->pathbuf) {
+		printk(KERN_ERR "duet: failed to allocate pathbuf for task\n");
+		kfree(*task);
+		return -ENOMEM;
+	}
+
 	(*task)->id = 1;
 	memcpy((*task)->name, name, MAX_NAME);
 
@@ -409,6 +416,7 @@ void duet_task_dispose(struct duet_task *task)
 
 	if (task->p_dentry)
 		dput(task->p_dentry);
+	kfree(task->pathbuf);
 	kfree(task);
 }
 

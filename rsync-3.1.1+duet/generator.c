@@ -101,7 +101,7 @@ extern char *basis_dir[MAX_BASIS_DIRS+1];
 extern struct file_list *cur_flist, *first_flist, *dir_flist;
 #ifdef HAVE_DUET
 extern struct file_list *cur_o3_flist, *first_o3_flist;
-extern int out_of_order;
+extern int out_of_order, duet_fd;
 extern __u8 tid;
 #endif /* HAVE_DUET */
 extern filter_rule_list filter_list, daemon_filter_list;
@@ -552,8 +552,13 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
 	if ((iflags & (SIGNIFICANT_ITEM_FLAGS|ITEM_REPORT_XATTR) || INFO_GTE(NAME, 2)
 	  || stdout_format_has_i > 1 || (xname && *xname)) && !read_batch) {
 		if (protocol_version >= 29) {
-			if (ndx >= 0)
+			if (ndx >= 0) {
+#ifdef HAVE_DUET
+				if (file->flags & FLAG_O3)
+					write_ndx(sock_f_out, NDX_IS_O3);
+#endif /* HAVE_DUET */
 				write_ndx(sock_f_out, ndx);
+			}
 #ifdef HAVE_DUET
 			write_int(sock_f_out, iflags);
 #else
@@ -1206,15 +1211,21 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
 	char fnamecmpbuf[MAXPATHLEN];
 	uchar fnamecmp_type;
 	int del_opts = delete_mode || force_delete ? DEL_RECURSE : 0;
-	int is_dir = !S_ISDIR(file->mode) ? 0
-		   : inc_recurse && ndx != cur_flist->ndx_start - 1 ? -1
-		   : 1;
+	int is_dir;
+
 #ifdef HAVE_DUET
+	if (!S_ISDIR(file->mode) || (file->flags & FLAG_O3))
+		is_dir = 0;
+	else if (inc_recurse && ndx != cur_flist->ndx_start - 1)
+		is_dir = -1;
+	else
+		is_dir = 1;
+
 	if (out_of_order && S_ISREG(file->mode)) {
 		if (INFO_GTE(DUET, 3))
 			rprintf(FINFO, "duet: Checking ino %lu\n", file->src_ino);
 
-		if (!(file->flags & FLAG_O3) && duet_check(tid, file->src_ino, 1) == 1) {
+		if (!(file->flags & FLAG_O3) && duet_check(tid, duet_fd, file->src_ino, 1) == 1) {
 			int iflags = ITEM_SKIPPED;
 
 			if (INFO_GTE(DUET, 1))
@@ -1222,12 +1233,14 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
 					file->src_ino);
 
 			/* Tell the sender about this file */
+			if (file->flags & FLAG_O3)
+				write_ndx(sock_f_out, NDX_IS_O3);
 			write_ndx(sock_f_out, ndx);
 			write_int(sock_f_out, iflags);
 			return;
 		}
 
-		if (duet_mark(tid, file->src_ino, 1))
+		if (duet_mark(tid, duet_fd, file->src_ino, 1))
 			rprintf(FERROR, "duet: failed to mark ino %ld\n",
 				file->src_ino);
 
@@ -1235,6 +1248,10 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
 			rprintf(FINFO, "duet: Marked ino %ld\n",
 				file->src_ino);
 	}
+#else
+	is_dir = !S_ISDIR(file->mode) ? 0
+		   : inc_recurse && ndx != cur_flist->ndx_start - 1 ? -1
+		   : 1;
 #endif /* HAVE_DUET */
 
 	if (DEBUG_GTE(GENR, 1))
@@ -1915,6 +1932,10 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
 	if (preserve_hard_links && F_IS_HLINKED(file))
 		file->flags |= FLAG_FILE_SENT;
 #endif
+#ifdef HAVE_DUET
+	if (file->flags & FLAG_O3)
+		write_ndx(f_out, NDX_IS_O3);
+#endif /* HAVE_DUET */
 	write_ndx(f_out, ndx);
 	if (itemizing) {
 		int iflags = ITEM_TRANSFER;
@@ -2135,7 +2156,7 @@ void check_for_finished_files(int itemizing, enum logcode code, int check_redo)
 			int send_failed = (ndx == -2);
 			if (send_failed)
 				ndx = get_hlink_num();
-			flist = flist_for_ndx(ndx, "check_for_finished_files.1");
+			flist = flist_for_ndx(ndx, "check_for_finished_files.1", 1);
 			file = flist->files[ndx - flist->ndx_start];
 			assert(file->flags & FLAG_HLINKED);
 			if (send_failed)
@@ -2163,7 +2184,7 @@ void check_for_finished_files(int itemizing, enum logcode code, int check_redo)
 			ignore_times++;
 
 			flist = cur_flist;
-			cur_flist = flist_for_ndx(ndx, "check_for_finished_files.2");
+			cur_flist = flist_for_ndx(ndx, "check_for_finished_files.2", 1);
 
 #ifdef HAVE_DUET
 			if (flist->parent_ndx == NDX_LIST_O3)
@@ -2202,8 +2223,8 @@ void check_for_finished_files(int itemizing, enum logcode code, int check_redo)
 			goto normal_redo;
 
 		write_ndx(sock_f_out, NDX_O3_DONE);
-		if (!read_batch && !flist_eof)
-			maybe_flush_socket(!flist_eof);
+//		if (!read_batch && !flist_eof)
+//			maybe_flush_socket(0);
 
 		flist_free(first_o3_flist);
 		continue;
@@ -2319,13 +2340,13 @@ void generate_files(int f_out, const char *local_name)
 
 			check_for_finished_files(itemizing, code, 0);
 
-			if (++o3_counter >= MAX_PENDING_O3) {
-				if (allowed_lull)
-					maybe_send_keepalive(time(NULL), MSK_ALLOW_FLUSH);
-				else
-					maybe_flush_socket(0);
-				o3_counter = 0;
-			}
+//			if (++o3_counter >= loopchk_limit) {
+//				if (allowed_lull)
+//					maybe_send_keepalive(time(NULL), MSK_ALLOW_FLUSH);
+//				else
+//					maybe_flush_socket(0);
+//				o3_counter = 0;
+//			}
 
 			/* Move forward now, because we're done */
 			cur_o3_flist = (cur_o3_flist->next == first_flist) ?
@@ -2435,21 +2456,31 @@ more_o3:
 		if (DEBUG_GTE(FLIST, 4)) {
 			rprintf(FINFO, "generate_files.p1 (o3): ndx=%d, parent=%d\n",
 				ndx, cur_o3_flist->parent_ndx);
-			output_all_flists("generate_o3_files.p1");
+			output_all_flists("generate_o3_files");
 		}
 		recv_generator(fbuf, fp, ndx, itemizing, code, f_out);
+
+		check_for_finished_files(itemizing, code, 0);
+
+//		if (++o3_counter >= loopchk_limit) {
+//			if (allowed_lull)
+//				maybe_send_keepalive(time(NULL), MSK_ALLOW_FLUSH);
+//			else
+//				maybe_flush_socket(0);
+//			o3_counter = 0;
+//		}
+
+		/* Move forward now, because we're done */
+		cur_o3_flist = (cur_o3_flist->next == first_flist) ?
+				NULL : cur_o3_flist->next;
 	}
 #endif /* HAVE_DUET */
 
 	while (1) {
 		check_for_finished_files(itemizing, code, 1);
 #ifdef HAVE_DUET
-		if (cur_o3_flist && cur_o3_flist->next && cur_o3_flist->next != first_flist) {
-			cur_o3_flist = cur_o3_flist->next;
+		if (cur_o3_flist)
 			goto more_o3;
-		} else {
-			cur_o3_flist = NULL;
-		}
 #endif /* HAVE_DUET */
 		if (msgdone_cnt)
 			break;
@@ -2477,12 +2508,49 @@ more_o3:
 			write_ndx(f_out, NDX_DONE);
 	}
 
+#ifdef HAVE_DUET
+more_o3_2:
+	if (cur_o3_flist) {
+		struct file_struct *fp = cur_o3_flist->files[0];
+
+		f_name(fp, fbuf);
+		ndx = cur_o3_flist->ndx_start;
+		if (DEBUG_GTE(FLIST, 4)) {
+			rprintf(FINFO, "generate_files.p1 (o3): ndx=%d, parent=%d\n",
+				ndx, cur_o3_flist->parent_ndx);
+			output_all_flists("generate_o3_files");
+		}
+		recv_generator(fbuf, fp, ndx, itemizing, code, f_out);
+
+		check_for_finished_files(itemizing, code, 0);
+
+//		if (++o3_counter >= loopchk_limit) {
+//			if (allowed_lull)
+//				maybe_send_keepalive(time(NULL), MSK_ALLOW_FLUSH);
+//			else
+//				maybe_flush_socket(0);
+//			o3_counter = 0;
+//		}
+
+		/* Move forward now, because we're done */
+		cur_o3_flist = (cur_o3_flist->next == first_flist) ?
+				NULL : cur_o3_flist->next;
+	}
+#endif /* HAVE_DUET */
 	/* Read MSG_DONE for the redo phase (and any prior messages). */
 	while (1) {
 		check_for_finished_files(itemizing, code, 0);
+#ifdef HAVE_DUET
+		if (cur_o3_flist)
+			goto more_o3_2;
+#endif /* HAVE_DUET */
 		if (msgdone_cnt > 1)
 			break;
 		wait_for_receiver();
+#ifdef HAVE_DUET
+		if (cur_o3_flist)
+			goto more_o3_2;
+#endif /* HAVE_DUET */
 	}
 
 	if (protocol_version >= 29) {

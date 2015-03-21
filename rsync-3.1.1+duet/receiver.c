@@ -454,7 +454,7 @@ static void handle_delayed_updates(char *local_name)
 
 static void no_batched_update(int ndx, BOOL is_redo)
 {
-	struct file_list *flist = flist_for_ndx(ndx, "no_batched_update");
+	struct file_list *flist = flist_for_ndx(ndx, "no_batched_update", 1);
 	struct file_struct *file = flist->files[ndx - flist->ndx_start];
 
 	rprintf(FERROR_XFER, "(No batched update for%s \"%s\")\n",

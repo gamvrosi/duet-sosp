@@ -109,6 +109,7 @@ int batch_gen_fd = -1;
 int sender_keeps_checksum = 0;
 #ifdef HAVE_DUET
 __u8 tid;
+int duet_fd;
 struct inode_tree itree;
 #endif /* HAVE_DUET */
 
@@ -1662,7 +1663,12 @@ int main(int argc,char *argv[])
 
 	itree_init(&itree);
 
-	if (duet_register(&tid, "rsync", 1, DUET_PAGE_EXISTS, argv[0])) {
+	if ((duet_fd = open_duet_dev()) == -1) {
+		rprintf(FERROR, "failed to open Duet device\n");
+		exit_cleanup(RERR_DUET);
+	}
+
+	if (duet_register(&tid, duet_fd, "rsync", 1, DUET_PAGE_EXISTS, argv[0])) {
 		rprintf(FERROR, "failed to register with Duet\n");
 		exit_cleanup(RERR_DUET);
 	}

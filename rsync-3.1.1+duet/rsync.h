@@ -134,9 +134,9 @@
 #define OLD_PROTOCOL_VERSION 25
 #define MAX_PROTOCOL_VERSION 40
 
-#ifdef HAVE_DUET
-#define MAX_PENDING_O3 10
-#endif /* HAVE_DUET */
+//#ifdef HAVE_DUET
+//#define MAX_PENDING_O3 200
+//#endif /* HAVE_DUET */
 #define MIN_FILECNT_LOOKAHEAD 1000
 #define MAX_FILECNT_LOOKAHEAD 10000
 
@@ -268,6 +268,7 @@ enum msgcode {
 #ifdef HAVE_DUET
 #define NDX_LIST_O3 -4
 #define NDX_O3_DONE -5
+#define NDX_IS_O3 -6
 #endif /* HAVE_DUET */
 #define NDX_FLIST_OFFSET -101
 

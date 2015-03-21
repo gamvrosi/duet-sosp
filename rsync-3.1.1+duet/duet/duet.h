@@ -81,17 +81,20 @@ struct inode_tree {
 
 /* InodeTree interface functions */
 void itree_init(struct inode_tree *itree);
-int itree_update(struct inode_tree *itree, __u8 taskid);
-int itree_fetch(struct inode_tree *itree, __u8 taskid, char *path,
-	unsigned long *ino);
+int itree_update(struct inode_tree *itree, __u8 taskid, int duet_fd);
+int itree_fetch(struct inode_tree *itree, __u8 taskid, int duet_fd, char *path,
+	long long *ino, long long *inmem);
 void itree_teardown(struct inode_tree *itree);
 
-int duet_register(__u8 *tid, const char *name, __u32 bitrange, __u8 evtmask,
-		const char *path);
-int duet_deregister(int taskid);
-int duet_fetch(int taskid, int itmreq, struct duet_item *items, int *num);
-int duet_getpath(int taskid, unsigned long ino, char *path);
-int duet_mark(int taskid, __u64 idx, __u32 num);
-int duet_unmark(int taskid, __u64 idx, __u32 num);
-int duet_check(int taskid, __u64 idx, __u32 num);
-int duet_debug_printbit(int taskid);
+int open_duet_dev(void);
+void close_duet_dev(int fd);
+int duet_register(__u8 *tid, int duet_fd, const char *name, __u32 bitrange,
+	__u8 evtmask, const char *path);
+int duet_deregister(int taskid, int duet_fd);
+int duet_fetch(int taskid, int duet_fd, int itmreq, struct duet_item *items,
+	int *num);
+int duet_getpath(int taskid, int duet_fd, unsigned long ino, char *path);
+int duet_mark(int taskid, int duet_fd, __u64 idx, __u32 num);
+int duet_unmark(int taskid, int duet_fd, __u64 idx, __u32 num);
+int duet_check(int taskid, int duet_fd, __u64 idx, __u32 num);
+int duet_debug_printbit(int taskid, int duet_fd);
