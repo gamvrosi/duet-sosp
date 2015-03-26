@@ -1,0 +1,21 @@
+The cpugrabber program gets cpu idle time 
+------------------------------------------
+
+1. run "cpugrabber -r 5000"
+
+This program will print number of iterations run by cpugrabber every 5000 ms.
+Use cpugrabber --help for more usage.
+
+2. To capture and process output, run
+"cpugrabber -r 5000 -t 20000 2> grabber.out"
+
+Run cpugrabber for a total of 20000 ms (20 seconds) and pipe stderr to
+grabber.out file.
+
+Then run
+"process-grabber dummy grabber.out" (ignore dummy parameter)
+
+process-grabber will generate the idles iterations in a column
+
+
+
