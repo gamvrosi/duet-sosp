@@ -10,6 +10,7 @@ int main(int argc, char *argv[])
 {
 	int c, freq, duration, duet_fd = 0, itret;
 	long total_items = 0;
+	long total_fetches = 0;
 	__u8 tid;
 	struct duet_item buf[MAX_ITEMS];
 	struct timespec slp = {0, 0};
@@ -54,7 +55,7 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	/* Register with the Duet framework */
+	/* Register with Duet framework: EXISTS for state, ADDED for events */
 	if (o3 && (duet_register(&tid, duet_fd, "rsync", 1, DUET_PAGE_EXISTS, "/"))) {
 		fprintf(stderr, "failed to register with Duet\n");
 		exit(1);
@@ -67,12 +68,19 @@ int main(int argc, char *argv[])
 			duet_fetch(tid, duet_fd, MAX_ITEMS, buf, &itret);
 			//fprintf(stdout, "Fetch received %d items.\n", itret);
 			total_items += itret;
+			total_fetches++;
 			if (nanosleep(&slp, NULL) < 0) {
 				fprintf(stderr, "nanosleep failed\n");
 				exit(1);
 			}
 			duration -= freq;
 		}
+	} else {
+		freq = 10;
+		slp.tv_nsec = (freq * 1000000) % 1000000000;
+		slp.tv_sec = (freq * 1000000) / 1000000000;
+		while (duration > 0)
+			nanosleep(&slp, NULL);
 	}
 
 	/* Deregister with the Duet framework */
@@ -80,5 +88,7 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "failed to deregister with Duet\n");
 
 	close_duet_dev(duet_fd);
+	fprintf(stdout, "Fetched %ld events, or %lf events/ms\n", total_items,
+		((double) total_items)/total_fetches);
 	return 0;
 }
