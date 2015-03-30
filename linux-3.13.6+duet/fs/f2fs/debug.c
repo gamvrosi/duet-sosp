@@ -17,6 +17,9 @@
 #include <linux/blkdev.h>
 #include <linux/debugfs.h>
 #include <linux/seq_file.h>
+#ifdef CONFIG_F2FS_DUET_STAT
+#include <linux/ktime.h>
+#endif /* CONFIG_F2FS_DUET_STAT */
 
 #include "f2fs.h"
 #include "node.h"
@@ -283,6 +286,17 @@ static int stat_show(struct seq_file *s, void *v)
 		seq_printf(s, "\nMemory: %u KB = static: %u + cached: %u\n",
 				(si->base_mem + si->cache_mem) >> 10,
 				si->base_mem >> 10, si->cache_mem >> 10);
+#ifdef CONFIG_F2FS_DUET_STAT
+		seq_printf(s, "Total Duet time: %lld.%3lld seconds\n",
+			si->t_duet.tv64 / NSEC_PER_SEC,
+			(si->t_duet.tv64 % NSEC_PER_SEC) / NSEC_PER_MSEC);
+		seq_printf(s, "Total GC time: %lld.%3lld seconds\n",
+			si->t_gc.tv64 / NSEC_PER_SEC,
+			(si->t_gc.tv64 % NSEC_PER_SEC) / NSEC_PER_MSEC);
+
+		seq_printf(s, "Total GC pagecache hits: %u\n", si->gc_cache_hits);
+		seq_printf(s, "Total in memory estimates: %u\n", si->gc_inmem);
+#endif /* CONFIG_F2FS_DUET_STAT */
 	}
 	mutex_unlock(&f2fs_stat_mutex);
 	return 0;
@@ -309,6 +323,9 @@ int f2fs_build_stats(struct f2fs_sb_info *sbi)
 	if (!si)
 		return -ENOMEM;
 
+#ifdef CONFIG_F2FS_DUET_STAT
+	si->t_mount = ktime_get();
+#endif /* CONFIG_F2FS_DUET_STAT */
 	si->all_area_segs = le32_to_cpu(raw_super->segment_count);
 	si->sit_area_segs = le32_to_cpu(raw_super->segment_count_sit);
 	si->nat_area_segs = le32_to_cpu(raw_super->segment_count_nat);

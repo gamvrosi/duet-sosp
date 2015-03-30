@@ -155,6 +155,9 @@ struct victim_sel_policy {
 
 struct seg_entry {
 	unsigned short valid_blocks;	/* # of valid blocks */
+#ifdef CONFIG_F2FS_DUET_GC
+	unsigned int page_cached_blocks; /* # of blocks in page cache */
+#endif /* CONFIG_F2FS_DUET_GC */
 	unsigned char *cur_valid_map;	/* validity bitmap of blocks */
 	/*
 	 * # of valid blocks and the validity bitmap stored in the the last

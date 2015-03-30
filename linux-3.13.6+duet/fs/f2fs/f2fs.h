@@ -26,6 +26,12 @@
 #define f2fs_bug_on(condition)
 #endif
 
+#ifdef CONFIG_F2FS_DUET_DEBUG
+#define f2fs_duet_debug(...) printk(__VA_ARGS__)
+#else
+#define f2fs_duet_debug(...)
+#endif
+
 /*
  * For mount options
  */
@@ -432,6 +438,11 @@ struct f2fs_sb_info {
 	/* For sysfs suppport */
 	struct kobject s_kobj;
 	struct completion s_kobj_unregister;
+
+#ifdef CONFIG_F2FS_DUET_GC
+	/* For the duet framework */
+	uint8_t duet_task_id;
+#endif /* CONFIG_F2FS_DUET_GC */
 };
 
 /*
@@ -1160,6 +1171,14 @@ struct f2fs_stat_info {
 	unsigned int segment_count[2];
 	unsigned int block_count[2];
 	unsigned base_mem, cache_mem;
+
+#ifdef CONFIG_F2FS_DUET_STAT
+	ktime_t t_mount; /* mount time */
+	ktime_t t_duet; /* total duet time */
+	ktime_t t_gc;	 /* total gc time (w/o duet) */
+	unsigned int gc_cache_hits; /* number of gc pagecache hits */
+	unsigned int gc_inmem; /* estimated in memory blocks */
+#endif /* CONFIG_F2FS_DUET_STAT */
 };
 
 static inline struct f2fs_stat_info *F2FS_STAT(struct f2fs_sb_info *sbi)

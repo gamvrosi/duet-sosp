@@ -17,6 +17,11 @@
 #include <linux/delay.h>
 #include <linux/freezer.h>
 #include <linux/blkdev.h>
+#ifdef CONFIG_F2FS_DUET_GC
+#include <linux/duet.h>
+#include <linux/rbtree.h>
+#include <linux/ktime.h>
+#endif /* CONFIG_F2FS_DUET_GC */
 
 #include "f2fs.h"
 #include "node.h"
@@ -25,6 +30,420 @@
 #include <trace/events/f2fs.h>
 
 static struct kmem_cache *winode_slab;
+
+#ifdef CONFIG_F2FS_DUET_GC
+struct blkaddr_tree_node {
+	struct rb_node rbn;
+	unsigned long ino;
+	unsigned long idx;
+	block_t blkaddr;
+};
+
+struct rb_root blkaddr_tree;
+
+static struct rb_node **blkaddr_tree_search(unsigned long ino, unsigned long idx,
+		struct rb_node **ret_par)
+{
+	struct rb_node *par, **cur;
+	struct blkaddr_tree_node *batn;
+
+	par = NULL;
+	cur = &blkaddr_tree.rb_node;
+	while (*cur) {
+		batn = rb_entry(*cur, struct blkaddr_tree_node, rbn);
+
+		par = *cur;
+		if (ino < batn->ino) {
+			cur = &(*cur)->rb_left;
+		} else if (ino > batn->ino) {
+			cur = &(*cur)->rb_right;
+		} else { /* Found ino */
+			if (idx < batn->idx)
+				cur = &(*cur)->rb_left;
+			else if (idx > batn->idx)
+				cur = &(*cur)->rb_right;
+			else /* Found ino and idx */
+				break;
+		}
+	}
+
+	*ret_par = par;
+	return cur;
+}
+
+static void blkaddr_tree_destroy(void)
+{
+	struct rb_node *node;
+	struct blkaddr_tree_node *batn;
+
+	while (!RB_EMPTY_ROOT(&blkaddr_tree)) {
+		node = rb_first(&blkaddr_tree);
+		batn = rb_entry(node, struct blkaddr_tree_node, rbn);
+		rb_erase(node, &blkaddr_tree);
+		kfree(batn);
+	}
+}
+
+static struct seg_entry* get_seg_entry_from_blkaddr(struct f2fs_sb_info *sbi,
+		block_t blkaddr)
+{
+	struct seg_entry *se;
+	unsigned int segno;
+
+	se = NULL;
+	segno = GET_SEGNO(sbi, blkaddr);
+	if (segno == NULL_SEGNO)
+		/* blkaddr == NEW_ADDR, ignore */
+	else if (segno >= TOTAL_SEGS(sbi))
+		f2fs_duet_debug(KERN_ERR "f2fs: duet-gc: "
+			"segno %u out of range of [0-%u)\n",
+			segno, TOTAL_SEGS(sbi));
+	else
+		se = get_seg_entry(sbi, segno);
+
+	return se;
+}
+
+static void inc_seg_page_counter(struct f2fs_sb_info *sbi, block_t blkaddr)
+{
+	struct seg_entry *se;
+
+	se = get_seg_entry_from_blkaddr(sbi, blkaddr);
+	if (se) {
+		if (se->page_cached_blocks >= sbi->blocks_per_seg)
+			f2fs_duet_debug(KERN_ERR "f2fs: duet-gc: "
+					"counters are inconsistent\n");
+		else
+			se->page_cached_blocks++;
+	}
+}
+
+static void dec_seg_page_counter(struct f2fs_sb_info *sbi, block_t blkaddr)
+{
+	struct seg_entry *se;
+
+	se = get_seg_entry_from_blkaddr(sbi, blkaddr);
+	if (se) {
+		if (se->page_cached_blocks == 0)
+			f2fs_duet_debug(KERN_ERR "f2fs: duet-gc: "
+					"counters are inconsistent.\n");
+		else
+			se->page_cached_blocks--;
+	}
+}
+
+static block_t get_blkaddr_from_ino(struct f2fs_sb_info *sbi,
+	unsigned long ino, unsigned long idx)
+{
+	struct node_info ni;
+	struct dnode_of_data dn;
+	struct inode *inode;
+	block_t blkaddr;
+	int err;
+
+	blkaddr = NULL_ADDR;
+
+	/* Get the inode */
+	inode = f2fs_iget(sbi->sb, ino);
+	if (IS_ERR(inode)) {
+		f2fs_duet_debug(KERN_ERR "f2fs: duet-gc: "
+				"f2fs_iget error.\n");
+		goto out;
+	}
+
+	/* Get the block address */
+	if (inode->i_ino == F2FS_NODE_INO(sbi)) { /* Node page */
+		get_node_info(sbi, idx, &ni);
+		blkaddr = ni.blk_addr;
+	} else { /* Data page */
+		f2fs_lock_op(sbi);
+		set_new_dnode(&dn, inode, NULL, NULL, 0);
+		err = get_dnode_of_data(&dn, idx, LOOKUP_NODE);
+		if (err) {
+			f2fs_duet_debug(KERN_ERR "f2fs: duet-gc: "
+					"get_dnode_of_data error.\n");
+		} else {
+			blkaddr = dn.data_blkaddr;
+			f2fs_put_dnode(&dn);
+		}
+		f2fs_unlock_op(sbi);
+	}
+	iput(inode);
+
+out:
+	return blkaddr;
+}
+
+/** Flushlist functions **/
+
+struct flushlist_node {
+	struct list_head list;
+	unsigned long ino;
+	unsigned long idx;
+	block_t blkaddr;
+};
+
+struct list_head flushlist;
+
+static int flushlist_add(unsigned long ino, unsigned long idx, block_t blkaddr)
+{
+	struct flushlist_node *fln;
+
+	fln = kzalloc(sizeof(struct flushlist_node), GFP_NOFS);
+	if (!fln)
+		return -ENOMEM;
+
+	INIT_LIST_HEAD(&fln->list);
+	fln->ino = ino;
+	fln->idx = idx;
+	fln->blkaddr = blkaddr;
+
+	list_add(&fln->list, &flushlist);
+
+	return 0;
+}
+
+static int blkaddr_lookup_update(struct f2fs_sb_info *sbi,
+	unsigned long ino, unsigned long idx);
+static void flushlist_update(struct f2fs_sb_info *sbi)
+{
+	struct flushlist_node *fln, *next;
+	block_t new_blkaddr;
+	int err = 0;
+	struct rb_node *parent, **link;
+	struct blkaddr_tree_node *batn;
+	int ret;
+
+	list_for_each_entry_safe(fln, next, &flushlist, list) {
+		new_blkaddr = get_blkaddr_from_ino(sbi, fln->ino, fln->idx);
+		if (new_blkaddr == NULL_ADDR) {
+			f2fs_duet_debug(KERN_ERR "f2fs: duet-gc: "
+					"flushlist_update: new_blkaddr NULL\n");
+			goto delete_node;
+		}
+
+		if (new_blkaddr == fln->blkaddr) /* Still hasn't been flushed */
+			continue;
+
+		parent = NULL;
+		ret = 0;
+
+		link = blkaddr_tree_search(fln->ino, fln->idx, &parent);
+		if (!(*link)) { /* Node not in tree */
+			ret = -EINVAL;
+			goto err;
+		}
+		batn = rb_entry(*link, struct blkaddr_tree_node, rbn);
+		batn->blkaddr = new_blkaddr;
+
+err:
+		if (!err) {
+			/*
+			 * XXX: This could probably cause inconsistencies in 
+			 * certain scenarios. Think about it more if it's an
+			 * issue. 
+			 */
+			//dec_seg_page_counter(sbi, fln->blkaddr);
+			inc_seg_page_counter(sbi, new_blkaddr);
+		}
+
+delete_node:
+		list_del(&fln->list);
+		kfree(fln);
+	}
+
+	return;
+}
+
+static void flushlist_destroy(void)
+{
+	struct flushlist_node *fln, *next;
+
+	list_for_each_entry_safe(fln, next, &flushlist, list) {
+		list_del(&fln->list);
+		kfree(fln);
+	}
+
+	return;
+}
+
+/** blkaddr tree functions **/
+
+static int blkaddr_lookup_insert(struct f2fs_sb_info *sbi,
+	unsigned long ino, unsigned long idx)
+{
+	struct rb_node *parent, **link;
+	struct blkaddr_tree_node *new_batn;
+	block_t blkaddr = NULL_ADDR;
+
+	parent = NULL;
+
+	link = blkaddr_tree_search(ino, idx, &parent);
+	if (*link) {
+		/* Nothing to do; page already there */
+		return 0;
+	}
+
+	blkaddr = get_blkaddr_from_ino(sbi, ino, idx);
+	if (blkaddr == NULL_ADDR) {
+		f2fs_duet_debug(KERN_ERR "duet-gc: blkaddr_lookup_insert "
+				"new_blkaddr is NULL.\n");
+		return 0;
+	}
+
+	new_batn = kzalloc(sizeof(struct blkaddr_tree_node), GFP_NOFS);
+	if (!new_batn)
+		return -ENOMEM;
+
+	new_batn->ino = ino;
+	new_batn->idx = idx;
+	new_batn->blkaddr = blkaddr;
+
+	inc_seg_page_counter(sbi, blkaddr);
+	rb_link_node(&new_batn->rbn, parent, link);
+	rb_insert_color(&new_batn->rbn, &blkaddr_tree);
+
+	return 0;
+}
+
+static int blkaddr_lookup_update(struct f2fs_sb_info *sbi,
+	unsigned long ino, unsigned long idx)
+{
+	struct rb_node *parent, **link;
+	struct blkaddr_tree_node *batn;
+	block_t blkaddr = NULL_ADDR;
+	int ret;
+
+	parent = NULL;
+	link = blkaddr_tree_search(ino, idx, &parent);
+	if (!(*link)) {
+		/*
+		 * This can (and does) happen if a page is added, removed, and
+		 * flushed (added/removed cancel each other, so all we hear
+		 * about is the flush).
+		 */
+		return 0;
+	}
+
+	batn = rb_entry(*link, struct blkaddr_tree_node, rbn);
+	dec_seg_page_counter(sbi, batn->blkaddr);
+
+	/* Now work on updating the new blkaddr */
+	blkaddr = get_blkaddr_from_ino(sbi, ino, idx);
+
+	/* Did we beat the flusher thread here */
+	if (blkaddr == batn->blkaddr) {
+		ret = flushlist_add(ino, idx, batn->blkaddr);
+		if (ret)
+			f2fs_duet_debug(KERN_ERR "duet-gc: flushlist_add error\n");
+		return -EINVAL;
+	}
+
+	batn->blkaddr = blkaddr;
+	inc_seg_page_counter(sbi, blkaddr);
+	return 0;
+}
+
+static int blkaddr_lookup_remove(struct f2fs_sb_info *sbi,
+	unsigned long ino, unsigned long idx)
+{
+	struct rb_node *parent = NULL, **link;
+	struct blkaddr_tree_node *batn;
+
+	link = blkaddr_tree_search(ino, idx, &parent);
+	if (!(*link)) {
+		/* Node not in tree */
+		return 0;
+	}
+
+	batn = rb_entry(*link, struct blkaddr_tree_node, rbn);
+	dec_seg_page_counter(sbi, batn->blkaddr);
+	rb_erase(&batn->rbn, &blkaddr_tree);
+	return 0;
+}
+
+/*
+ * The core of opportunistic segment cleaning.
+ *
+ * We maintain per-segment counters that represent how many blocks
+ * each segment has in memory. These in-memory block counts are then 
+ * considered when the garbage collector is selecting its victim
+ * segment.
+ */
+void fetch_and_handle_duet_events(struct f2fs_sb_info *sbi)
+{
+	u16 iret;
+	struct duet_item itm;
+	int err, ret;
+
+	if (!duet_online() || !sbi->duet_task_id)
+		return;
+
+	/* Update our flush list */
+	flushlist_update(sbi);
+
+	/* Get new events */
+	while (1) {
+		err = duet_fetch(sbi->duet_task_id, 1, &itm, &iret);
+		if (err) {
+			f2fs_duet_debug(KERN_ERR "f2fs: duet-gc: "
+					"duet_fetch failed.\n");
+			return;
+		}
+
+		/* No events? */
+		if (iret == 0)
+			break;
+
+		/* GC not interested in meta pages */
+		if (itm.ino == F2FS_META_INO(sbi))
+			continue;
+
+		if (itm.state & DUET_PAGE_ADDED) {
+			ret = blkaddr_lookup_insert(sbi, itm.ino, itm.idx);
+			if (ret < 0)
+				f2fs_duet_debug(KERN_ERR "duet-gc: "
+					"blkaddr_lookup_insert error\n");
+		} else if (itm.state & DUET_PAGE_REMOVED) {
+			ret = blkaddr_lookup_remove(sbi, itm.ino, itm.idx);
+			if (ret < 0)
+				f2fs_duet_debug(KERN_ERR "duet-gc: "
+					"blkaddr_lookup_remove error\n");
+		} else if (itm.state == DUET_PAGE_FLUSHED) {
+			ret = blkaddr_lookup_update(sbi, itm.ino, itm.idx);
+			if (ret < 0)
+				f2fs_duet_debug(KERN_ERR "duet-gc: "
+					"blkaddr_lookup_update error\n");
+		}
+	}
+}
+
+int register_with_duet(struct f2fs_sb_info *sbi)
+{
+	int err;
+
+	if (!duet_online()) {
+		printk(KERN_ERR "f2fs: duet-gc: "
+			"duet is offline, cannot register.\n");
+		sbi->duet_task_id = 0;
+		return -ENODEV;
+	}
+
+	err = duet_register(&sbi->duet_task_id, "f2fs-gc",
+				DUET_PAGE_EXISTS | DUET_PAGE_FLUSHED,
+				sbi->blocksize, sbi->sb, 0);
+	if (err) {
+		printk(KERN_ERR "f2fs: duet-gc: "
+			"failed to register with the duet framework.\n");
+		sbi->duet_task_id = 0;
+	} else {
+		printk(KERN_INFO "f2fs: duet-gc: "
+			"registered with the duet framework successfully.\n");
+	}
+
+	return err;
+}
+#endif /* CONFIG_F2FS_DUET_GC */
 
 static int gc_thread_func(void *data)
 {
@@ -132,6 +551,18 @@ void stop_gc_thread(struct f2fs_sb_info *sbi)
 	kthread_stop(gc_th->f2fs_gc_task);
 	kfree(gc_th);
 	sbi->gc_thread = NULL;
+/* XXX: Move this code somewhere else */
+#ifdef CONFIG_F2FS_DUET_GC
+	blkaddr_tree_destroy();
+	flushlist_destroy();
+
+	if (sbi->duet_task_id) {
+		duet_deregister(sbi->duet_task_id);
+		sbi->duet_task_id = 0;
+		printk(KERN_INFO "f2fs: duet-gc: "
+			"succesfully deregistered from the duet framework.\n");
+	}
+#endif /* CONFIG_F2FS_DUET_GC */
 }
 
 static int select_gc_type(struct f2fs_gc_kthread *gc_th, int gc_type)
@@ -216,10 +647,28 @@ static unsigned int get_cb_cost(struct f2fs_sb_info *sbi, unsigned int segno)
 	unsigned char age = 0;
 	unsigned char u;
 	unsigned int i;
+#ifdef CONFIG_F2FS_DUET_GC
+	unsigned int inmem = 0;
+	struct seg_entry *se = NULL;
+#endif /* CONFIG_F2FS_DUET_GC */
+
+	for (i = 0; i < sbi->segs_per_sec; i++) {
+		se = get_seg_entry(sbi, start + i);
+		mtime += se->mtime;
+#ifdef CONFIG_F2FS_DUET_GC
+		inmem += se->page_cached_blocks;
+#endif /* CONFIG_F2FS_DUET_GC */
+	}
 
 	for (i = 0; i < sbi->segs_per_sec; i++)
 		mtime += get_seg_entry(sbi, start + i)->mtime;
 	vblocks = get_valid_blocks(sbi, segno, sbi->segs_per_sec);
+#ifdef CONFIG_F2FS_DUET_GC
+	//printk(KERN_DEBUG "f2fs-gc: examining segno %u - segs_per_sec %u, "
+	//		"valid = %u, inmem = %u\n",
+	//	segno, sbi->segs_per_sec, vblocks, inmem);
+	vblocks -= min(div_u64(inmem, sbi->segs_per_sec), vblocks); // >> 0;
+#endif
 
 	mtime = div_u64(mtime, sbi->segs_per_sec);
 	vblocks = div_u64(vblocks, sbi->segs_per_sec);
@@ -695,6 +1144,18 @@ int f2fs_gc(struct f2fs_sb_info *sbi)
 	int nfree = 0;
 	int ret = -1;
 
+#ifdef CONFIG_F2FS_DUET_STAT
+	ktime_t tstart;
+	tstart = ktime_get();
+#endif
+#ifdef CONFIG_F2FS_DUET_GC
+	fetch_and_handle_duet_events(sbi);
+#endif
+#ifdef CONFIG_F2FS_DUET_STAT
+	F2FS_STAT(sbi)->t_duet = ktime_add_safe(F2FS_STAT(sbi)->t_duet,
+						ktime_sub(ktime_get(), tstart));
+#endif
+
 	INIT_LIST_HEAD(&ilist);
 gc_more:
 	if (!(sbi->sb->s_flags & MS_ACTIVE))
@@ -709,8 +1170,16 @@ gc_more:
 		goto stop;
 	ret = 0;
 
+#ifdef CONFIG_F2FS_DUET_STAT
+	F2FS_STAT(sbi)->gc_inmem += get_seg_entry(sbi, segno)->page_cached_blocks;
+	tstart = ktime_get();
+#endif /* CONFIG_F2FS_DUET_STAT */
 	for (i = 0; i < sbi->segs_per_sec; i++)
 		do_garbage_collect(sbi, segno + i, &ilist, gc_type);
+#ifdef CONFIG_F2FS_DUET_STAT
+	F2FS_STAT(sbi)->t_gc = ktime_add_safe(F2FS_STAT(sbi)->t_gc,
+					ktime_sub(ktime_get(), tstart));
+#endif /* CONFIG_F2FS_DUET_STAT */
 
 	if (gc_type == FG_GC) {
 		sbi->cur_victim_sec = NULL_SEGNO;
@@ -732,6 +1201,16 @@ stop:
 
 void build_gc_manager(struct f2fs_sb_info *sbi)
 {
+#ifdef CONFIG_F2FS_DUET_GC
+	int err;
+
+	blkaddr_tree = RB_ROOT;
+	INIT_LIST_HEAD(&flushlist);
+
+	err = register_with_duet(sbi);
+	if (err)
+		blkaddr_tree_destroy();
+#endif /* CONFIG_F2FS_DUET_GC */
 	DIRTY_I(sbi)->v_ops = &default_v_ops;
 }
 
