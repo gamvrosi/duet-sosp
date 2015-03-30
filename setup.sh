@@ -44,6 +44,11 @@ while getopts ":dci" opt; do
 		#make clean
 		make
 
+		# ...and (re)compile the f2fs tools
+		cd ../f2fs-tools
+		#make clean
+		make
+ 
 		# ...and (re)compile rsync
 		cd ../rsync-3.1.1+duet
 		#make clean
@@ -63,6 +68,10 @@ while getopts ":dci" opt; do
 
 		# Install the duet tools (in /usr/local/bin)
 		cd ../duet-progs
+		sudo make install
+
+		# Install the f2fs tools (in /usr/local/bin)
+		cd ../f2fs-tools
 		sudo make install
 
 		# Do not install rsync; it will replace the stock rsync
