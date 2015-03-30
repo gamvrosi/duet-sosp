@@ -422,6 +422,9 @@ int f2fs_get_device_info(struct f2fs_configuration *c)
 {
 	int32_t fd = 0;
 	uint32_t sector_size;
+#ifndef BLKGETSIZE64
+	uint32_t total_sectors;
+#endif
 	struct stat stat_buf;
 	struct hd_geometry geom;
 	u_int64_t wanted_total_sectors = c->total_sectors;
@@ -441,7 +444,8 @@ int f2fs_get_device_info(struct f2fs_configuration *c)
 	if (S_ISREG(stat_buf.st_mode)) {
 		c->total_sectors = stat_buf.st_size / c->sector_size;
 	} else if (S_ISBLK(stat_buf.st_mode)) {
-		if (ioctl(fd, BLKSSZGET, &sector_size) < 0) {
+#ifdef BLKGETSIZE64
+		if (ioctl(fd, BLKGETSIZE64, &c->total_sectors) < 0) {
 			MSG(0, "\tError: Using the default sector size\n");
 		} else {
 			if (c->sector_size < sector_size) {
@@ -459,6 +463,15 @@ int f2fs_get_device_info(struct f2fs_configuration *c)
 			return -1;
 		}
 
+		c->total_sectors /= c->sector_size;
+#else
+		if (ioctl(fd, BLKGETSIZE, &total_sectors) < 0) {
+			MSG(0, "\tError: Cannot get the device size\n");
+			return -1;
+		}
+		total_sectors /= c->sector_size;
+		c->total_sectors = total_sectors;
+#endif
 		if (ioctl(fd, HDIO_GETGEO, &geom) < 0)
 			c->start_sector = 0;
 		else
