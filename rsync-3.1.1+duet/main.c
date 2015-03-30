@@ -26,7 +26,11 @@
 #if defined CONFIG_LOCALE && defined HAVE_LOCALE_H
 #include <locale.h>
 #endif
+#ifdef HAVE_DUET
+#include "duet/duet.h"
 
+extern int out_of_order;
+#endif /* HAVE_DUET */
 extern int dry_run;
 extern int list_only;
 extern int io_timeout;
@@ -103,6 +107,11 @@ int daemon_over_rsh = 0;
 mode_t orig_umask = 0;
 int batch_gen_fd = -1;
 int sender_keeps_checksum = 0;
+#ifdef HAVE_DUET
+__u8 tid;
+int duet_fd;
+struct inode_tree itree;
+#endif /* HAVE_DUET */
 
 /* There's probably never more than at most 2 outstanding child processes,
  * but set it higher, just in case. */
@@ -124,6 +133,9 @@ struct pid_status {
 
 static time_t starttime, endtime;
 static int64 total_read, total_written;
+#ifdef HAVE_DUET
+static int64 total_o3_written;
+#endif /* HAVE_DUET */
 
 static void show_malloc_stats(void);
 
@@ -224,6 +236,9 @@ static void handle_stats(int f)
 	/* Cache two stats because the read/write code can change it. */
 	total_read = stats.total_read;
 	total_written = stats.total_written;
+#ifdef HAVE_DUET
+	total_o3_written = stats.total_o3_written;
+#endif /* HAVE_DUET */
 
 	if (INFO_GTE(STATS, 3)) {
 		/* These come out from every process */
@@ -330,8 +345,16 @@ static void output_summary(void)
 				"File list transfer time: %s seconds\n",
 				comma_dnum((double)stats.flist_xfertime / 1000, 3));
 		}
+		rprintf(FINFO,"Total runtime: %s seconds\n",
+			comma_dnum((double)stats.total_runtime / 1000, 3));
 		rprintf(FINFO,"Total bytes sent: %s\n",
 			human_num(total_written));
+#ifdef HAVE_DUET
+		rprintf(FINFO,"Total bytes sent out-of-order: %s\n",
+			human_num(total_o3_written));
+		rprintf(FINFO,"Total pages found in memory: %s\n",
+			human_num(stats.total_o3_pages * 4096));
+#endif /* HAVE_DUET */
 		rprintf(FINFO,"Total bytes received: %s\n",
 			human_num(total_read));
 	}
@@ -342,6 +365,10 @@ static void output_summary(void)
 			"sent %s bytes  received %s bytes  %s bytes/sec\n",
 			human_num(total_written), human_num(total_read),
 			human_dnum((total_written + total_read)/(0.5 + (endtime - starttime)), 2));
+#ifdef HAVE_DUET
+		rprintf(FINFO,
+			"out-of-order sent %s bytes\n", human_num(total_o3_written));
+#endif /* HAVE_DUET */
 		rprintf(FINFO, "total size is %s  speedup is %s%s\n",
 			human_num(stats.total_size),
 			comma_dnum((double)stats.total_size / (total_written+total_read), 2),
@@ -1099,6 +1126,7 @@ int client_run(int f_in, int f_out, pid_t pid, int argc, char *argv[])
 	struct file_list *flist = NULL;
 	int exit_code = 0, exit_code2 = 0;
 	char *local_name = NULL;
+	struct timeval start_tv, end_tv;
 
 	cleanup_child_pid = pid;
 	if (!read_batch) {
@@ -1120,6 +1148,9 @@ int client_run(int f_in, int f_out, pid_t pid, int argc, char *argv[])
 	set_blocking(STDERR_FILENO);
 
 	if (am_sender) {
+		/* Record start time */
+		gettimeofday(&start_tv, NULL);
+
 		keep_dirlinks = 0; /* Must be disabled on the sender. */
 
 		if (always_checksum
@@ -1160,6 +1191,12 @@ int client_run(int f_in, int f_out, pid_t pid, int argc, char *argv[])
 			io_flush(FULL_FLUSH);
 			wait_process_with_flush(pid, &exit_code);
 		}
+
+		/* Record end time */
+		gettimeofday(&end_tv, NULL);
+		stats.total_runtime = (int64)(end_tv.tv_sec - start_tv.tv_sec) * 1000
+					+ (end_tv.tv_usec - start_tv.tv_usec) / 1000;
+
 		output_summary();
 		io_flush(FULL_FLUSH);
 		exit_cleanup(exit_code);
@@ -1621,6 +1658,24 @@ int main(int argc,char *argv[])
 		usage(FERROR);
 		exit_cleanup(RERR_SYNTAX);
 	}
+
+#ifdef HAVE_DUET
+	if (!out_of_order)
+		goto start;
+
+	itree_init(&itree);
+
+	if ((duet_fd = open_duet_dev()) == -1) {
+		rprintf(FERROR, "failed to open Duet device\n");
+		exit_cleanup(RERR_DUET);
+	}
+
+	if (duet_register(&tid, duet_fd, "rsync", 1, DUET_PAGE_EXISTS, argv[0])) {
+		rprintf(FERROR, "failed to register with Duet\n");
+		exit_cleanup(RERR_DUET);
+	}
+start:
+#endif /* HAVE_DUET */
 
 	if (am_server) {
 		set_nonblocking(STDIN_FILENO);

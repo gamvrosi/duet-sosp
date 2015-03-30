@@ -18,6 +18,8 @@
  * with this program; if not, visit the http://fsf.org website.
  */
 
+#include "config.h"
+
 #define False 0
 #define True 1
 
@@ -62,6 +64,9 @@
 #define XMIT_HLINK_FIRST (1<<12)	/* protocols 30 - now (HLINKED files only) */
 #define XMIT_IO_ERROR_ENDLIST (1<<12)	/* protocols 31*- now (w/XMIT_EXTENDED_FLAGS) (also protocol 30 w/'f' compat flag) */
 #define XMIT_MOD_NSEC (1<<13)		/* protocols 31 - now */
+#ifdef HAVE_DUET
+#define XMIT_O3 (1<<14)			/* file is being sent out of order */
+#endif /* HAVE_DUET */
 
 /* These flags are used in the live flist data. */
 
@@ -83,6 +88,9 @@
 #define FLAG_SKIP_GROUP (1<<10)	/* receiver/generator */
 #define FLAG_TIME_FAILED (1<<11)/* generator */
 #define FLAG_MOD_NSEC (1<<12)	/* sender/receiver/generator */
+#ifdef HAVE_DUET
+#define FLAG_O3 (1<<13)		/* file is being sent out of order */
+#endif /* HAVE_DUET */
 
 /* These flags are passed to functions but not stored. */
 
@@ -126,7 +134,10 @@
 #define OLD_PROTOCOL_VERSION 25
 #define MAX_PROTOCOL_VERSION 40
 
-#define MIN_FILECNT_LOOKAHEAD 1000
+#ifdef HAVE_DUET
+#define MAX_PENDING_O3 100
+#endif /* HAVE_DUET */
+#define MIN_FILECNT_LOOKAHEAD 100 //1000
 #define MAX_FILECNT_LOOKAHEAD 10000
 
 #define RSYNC_PORT 873
@@ -200,6 +211,10 @@
 #define ITEM_MISSING_DATA (1<<16)	   /* used by log_formatted() */
 #define ITEM_DELETED (1<<17)		   /* used by log_formatted() */
 #define ITEM_MATCHED (1<<18)		   /* used by itemize() */
+#ifdef HAVE_DUET
+/* These are used now that we've extended the iflags length */
+#define ITEM_SKIPPED (1<<19) /* Do not expect any data */
+#endif /* HAVE_DUET */
 
 #define SIGNIFICANT_ITEM_FLAGS (~(\
 	ITEM_BASIS_TYPE_FOLLOWS | ITEM_XNAME_FOLLOWS | ITEM_LOCAL_CHANGE))
@@ -250,6 +265,11 @@ enum msgcode {
 #define NDX_DONE -1
 #define NDX_FLIST_EOF -2
 #define NDX_DEL_STATS -3
+#ifdef HAVE_DUET
+#define NDX_LIST_O3 -4
+#define NDX_O3_DONE -5
+#define NDX_IS_O3 -6
+#endif /* HAVE_DUET */
 #define NDX_FLIST_OFFSET -101
 
 /* For calling delete_item() and delete_dir_contents(). */
@@ -278,8 +298,6 @@ enum delret {
 #define MSK_ACTIVE_RECEIVER 	(1<<1)
 
 #include "errcode.h"
-
-#include "config.h"
 
 /* The default RSYNC_RSH is always set in config.h. */
 
@@ -702,6 +720,9 @@ struct file_struct {
 	uint32 len32;		/* Lowest 32 bits of the file's length */
 	uint16 mode;		/* The item's type and permissions */
 	uint16 flags;		/* The FLAG_* bits for this item */
+#ifdef HAVE_DUET
+	int64 src_ino;		/* inode number of file at the sender side */
+#endif /* HAVE_DUET */
 	const char basename[1];	/* The basename (AKA filename) follows */
 };
 
@@ -810,6 +831,9 @@ extern int xattrs_ndx;
 #define SMALL_EXTENT	(128 * 1024)
 
 #define FLIST_TEMP	(1<<1)
+#ifdef HAVE_DUET
+#define FLIST_O3	(1<<2)
+#endif /* HAVE_DUET */
 
 struct file_list {
 	struct file_list *next, *prev;
@@ -901,8 +925,13 @@ struct stats {
 	int64 total_transferred_size;
 	int64 total_written;
 	int64 total_read;
+#ifdef HAVE_DUET
+	int64 total_o3_written;
+	int64 total_o3_pages;
+#endif /* HAVE_DUET */
 	int64 literal_data;
 	int64 matched_data;
+	int64 total_runtime;
 	int64 flist_buildtime;
 	int64 flist_xfertime;
 	int64 flist_size;
@@ -1239,7 +1268,12 @@ extern short info_levels[], debug_levels[];
 #define INFO_BACKUP 0
 #define INFO_COPY (INFO_BACKUP+1)
 #define INFO_DEL (INFO_COPY+1)
+#ifdef HAVE_DUET
+#define INFO_DUET (INFO_DEL+1)
+#define INFO_FLIST (INFO_DUET+1)
+#else
 #define INFO_FLIST (INFO_DEL+1)
+#endif /* HAVE_DUET */
 #define INFO_MISC (INFO_FLIST+1)
 #define INFO_MOUNT (INFO_MISC+1)
 #define INFO_NAME (INFO_MOUNT+1)

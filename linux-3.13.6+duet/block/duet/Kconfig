@@ -1,70 +1,27 @@
 config DUET
-	tristate "Core Duet synergy framework support"
+	bool "Core Duet synergy framework support"
 
 	help
-	  Duet is a framework that aims to reduce the storage load due to
-	  maintenance work meant to be performed in the background. It does
-	  this by detecting synergies between the foreground workload and each
-	  maintenance tasks, and leveraging them to perform maintenance work
-	  opportunistically, out of order, while the data is already accessed.
-	  In the core of the duet system lie hooks into the block, file system,
-	  and page cache layer.
-
-	  This option enables the basic framework infrastructure. To enable
-	  hooks at different levels, you need to enable the DUET_BLOCK,
-	  DUET_<FS>, and DUET_CACHE options.
+	  Duet is a framework aiming to reduce the IO needed for maintenance
+	  work. By exposing page cache events to maintenance tasks, it allows
+	  them to detect synergies with other processes, and leverage them to
+	  perform maintenance work opportunistically, out of order, while the
+	  data is available in the page cache. In the core of the duet system
+	  lie hooks into the page cache layer, that inform the framework on
+	  the addition or removal of pages from the page cache.
 
 	  To compile duet support as a module, choose M here. The module will
 	  be called duet.
 
 	  If unsure, say N.
 
-config DUET_BLOCK
-	bool "Duet synergy framework support for the block layer"
+config DUET_TREE_STATS
+	bool "Duet tree stats support"
 	depends on DUET
 
 	help
-	  This option enables Duet hook support for the block layer.
-	  The hooks offered can be found in linux/duet.h
-
-	  This option requires support for the duet core framework
-	  (CONFIG_DUET).
-
-	  If unsure, say N.
-
-config DUET_BTRFS
-	bool "Duet synergy framework support for btrfs"
-	depends on DUET
-
-	help
-	  This option enables Duet hook support for the btrfs file system.
-	  The hooks offered can be found in linux/duet.h
-
-	  This option requires support for the duet core framework
-	  (CONFIG_DUET).
-
-	  If unsure, say N.
-
-config DUET_CACHE
-	bool "Duet synergy framework support for the page cache"
-	depends on DUET
-
-	help
-	  This option enables Duet hook support at the page cache level.
-	  The hooks offered can be found in linux/duet.h
-
-	  This option requires support for the duet core framework
-	  (CONFIG_DUET).
-
-	  If unsure, say N.
-
-config DUET_BMAP_STATS
-	bool "Duet RBBT stats support"
-	depends on DUET
-
-	help
-	  This option enabled support for keeping statistics about RBBT
-	  memory consumption
+	  This option enabled support for keeping statistics about
+	  memory consumption of trees (BitTree and NodeTree).
 
 	  If unsure, say N.
 

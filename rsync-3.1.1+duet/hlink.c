@@ -39,6 +39,9 @@ extern int maybe_ATTRS_REPORT;
 extern int unsort_ndx;
 extern char *basis_dir[MAX_BASIS_DIRS+1];
 extern struct file_list *cur_flist;
+#ifdef HAVE_DUET
+extern struct file_list *cur_o3_flist;
+#endif /* HAVE_DUET */
 
 #ifdef SUPPORT_HARD_LINKS
 
@@ -135,7 +138,7 @@ static void match_gnums(int32 *ndx_list, int ndx_count)
 			} else if (CVAL(node->data, 0) == 0) {
 				struct file_list *flist;
 				prev = IVAL(node->data, 1);
-				flist = flist_for_ndx(prev, NULL);
+				flist = flist_for_ndx(prev, NULL, 1);
 				if (flist)
 					flist->files[prev - flist->ndx_start]->flags &= ~FLAG_HLINK_LAST;
 				else {
@@ -257,7 +260,7 @@ static char *check_prior(struct file_struct *file, int gnum,
 	while (1) {
 		struct file_list *flist;
 		if (prev_ndx < 0
-		 || (flist = flist_for_ndx(prev_ndx, NULL)) == NULL)
+		 || (flist = flist_for_ndx(prev_ndx, NULL, 1)) == NULL)
 			break;
 		fp = flist->files[prev_ndx - flist->ndx_start];
 		if (!(fp->flags & FLAG_SKIP_HLINK)) {
@@ -325,7 +328,12 @@ int hard_link_check(struct file_struct *file, int ndx, char *fname,
 				F_HL_PREV(file) = F_HL_PREV(prev_file);
 				F_HL_PREV(prev_file) = ndx;
 				file->flags |= FLAG_FILE_SENT;
-				cur_flist->in_progress++;
+#ifdef HAVE_DUET
+				if (file->flags & FLAG_O3)
+					cur_o3_flist->in_progress++;
+				else
+#endif /* HAVE_DUET */
+					cur_flist->in_progress++;
 				if (DEBUG_GTE(HLINK, 2)) {
 					rprintf(FINFO, "hlink for %d (%s,%d): waiting for %d\n",
 						ndx, f_name(file, NULL), gnum, F_HL_PREV(file));
@@ -510,7 +518,7 @@ void finish_hard_link(struct file_struct *file, const char *fname, int fin_ndx,
 
 	while ((ndx = prev_ndx) >= 0) {
 		int val;
-		flist = flist_for_ndx(ndx, "finish_hard_link");
+		flist = flist_for_ndx(ndx, "finish_hard_link", 1);
 		file = flist->files[ndx - flist->ndx_start];
 		file->flags = (file->flags & ~FLAG_HLINK_FIRST) | FLAG_HLINK_DONE;
 		prev_ndx = F_HL_PREV(file);

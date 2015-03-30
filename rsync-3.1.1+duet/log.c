@@ -102,6 +102,9 @@ struct {
 	{ RERR_CMD_KILLED , "remote shell killed" },
 	{ RERR_CMD_RUN    , "remote command could not be run" },
 	{ RERR_CMD_NOTFOUND,"remote command not found" },
+#ifdef HAVE_DUET
+	{ RERR_DUET       , "duet primitive failed" },
+#endif /* HAVE_DUET */
 	{ 0, NULL }
 };
 
@@ -877,6 +880,10 @@ void log_exit(int code, const char *file, int line)
 			big_num(stats.total_written),
 			big_num(stats.total_read),
 			big_num(stats.total_size));
+#ifdef HAVE_DUET
+		rprintf(FLOG,"out of order sent %s bytes bytes\n",
+			big_num(stats.total_o3_written));
+#endif /* HAVE_DUET */
 	} else if (am_server != 2) {
 		const char *name;
 

@@ -2,11 +2,6 @@
 #define BLK_INTERNAL_H
 
 #include <linux/idr.h>
-#ifdef CONFIG_DUET_BLOCK
-#include <linux/duet.h>
-
-extern duet_hook_t *duet_hook_blk_fp;
-#endif /* CONFIG_DUET_BLOCK */
 
 /* Amount of time in which a process may batch requests */
 #define BLK_BATCH_TIME	(HZ/50UL)

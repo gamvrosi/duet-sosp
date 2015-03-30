@@ -50,6 +50,10 @@ extern int file_old_total;
 extern int keep_dirlinks;
 extern int make_backups;
 extern struct file_list *cur_flist, *first_flist, *dir_flist;
+#ifdef HAVE_DUET
+extern struct file_list *cur_o3_flist, *first_o3_flist;
+extern int out_of_order;
+#endif /* HAVE_DUET */
 extern struct chmod_mode_struct *daemon_chmod_modes;
 #ifdef ICONV_OPTION
 extern char *iconv_opt;
@@ -314,11 +318,23 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr,
 	struct file_list *flist;
 	uchar fnamecmp_type = FNAMECMP_FNAME;
 	int ndx;
+	int is_o3 = 0;
 
   read_loop:
 	while (1) {
 		ndx = read_ndx(f_in);
 
+#ifdef HAVE_DUET
+		if (INFO_GTE(FLIST, 4))
+			rprintf(FINFO, "[%s] read_ndx_and_attrs: Received ndx %d\n",
+				who_am_i(), ndx);
+		if (ndx == NDX_O3_DONE)
+			return ndx;
+		if (ndx == NDX_IS_O3) {
+			is_o3 = 1;
+			goto read_loop;
+		}
+#endif /* HAVE_DUET */
 		if (ndx >= 0)
 			break;
 		if (ndx == NDX_DONE)
@@ -348,7 +364,11 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr,
 			continue;
 		}
 		ndx = NDX_FLIST_OFFSET - ndx;
+#ifdef HAVE_DUET
+		if (ndx != NDX_LIST_O3 && (ndx < 0 || ndx >= dir_flist->used)) {
+#else
 		if (ndx < 0 || ndx >= dir_flist->used) {
+#endif /* HAVE_DUET */
 			ndx = NDX_FLIST_OFFSET - ndx;
 			rprintf(FERROR,
 				"Invalid dir index: %d (%d - %d) [%s]\n",
@@ -364,13 +384,22 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr,
 		}
 		/* Send all the data we read for this flist to the generator. */
 		start_flist_forward(ndx);
+#ifdef HAVE_DUET
+		flist = ndx == NDX_LIST_O3 ? recv_o3_file_list(f_in) : recv_file_list(f_in);
+#else
 		flist = recv_file_list(f_in);
+#endif /* HAVE_DUET */
 		flist->parent_ndx = ndx;
 		stop_flist_forward();
 	}
 
+#ifdef HAVE_DUET
+	iflags = protocol_version >= 29 ? read_int(f_in)
+		   : ITEM_TRANSFER | ITEM_MISSING_DATA;
+#else
 	iflags = protocol_version >= 29 ? read_shortint(f_in)
 		   : ITEM_TRANSFER | ITEM_MISSING_DATA;
+#endif /* HAVE_DUET */
 
 	/* Support the protocol-29 keep-alive style. */
 	if (protocol_version < 30 && ndx == cur_flist->used && iflags == ITEM_IS_NEW) {
@@ -379,7 +408,19 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr,
 		goto read_loop;
 	}
 
-	flist = flist_for_ndx(ndx, "read_ndx_and_attrs");
+	flist = flist_for_ndx(ndx, "read_ndx_and_attrs", is_o3);
+#ifdef HAVE_DUET
+	if (INFO_GTE(FLIST, 4)) {
+		rprintf(FINFO, "flist_for_ndx picked this\n");
+		output_flist(flist);
+	}
+	if (flist->parent_ndx == NDX_LIST_O3) {
+		if (flist != cur_o3_flist)
+			cur_o3_flist = flist;
+		goto cur_set;
+	}
+#endif /* HAVE_DUET */
+
 	if (flist != cur_flist) {
 		cur_flist = flist;
 		if (am_sender) {
@@ -389,6 +430,9 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr,
 		}
 	}
 
+#ifdef HAVE_DUET
+cur_set:
+#endif /* HAVE_DUET */
 	if (iflags & ITEM_BASIS_TYPE_FOLLOWS)
 		fnamecmp_type = read_byte(f_in);
 	*type_ptr = fnamecmp_type;
@@ -402,7 +446,11 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr,
 	}
 	*len_ptr = len;
 
+#ifdef HAVE_DUET
+	if (flist->parent_ndx != NDX_LIST_O3 && (iflags & ITEM_TRANSFER)) {
+#else
 	if (iflags & ITEM_TRANSFER) {
+#endif /* HAVE_DUET */
 		int i = ndx - cur_flist->ndx_start;
 		if (i < 0 || !S_ISREG(cur_flist->files[i]->mode)) {
 			rprintf(FERROR,
@@ -700,9 +748,42 @@ int finish_transfer(const char *fname, const char *fnametmp,
 	return 1;
 }
 
-struct file_list *flist_for_ndx(int ndx, const char *fatal_error_loc)
+struct file_list *flist_for_ndx(int ndx, const char *fatal_error_loc, int is_o3)
 {
 	struct file_list *flist = cur_flist;
+
+	if (DEBUG_GTE(FLIST, 4)) {
+		rprintf(FINFO, "Looking for ndx = %d (%s) [%s]\n",
+			ndx, fatal_error_loc, who_am_i());
+		output_all_flists("flist_for_ndx");
+	}
+
+#ifdef HAVE_DUET
+	if (!is_o3)
+		goto not_o3;
+
+	flist = cur_o3_flist;
+
+	if (!flist || flist->ndx_start != ndx) {
+		if (first_o3_flist)
+			flist = first_o3_flist;
+		else
+			goto not_o3;
+	}
+
+	while (ndx > flist->ndx_start) {
+		if (flist->next == first_flist || !flist->next)
+			goto not_o3;
+		flist = flist->next;
+	}
+
+	if (ndx != flist->ndx_start)
+		goto not_o3;
+	return flist;
+
+  not_o3:
+	flist = cur_flist;
+#endif /* HAVE_DUET */
 
 	if (!flist && !(flist = first_flist))
 		goto not_found;
@@ -731,6 +812,9 @@ struct file_list *flist_for_ndx(int ndx, const char *fatal_error_loc)
 		rprintf(FERROR,
 			"File-list index %d not in %d - %d (%s) [%s]\n",
 			ndx, first, last, fatal_error_loc, who_am_i());
+#ifdef HAVE_DUET
+		if (!out_of_order)
+#endif /* HAVE_DUET */
 		exit_cleanup(RERR_PROTOCOL);
 	}
 	return NULL;

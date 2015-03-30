@@ -1789,9 +1789,6 @@ end_io:
 void generic_make_request(struct bio *bio)
 {
 	struct bio_list bio_list_on_stack;
-#ifdef CONFIG_DUET_BLOCK
-	duet_hook_t *dhfp = NULL;
-#endif /* CONFIG_DUET_BLOCK */
 
 	if (!generic_make_request_checks(bio))
 		return;
@@ -1831,17 +1828,6 @@ void generic_make_request(struct bio *bio)
 	do {
 		struct request_queue *q = bdev_get_queue(bio->bi_bdev);
 
-#ifdef CONFIG_DUET_BLOCK
-		/* Pass by duet first */
-		rcu_read_lock();
-		dhfp = rcu_dereference(duet_hook_blk_fp);
-
-		if (dhfp)
-			dhfp(DUET_EVENT_BLKREQ_INIT,
-			     DUET_SETUP_HOOK_BLKREQ_INIT,
-			     (void *)bio);
-		rcu_read_unlock();
-#endif /* CONFIG_DUET_BLOCK */
 		q->make_request_fn(q, bio);
 
 		bio = bio_list_pop(current->bio_list);

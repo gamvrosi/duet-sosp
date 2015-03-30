@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 George Amvrosiadis.  All rights reserved.
+ * Copyright (C) 2014-2015 George Amvrosiadis.  All rights reserved.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public
@@ -15,122 +15,84 @@
  * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
  * Boston, MA 021110-1307, USA.
  */
-
 #ifndef _DUET_H
 #define _DUET_H
 
-/*
- * Task-specific event handling function. Should handle all event types
- * registered in the event mask. Arguments:
- *   __u8 taskid
- *   __u8 event_code
- *   void *owner: {struct block_device *bdev, struct inode *inode}
- *   __u64 offt: {p-offt, i-offt}
- *   __u32 len: {p-len, i-len}
- *   void *data: {struct bio *bio, struct page *page}
- *   int data_type: DUET_DATA_{BIO, BH, PAGE}
- *   void *private
- */
-typedef void (duet_event_handler_t) (__u8, __u8, void *, __u64, __u32, void *,
-								int, void *);
+#ifdef CONFIG_DUET_DEBUG
+#define duet_dbg(...)	printk(__VA_ARGS__)
+#else
+#define duet_dbg(...)
+#endif
 
 /*
- * Framework hook function. Should transmit hook information to the core of
- * the framework for passing to interested tasks. Arguments: __u8 event_type,
- * __u8 hook_type, void *hook_data
+ * Duet can be either state- and/or event-based.
+ * State-based Duet monitors changes in the page cache. Registering for EXISTS
+ * events means that fetch will be returning ADDED or REMOVED events if the
+ * state of the page changes since the last fetch (i.e. the two events cancel
+ * each other out). Registering for MODIFIED events means that fetch will be
+ * returning DIRTY or FLUSHED events if the state of the page changes since the
+ * last fetch.
+ * Event-based Duet monitors events that have happened on a page, which include
+ * all events in the lifetime of a cache page: ADDED, REMOVED, DIRTY, FLUSHED.
+ * Add and remove events are triggered when a page __descriptor__ is inserted or
+ * removed from the page cache. Modification events are triggered when the page
+ * is dirtied (nb: during writes, pages are added, then dirtied), and flush
+ * events are triggered when a page is marked for writeback.
  */
-typedef void (duet_hook_t) (__u8, __u8, void *);
+#define DUET_PAGE_ADDED		(1 << 0)
+#define DUET_PAGE_REMOVED	(1 << 1)
+#define DUET_PAGE_DIRTY		(1 << 2)
+#define DUET_PAGE_FLUSHED	(1 << 3)
+#define DUET_PAGE_MODIFIED	(1 << 4)
+#define DUET_PAGE_EXISTS	(1 << 5)
+#define DUET_USE_IMAP		(1 << 7)
 
-/* Return data types: we need this to access the data at the handler */
-enum {
-	DUET_DATA_BIO = 1,		/* data points to a bio */
-	DUET_DATA_BH,			/* data points to a buffer head */
-	DUET_DATA_PAGE,			/* data points to a struct page */
-	DUET_DATA_BLKREQ,		/* data points to a struct request */
+/*
+ * Item struct returned for processing. For both state- and event- based duet,
+ * we return 4 bits, for page addition, removal, dirtying, and flushing. The
+ * acceptable combinations, however, will differ based on what the task has
+ * subscribed for.
+ */
+struct duet_item {
+	unsigned long ino;
+	unsigned long idx;
+	__u8 state;
 };
 
-/* Hook types: these change depending on what we're hooking on */
-enum {
-	DUET_SETUP_HOOK_BA = 1,		/* async: submit_bio */
-	DUET_SETUP_HOOK_BW_START,	/* sync: submit_bio_wait (before) */
-	DUET_SETUP_HOOK_BW_END,		/* sync: submit_bio_wait (after) */
-	DUET_SETUP_HOOK_BH,		/* async: submit_bh */
-	DUET_SETUP_HOOK_PAGE,		/* struct page hook after the event */
-	DUET_SETUP_HOOK_BLKREQ_INIT,	/* block layer data request initiation */
-	DUET_SETUP_HOOK_BLKREQ_DONE,	/* block layer data request completion */
+/*
+ * InodeTree structure. Two red-black trees, one sorted by the number of pages
+ * in memory, the other sorted by inode number.
+ */
+struct inode_tree {
+	struct rb_root sorted;
+	struct rb_root inodes;
 };
 
-/* The special hook data struct needed for the darned submit_bio_wait */
-struct duet_bw_hook_data {
-	struct bio	*bio;
-	__u64		offset;
-};
+/* Framework interface functions */
+int duet_register(__u8 *taskid, const char *name, __u8 evtmask, __u32 bitrange,
+		  struct super_block *f_sb, struct dentry *p_dentry);
+int duet_deregister(__u8 taskid);
+int duet_online(void);
+int duet_check(__u8 taskid, __u64 idx, __u32 num);
+int duet_mark(__u8 taskid, __u64 idx, __u32 num);
+int duet_unmark(__u8 taskid, __u64 idx, __u32 num);
+int duet_fetch(__u8 taskid, __u16 req, struct duet_item *items, __u16 *ret);
 
-/* bio flag */
-#define BIO_DUET        22      /* duet has seen this bio */
+/* Framework debugging functions */
+int duet_print_bittree(__u8 taskid);
+int duet_print_itmtree(__u8 taskid);
 
-/* Hook codes: basically, these determine the event type */
-#ifdef CONFIG_DUET_BTRFS
-/*
- * BTRFS_READ (resp. BTRFS_WRITE) are expected to be triggered at the critical
- * path of btrfs, when a bio is sent as part of a read (resp. write). In the
- * case of the BW_START hook type, control is transferred to the framework
- * before the bio is dispatched. In the case of all the other hooks, control is
- * transferred to the handler after the bio callback completes, but while
- * interrupts are still raised. This is done to ensure that the bio will not be
- * freed while we operate on it, and it is suggested that intended work be
- * deferred using an appropriate mechanism (e.g. a work queue).
- */
-#define DUET_EVENT_BTRFS_READ	(1 << 0)
-#define DUET_EVENT_BTRFS_WRITE	(1 << 1)
-#endif /* CONFIG_DUET_BTRFS */
+/* Hook functions that trasmit event info to the framework core */
+typedef void (duet_hook_t) (__u8, void *);
+void duet_hook(__u8 evtcode, void *data);
 
-#ifdef CONFIG_DUET_CACHE
-/*
- * CACHE_INSERT (resp. CACHE_REMOVE) are expected to be triggered when a page
- * __descriptor__ is inserted in (resp. removed from) the page cache. Control
- * is transferred to the handler after the operation completes, with interrupts
- * restored. Note that the page will still be locked in the case of insertion,
- * as its data will not be current (until IO completes and unlocks it).
- */
-#define DUET_EVENT_CACHE_INSERT	(1 << 2)
-#define DUET_EVENT_CACHE_REMOVE	(1 << 3)
-#define DUET_EVENT_CACHE_MODIFY	(1 << 4)
-#endif /* CONFIG_DUET_CACHE */
-
-#ifdef CONFIG_DUET_BLOCK
-/*
- * BLOCK_READ and BLOCK_WRITE are expected to be triggered when a block request
- * is added to a device's dispatch queue. We replace the callback in the struct
- * request with a callback to Duet
- */
-#define DUET_EVENT_BLKREQ_INIT	(1 << 5)
-#define DUET_EVENT_BLKREQ_DONE	(1 << 6)
-#endif /* CONFIG_DUET_BLOCK */
-
-/* Core interface functions */
-int duet_task_register(__u8 *taskid, const char *name, __u32 blksize,
-	__u32 bmapsize, __u8 event_mask, duet_event_handler_t event_handler,
-	void *privdata);
-int duet_task_deregister(__u8 taskid);
-int duet_is_online(void);
-
-/*
- * For the following functions, start can be found from struct block_device
- * like so: bdev->bd_part->start_sect << 9
- */
-int duet_chk_done(__u8 taskid, __u64 start, __u64 lbn, __u32 len);
-int duet_chk_todo(__u8 taskid, __u64 start, __u64 lbn, __u32 len);
-int duet_mark_done(__u8 taskid, __u64 start, __u64 lbn, __u32 len);
-int duet_mark_todo(__u8 taskid, __u64 start, __u64 lbn, __u32 len);
-int duet_print_rbt(__u8 taskid);
-
-/* Hook-related functions */
-void duet_hook(__u8 event_type, __u8 hook_type, void *hook_data);
-void duet_bh_endio(struct buffer_head *bh, int uptodate);
-
-#ifdef CONFIG_DUET_BMAP_STATS
-int duet_trim_rbbt(__u8 taskid, __u64 end);
-#endif /* CONFIG_DUET_BMAP_STATS */
+/* InodeTree interface functions */
+typedef int (itree_get_inode_t)(void *, unsigned long, struct inode **);
+void itree_init(struct inode_tree *itree);
+int itree_update(struct inode_tree *itree, __u8 taskid,
+	itree_get_inode_t *itree_get_inode, void *ctx);
+int itree_fetch(struct inode_tree *itree, __u8 taskid, struct inode **inode,
+	itree_get_inode_t *itree_get_inode, void *ctx);
+void itree_teardown(struct inode_tree *itree);
 
 #endif /* _DUET_H */

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 George Amvrosiadis.  All rights reserved.
+ * Copyright (C) 2014-2015 George Amvrosiadis.  All rights reserved.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public
@@ -15,25 +15,18 @@
  * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
  * Boston, MA 021110-1307, USA.
  */
-
 #ifndef _COMMON_H
 #define _COMMON_H
+
 #include <linux/fs.h>
-#include <linux/slab.h>
 #include <linux/sched.h>
-#include <linux/wait.h>
+#include <linux/slab.h>
 #include <linux/rbtree.h>
 #include <linux/rculist.h>
 #include <linux/duet.h>
+#include <linux/workqueue.h>
 
-#define TASK_NAME_LEN 128
-
-#ifdef CONFIG_DUET_CACHE
-extern void (*duet_hook_cache_fp)(__u8, __u8, void *);
-#endif /* CONFIG_DUET_CACHE */
-#ifdef CONFIG_DUET_BLOCK
-extern void (*duet_hook_blk_fp)(__u8, __u8, void *);
-#endif /* CONFIG_DUET_BLOCK */
+#define MAX_NAME	128
 
 enum {
 	DUET_STATUS_OFF = 0,
@@ -42,48 +35,82 @@ enum {
 	DUET_STATUS_CLEAN,
 };
 
-struct duet_rbnode {
-	__u64		lbn;
-	struct rb_node	node;
-	__u8		*bmap;
+struct bmap_rbnode {
+	__u64			idx;
+	struct rb_node		node;
+	__u8			*bmap;
+};
+
+struct item_rbnode {
+	struct rb_node		node;
+	struct duet_item	item;
 };
 
 struct duet_task {
 	__u8			id;
-	char			name[TASK_NAME_LEN];
+	char			name[MAX_NAME];
 	struct list_head	task_list;
 	wait_queue_head_t	cleaner_queue;
 	atomic_t		refcount;
+	__u8			evtmask;	/* Mask of subscribed events */
+	char			*pathbuf;	/* Buffer for getpath */
 
-	/* bitmap tree */
-	__u32			blksize;		/* bytes per bmap bit */
-	__u32			bmapsize;		/* bytes per bmap */
-	struct mutex		bmaptree_mutex;
-	struct rb_root		bmaptree;
-#ifdef CONFIG_DUET_BMAP_STATS
-	__u64			curnodes;	/* Current # of RBBT nodes */
-	__u64			maxnodes;	/* Max # of RBBT nodes */
-#endif /* CONFIG_DUET_BMAP_STATS */
+	/* Optional heuristics to filter the events received */
+	struct super_block	*f_sb;		/* Filesystem of task */
+	struct dentry		*p_dentry;	/* Parent dentry */
+	__u8			use_imap;	/* Use the inode bitmap */
 
-	/* event handling */
-	__u8			event_mask;
-	duet_event_handler_t	*event_handler;
-	void			*privdata;
+	/* BitTree -- progress bitmap tree */
+	__u32			bitrange;	/* range per bmap bit */
+	__u32			bmapsize;	/* bytes per bmap */
+	struct mutex		bittree_lock;
+	struct rb_root		bittree;
+#ifdef CONFIG_DUET_TREE_STATS
+	__u64			stat_bit_cur;	/* Cur # of BitTree nodes */
+	__u64			stat_bit_max;	/* Max # of BitTree nodes */
+#endif /* CONFIG_DUET_TREE_STATS */
+
+	/* ItemTree -- item events tree */
+	__u8			itmtype;	/* pages or inodes? */
+	spinlock_t		itm_lock;
+	struct rb_root		itmtree;
+#ifdef CONFIG_DUET_TREE_STATS
+	__u64			stat_itm_cur;	/* Cur # of ItemTree nodes */
+	__u64			stat_itm_max;	/* Max # of ItemTree nodes */
+#endif /* CONFIG_DUET_TREE_STATS */
+};
+
+struct evtwork {
+	struct work_struct 	work;
+
+	__u8 			evt;
+	unsigned long 		ino;
+	unsigned long 		idx;
+	struct super_block	*isb;
 };
 
 struct duet_info {
 	atomic_t		status;
 
-	/*
-	 * all the registered tasks in the framework, protected by a mutex
-	 * so we can safely walk the list to find handlers without worrying
-	 * about add/remove operations
+	/* 
+	 * List or registered tasks, protected by a mutex so we can safely walk
+	 * it to find handlers without worrying about add/remove operations
 	 */
 	struct mutex		task_list_mutex;
 	struct list_head	tasks;
+
+	/* Workqueue of events not processed yet */
+	spinlock_t		evtwq_lock;
+	struct workqueue_struct	*evtwq;
 };
 
 extern struct duet_info duet_env;
+extern duet_hook_t *duet_hook_cache_fp;
+extern unsigned int *duet_i_hash_shift;
+extern struct hlist_head **duet_inode_hashtable;
+extern spinlock_t *duet_inode_hash_lock;
+extern char *d_get_path(struct inode *cnode, struct dentry *p_dentry,
+			char *buf, int len);
 
 /* bmap.c */
 __u32 duet_bmap_count(__u8 *bmap, __u32 byte_len);
@@ -94,12 +121,26 @@ int duet_bmap_chk(__u8 *bmap, __u32 bmap_bytelen, __u64 first_byte,
 	__u32 blksize, __u64 req_byte, __u32 req_bytelen, __u8 set);
 
 /* task.c -- not in linux/duet.h */
+struct duet_task *duet_find_task(__u8 taskid);
 void duet_task_dispose(struct duet_task *task);
-int duet_print_rbt(__u8 taskid);
 
 /* ioctl.c */
 int duet_bootstrap(void);
 int duet_shutdown(void);
 long duet_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
+
+/* rbtrees.c */
+void bnode_dispose(struct bmap_rbnode *bnode, struct rb_node *rbnode,
+	struct rb_root *root, struct duet_task *task);
+inline int bittree_check(struct rb_root *bittree, __u32 range, __u32 bmapsize,
+	__u64 idx, __u32 num, struct duet_task *task);
+inline int bittree_mark(struct rb_root *bittree, __u32 range, __u32 bmapsize,
+	__u64 idx, __u32 num, struct duet_task *task);
+inline int bittree_unmark(struct rb_root *bittree, __u32 range, __u32 bmapsize,
+	__u64 idx, __u32 num, struct duet_task *task);
+void tnode_dispose(struct item_rbnode *tnode, struct rb_node *rbnode,
+	struct rb_root *root);
+int itmtree_insert(struct duet_task *task, unsigned long ino,
+	unsigned long index, __u8 evtcode, __u8 replace);
 
 #endif /* _COMMON_H */

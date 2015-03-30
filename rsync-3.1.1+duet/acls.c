@@ -33,6 +33,9 @@ extern int numeric_ids;
 extern int inc_recurse;
 extern int preserve_devices;
 extern int preserve_specials;
+#ifdef HAVE_DUET
+extern int out_of_order;
+#endif /* HAVE_DUET */
 
 /* Flags used to indicate what items are being transmitted for an entry. */
 #define XMIT_USER_OBJ (1<<0)
@@ -1118,7 +1121,11 @@ int default_perms_for_dir(const char *dir)
 			/* No ACLs are available. */
 			break;
 		case ENOENT:
+#ifdef HAVE_DUET
+			if (dry_run || out_of_order) {
+#else
 			if (dry_run) {
+#endif /* HAVE_DUET */
 				/* We're doing a dry run, so the containing directory
 				 * wasn't actually created.  Don't worry about it. */
 				break;

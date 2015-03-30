@@ -60,6 +60,10 @@ extern char *partial_dir;
 extern char *basis_dir[MAX_BASIS_DIRS+1];
 extern char sender_file_sum[MAX_DIGEST_LEN];
 extern struct file_list *cur_flist, *first_flist, *dir_flist;
+#ifdef HAVE_DUET
+extern struct file_list *cur_o3_flist, *first_o3_flist;
+extern int current_files, out_of_order;
+#endif /* HAVE_DUET */
 extern filter_rule_list daemon_filter_list;
 
 static struct bitbag *delayed_bits = NULL;
@@ -207,17 +211,21 @@ int open_tmpfile(char *fnametmp, const char *fname, struct file_struct *file)
 	 * (Thanks to snabb@epipe.fi for pointing this out.) */
 	fd = do_mkstemp(fnametmp, (file->mode|added_perms) & INITACCESSPERMS);
 
-#if 0
+#ifdef HAVE_DUET
 	/* In most cases parent directories will already exist because their
 	 * information should have been previously transferred, but that may
-	 * not be the case with -R */
-	if (fd == -1 && relative_paths && errno == ENOENT
-	 && make_path(fnametmp, MKP_SKIP_SLASH | MKP_DROP_NAME) == 0) {
+	 * not be the case when we're sending files out of order */
+	if (fd == -1 && out_of_order) {
+		if (errno != ENOENT)
+			rsyserr(FERROR_XFER, errno, "mkstemp %s failed -- retrying",
+				full_fname(fnametmp));
+		if (make_path(fnametmp, MKP_DROP_NAME) < 0)
+			rsyserr(FERROR, errno, "make_path failed for %s\n", fnametmp);
 		/* Get back to name with XXXXXX in it. */
 		get_tmpname(fnametmp, fname, False);
 		fd = do_mkstemp(fnametmp, (file->mode|added_perms) & INITACCESSPERMS);
 	}
-#endif
+#endif /* HAVE_DUET */
 
 	if (fd == -1) {
 		rsyserr(FERROR_XFER, errno, "mkstemp %s failed",
@@ -446,7 +454,7 @@ static void handle_delayed_updates(char *local_name)
 
 static void no_batched_update(int ndx, BOOL is_redo)
 {
-	struct file_list *flist = flist_for_ndx(ndx, "no_batched_update");
+	struct file_list *flist = flist_for_ndx(ndx, "no_batched_update", 1);
 	struct file_struct *file = flist->files[ndx - flist->ndx_start];
 
 	rprintf(FERROR_XFER, "(No batched update for%s \"%s\")\n",
@@ -536,7 +544,7 @@ int recv_files(int f_in, int f_out, char *local_name)
 	int ndx, recv_ok;
 
 	if (DEBUG_GTE(RECV, 1))
-		rprintf(FINFO, "recv_files(%d) starting\n", cur_flist->used);
+		rprintf(FINFO, "[%s] recv_files(%d) starting\n", who_am_i(), cur_flist->used);
 
 	if (delay_updates)
 		delayed_bits = bitbag_create(cur_flist->used + 1);
@@ -547,6 +555,16 @@ int recv_files(int f_in, int f_out, char *local_name)
 		/* This call also sets cur_flist. */
 		ndx = read_ndx_and_attrs(f_in, f_out, &iflags, &fnamecmp_type,
 					 xname, &xlen);
+#ifdef HAVE_DUET
+		if (ndx == NDX_O3_DONE) {
+			if (!am_server && INFO_GTE(PROGRESS, 2))
+				end_progress(0);
+			if (first_o3_flist)
+				flist_free(first_o3_flist);
+			write_int(f_out, NDX_O3_DONE);
+			continue;
+		}
+#endif /* HAVE_DUET */
 		if (ndx == NDX_DONE) {
 			if (!am_server && INFO_GTE(PROGRESS, 2) && cur_flist) {
 				set_current_file_index(NULL, 0);
@@ -567,21 +585,51 @@ int recv_files(int f_in, int f_out, char *local_name)
 			if (++phase > max_phase)
 				break;
 			if (DEBUG_GTE(RECV, 1))
-				rprintf(FINFO, "recv_files phase=%d\n", phase);
+				rprintf(FINFO, "[%s] recv_files phase=%d\n", who_am_i(), phase);
 			if (phase == 2 && delay_updates)
 				handle_delayed_updates(local_name);
 			write_int(f_out, NDX_DONE);
 			continue;
 		}
 
+#ifdef HAVE_DUET
+		if (DEBUG_GTE(RECV, 3))
+			rprintf(FINFO, "[%s] recv_files: receiving file with ndx %d\n",
+				who_am_i(), ndx);
+
+		/* Look for o3 file, and if there's none we'll fall through */
+		if (cur_o3_flist && cur_o3_flist->ndx_start == ndx) {
+			if (!cur_o3_flist->used)
+				continue;
+			file = cur_o3_flist->files[0];
+			if (iflags & ITEM_SKIPPED)
+				goto skip_file;
+			else
+				goto process_file;
+		}
+#endif /* HAVE_DUET */
 		if (ndx - cur_flist->ndx_start >= 0)
 			file = cur_flist->files[ndx - cur_flist->ndx_start];
 		else
 			file = dir_flist->files[cur_flist->parent_ndx];
+#ifdef HAVE_DUET
+		if (out_of_order && (iflags & ITEM_SKIPPED)) {
+skip_file:
+			fname = local_name ? local_name : f_name(file, fbuf);
+			file->flags |= FLAG_FILE_SENT;
+
+			if (DEBUG_GTE(RECV, 1))
+				rprintf(FINFO, "[%s] recv_files(%s) getting skipped\n", who_am_i(), fname);
+			continue;
+		}
+
+process_file:
+		current_files++;
+#endif /* HAVE_DUET */
 		fname = local_name ? local_name : f_name(file, fbuf);
 
 		if (DEBUG_GTE(RECV, 1))
-			rprintf(FINFO, "recv_files(%s)\n", fname);
+			rprintf(FINFO, "[%s] recv_files(%s)\n", who_am_i(), fname);
 
 #ifdef SUPPORT_XATTRS
 		if (preserve_xattrs && iflags & ITEM_REPORT_XATTR && do_xfers
@@ -947,7 +995,7 @@ int recv_files(int f_in, int f_out, char *local_name)
 		handle_delayed_updates(local_name);
 
 	if (DEBUG_GTE(RECV, 1))
-		rprintf(FINFO,"recv_files finished\n");
+		rprintf(FINFO,"[%s] recv_files finished\n", who_am_i());
 
 	return 0;
 }

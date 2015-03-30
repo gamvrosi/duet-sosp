@@ -1,0 +1,810 @@
+
+JDB:  Database Functions for Shell Scripting
+--------------------------------------------
+by John Heidemann <johnh@isi.edu>
+
+
+WHAT'S NEW?
+-----------
+1.13,  4-Feb-04
+
+- NEW: jdb added to the freebsd ports tree
+	<http://www.freshports.org/databases/jdb/>
+	maintainer: larse@isi.edu
+- BUG FIX:  properly handle trailing spaces when data must be numeric
+	(ex. dbstats with -FS, see test dbstats_trailing_spaces)
+	Fix from Ning Xu <nxu@aludra.usc.edu>.
+- NEW: dbcolize error message improved (bug report from Terrence
+	Brannon), and list format documented in the README.
+- NEW: cgi_to_db convergs CGI.pm-format storage to jdb list format
+- BUG FIX: handle numeric synonyms for column names in dbcol properly
+- ENHANCEMENT: "talking about columns" section added to README.
+	Lack of documentation pointed out by Lars Eggert.
+- CHANGE: dbformmail now defaults to using Mail ("Berkeley Mail")
+	to send mail, rather than sendmail (sendmail is still an option,
+	but mail doesn't require running as root)
+- NEW: on platforms that support it (i.e., with perl 5.8), jdb works
+	fine with unicode
+- NEW: dbfilevalidate: check a db file for some common errors
+
+
+EXECUTIVE SUMMARY
+-----------------
+
+JDB is package of commands for manipulating flat-ASCII databases from
+shell scripts.  JDB is useful to process medium amounts of data (with
+very little data you'd do it by hand, with megabytes you might want a
+real database).  JDB is very good at doing things like:
+
+	- extracting measurements from experimental output
+	- re-examining data to address different hypotheses
+        - joining data from different experiments
+	- eliminating/detecting outliers
+	- computing statistics on data (mean, confidence intervals,
+		correlations, histograms)
+	- reformatting data for graphing programs
+
+Rather than hand-code scripts to do each special case, JDB provides
+higher-level functions.  Although it's often easy throw together a
+custom script to do any single task, I believe that there are several
+advantages to using this library:
+
+	- these programs provide a higher level interface than plain Perl
+		=> dbrow '_size == 1024' | dbstats bw
+		   rather than:
+			while (<>) { split; $sum+=$F[2]; $ss+=$F[2]^2; $n++; }
+			$mean = $sum / $n; $std_dev = ...
+			etc.
+		   in dozens of places
+
+	- the library uses names for columns
+		=> no more $F[2], use _bw
+		=> new or different order columns?  no changes to your scripts!
+
+	- the library is self-documenting (each program records what it did)
+		=> no more wondering what hacks were used to compute the
+			final data, just look at the comments at the end
+			of the output
+
+	- unusual cases, error checking, and large datasets are already handled
+		=> custom scripts often skimp on error checking
+			and assume everything fits in memory
+
+(The disadvantage is that you need to learn what functions JDB provides.)
+
+JDB is built on flat-ASCII databases.  By storing data in simple text
+files and processing it with pipelines it is easy to experiment (in
+the shell) and look at the output.  The original implementation of
+this idea was /rdb, a commercial product described in the book ``UNIX
+relational database management: application development in the UNIX
+environment'' by Rod Manis, Evan Schaffer, and Robert Jorgensen (and
+also at the web page <http://www.rdb.com/>).  JDB is an incompatible
+re-implementation of their idea without any accelerated indexing or
+forms support.  (But it's free!).
+
+Installation instructions follow at the end of this document.  JDB
+requires Perl 5.003 to run.  There are no man pages currently, but
+each command has a complete description in its usage string.  All
+commands are backed by an automated test suite.
+
+The most recent version of JDB is available on the web at
+<http://www.isi.edu/~johnh/SOFTWARE/JDB/index.html>.
+
+
+README CONTENTS
+---------------
+- what's new
+- executive summary
+- README CONTENTS
+- installation
+- basic data format
+- basic data manipulation
+- list of commands
+- another example
+- a gradebook example
+- a password example
+- history
+- related work
+- release notes
+- copyright
+- comments
+
+
+
+INSTALLATION
+------------
+
+The quick answer to installation is to type:
+	./configure
+	make install
+
+JDB uses autoconf.  You can set where the programs are installed
+with --prefix=/where/you/want/them/without/bin/at/the/end.
+Do ./configure --help for details.
+
+JDB requires perl 5.003 or later.  Some of the commands work on 5.000,
+but several of the test scripts fail, so buyer beware.
+
+A test-suite is available, run it with ./db_test_suite
+or "make test".
+
+In the past there have been some test suite problems due to different
+printf implementations.  I've tried to code around this problem;
+please let me know if you encounter it again.
+
+A FreeBSD port to JDB is availalble, see
+<http://www.freshports.org/databases/jdb/>.
+
+
+COMMON INSTALLATION PROBLEMS (FAQ)
+----------------------------------
+
+Q: After installing jdb, I get this error when I run it:
+	Can't locate ~/lib/dblib.pl in @INC (@INC
+	contains: /usr/libdata/perl/5.00503/mach /usr/libdata/perl/5.00503
+	/usr/local/lib/perl5/site_perl/5.005/i386-freebsd
+	/usr/local/lib/perl5/site_perl/5.005 . ~/lib) at
+	/home/netlab1/alefiyah/bin/dbrow line 48.
+(or something like that).  What should I do?
+
+A: You're probably not running the installed version, you're running
+the unpacked version.  Part of the installation process is changing
+the scripts so they know where their libraries are.  After you
+configure and install jdb, run the programs from where they are
+installed.
+
+
+
+
+BASIC DATA FORMAT
+-----------------
+
+These programs are based on the idea storing data in simple ASCII
+files.  A database is a file with one header line and then data or
+comment lines.  For example:
+
+	#h account passwd uid gid fullname homedir shell
+	johnh * 2274 134 John_Heidemann /home/johnh /bin/bash
+	greg * 2275 134 Greg_Johnson /home/greg /bin/bash
+	root * 0 0 Root /root /bin/bash
+	# this is a simple database
+
+The header line must be first and begins with "#h".
+There are rows (records) and columns (fields),
+just like in a normal database.
+Comment lines begin with "#".
+
+By default, columns are delimited by whitespace.  By default it is
+therefore not possible to have fields which contain whitespace.
+(But see below for alternatives.)
+
+The big advantage of this approach is that it's easy to massage data
+into this format, and it's reasonably easy to take data out of this
+format into other (text-based) programs, like gnuplot, jgraph, and
+LaTeX.  Think Unix.  Think pipes.
+
+Since no-whitespace in columns was a problem for some applications,
+there's an option which relaxes this rule.  You can specify the field
+separator in the table header with -Fx where x is the new field
+separator.  The special value -FS sets a separator of two spaces, thus
+allowing (single) spaces in fields.  An example:
+
+	#h -FS account passwd uid gid fullname homedir shell
+	johnh  *  2274  134  John Heidemann  /home/johnh  /bin/bash
+	greg  *  2275  134  Greg Johnson  /home/greg  /bin/bash
+	root  *  0  0  Root  /root  /bin/bash
+	# this is a simple database
+
+See dbrecolize for more details.  Regardless of what the column
+separator is for the body of the data, it's always whitespace in the
+header.
+
+There's also a third format: a "list".  Because it's often hard to see
+what's columns past the first two, in list format each "column" is on
+a separate line.  The programs dblistize and dbcolize convert to and
+from this format.  Currently other programs work only on column-format
+data, so list data is only for viewing.  Here's a sample of
+"dblistize  < DATA/passwd.jdb":
+
+	#L account passwd uid gid fullname homedir shell
+	account:  johnh
+	passwd:   *
+	uid:      2274
+	gid:      134
+	fullname: John_Heidemann
+	homedir:  /home/johnh
+	shell:    /bin/bash
+	
+	account:  greg
+	passwd:   *
+	uid:      2275
+	gid:      134
+	fullname: Greg_Johnson
+	homedir:  /home/greg
+	shell:    /bin/bash
+	
+	account:  root
+	passwd:   *
+	uid:      0
+	gid:      0
+	fullname: Root
+	homedir:  /root
+	shell:    /bin/bash
+	
+	# this is a simple database
+	#  | dblistize 
+
+See dbcolize -? and dblistize -? for more details.
+
+
+BASIC DATA MANIPULATION
+-----------------------
+
+A number of programs exist to manipulate databases.
+Complex functions can be made by stringing together commands
+with shell pipelines.  For example, to print the home
+directories of everyone with ``john'' in their names,
+you would do:
+
+	cat DATA/passwd | dbrow '_fullname =~ /John/' | dbcol homedir
+
+The output:
+	dash> cat DATA/passwd | dbrow '_fullname =~ /John/' | dbcol homedir
+	#h      homedir
+	/home/johnh
+	/home/greg
+	# this is a simple database
+	#  | dbrow _fullname =~ /John/
+	#  | dbcol homedir
+
+(Notice that comments are appended to the output listing each command,
+providing an automatic audit log.)
+
+In addition to typical database functions (select, join, etc.) there
+are also a number of statistical functions.
+
+
+TALKING ABOUT COLUMNS
+---------------------
+
+An advantage of JDB is that you can talk about columns by name
+(symbolically) rather than simply by their positions.  So in the above
+example, "dbcol homedir" pulled out the home directory column, and
+"dbrow '_fullname =~ /John/'" matched against column fullname.
+
+In general, you can use the name of the column listed on the #h line
+to identify it in most programs, and _name to identify it in code.
+
+Some alternatives for flexibility:
+
+- numeric values identify columsn positionally, so 0 or _0 is the
+first column, 1 is the second, etc.
+
+- in code, _last_columnname gets the value from columname's last row
+
+See dbroweval -? for more details about writing code.
+
+
+
+LIST OF COMMANDS
+----------------
+
+Enough said.  I'll summarize the commands, and then you can
+experiment.  For a detailed description of each command, see its usage
+line by running it with the argument ``-?''.  In some shells (csh)
+you'll need to quote this (run ``dbcol -\?'' rather than ``dbcol -?'').
+
+TABLE CREATION
+--------------
+dbcolcreate	add columns to a database
+dbcoldefine	set the column headings for a non-JDB file
+
+TABLE MANIPULATION
+------------------
+dbcol		select columns from a table
+dbrow		select rows from a table
+dbsort		sort rows based on a set of columns
+dbjoin		compute the natural join of two tables
+dbcolrename	rename a column
+dbcolmerge	merge two columns into one
+dbcolsplit	split one column into two
+dbrowsplituniq  split the file into multiple files per unique fields
+dbfilevalidate  check that db file doesn't have some common errors
+dbfilesplit     split a single input file continaing multiple tables into
+			several files
+
+COMPUTATION AND STATISTICS
+--------------------------
+dbstats		compute statistics over a column (mean,etc.,optionally median)
+dbmultistats	compute a series of means over a table
+dbcoldiff	compute statistics from two sets of random variables
+dbcolmovingstats  computing moving statistics over a column of data
+dbcolmultiscale compute simple stats (sums and rates) over mutliple timescales
+dbcolstats	compute Z-scores and T-scores over one column of data
+dbcolpercentile	compute the rank or percentile of a column
+dbcolhisto	compute histograms over a column of data
+dbrowaccumulate compute a running sum over a column of data
+dbrowdiff	compute differences between each row of a table
+dbrowenumerate	number each row
+dbroweval	run arbitrary Perl code on each row
+dbrowuniq	count/eliminate identical rows (like Unix uniq(1))
+db2dcliff	find ``cliffs'' in two-dimensional data
+
+OUTPUT CONTROL
+--------------
+dbcolneaten	pretty-print columns
+dbcoltighten	un-pretty-print columns
+dblistize	convert columnar format into a ``list'' format
+dbcolize	undo dblistize
+dbrecolize	change the field separator for a table
+dbstripcomments remove comments from a table
+dbstripextraheaders remove extra headers that occur from table concatenation
+dbstripleadingspace remove leading spaces from (potentially non-JDB) data
+dbformmail	generate a script that sends form mail based on each row
+
+CONVERSIONS
+-----------
+(These programs convert data into jdb.  See their web pages for details.)
+cgi_to_db	http://stein.cshl.org/WWW/software/CGI/
+crl_to_db	http://moat.nlanr.net/Traces/
+dmalloc_to_db	http://www.letters.com/dmalloc/
+kitrace_to_db	http://ficus-www.cs.ucla.edu/ficus-members/geoff/kitrace.html
+ns_to_db	http://mash-www.cs.berkeley.edu/ns/
+tabdelim_to_db	spreadsheet tab-delimited files to db
+tcpdump_to_db   (see man tcpdump(8) on any reasonable system)
+
+(And out of jdb:)
+db_to_html_table   simple conversion of JDB to html tables
+
+
+Standard options:
+
+-?	usage
+-c	confidence interval (dbmultistats)
+-C	column separator (dbcolsplit, dbcolmerge)
+-d	debug mode
+-a	stats over all data (treating non-numerics as zeros)
+	(by default, non-numerics are ignored for stats purposes)
+-S      assume the data is pre-sorted
+
+When giving Perl code (in dbrow and dbroweval)
+column names can be embedded if preceded by underscores.
+(Try dbrow -? and dbroweval -? for examples.)
+
+Most programs run in constant memory and use temporary files if necessary.
+Exceptions are dbcolneaten, dbcolpercentile, dbmultistats, dbrowsplituniq.
+
+
+ANOTHER EXAMPLE
+---------------
+
+Take the raw data in DATA/http_bandwidth,
+put a header on it (dbcoldefine size bw),
+took statistics of each category (dbmultistats size bw),
+pick out the relevant fields (dbcol size mean stddev pct_rsd), and you get:
+	#h      size    mean    stddev  pct_rsd
+	1024    1.4962e+06      2.8497e+05      19.047
+	10240   5.0286e+06      6.0103e+05      11.952
+	102400  4.9216e+06      3.0939e+05      6.2863
+	#  | dbcoldefine size bw
+	#  | /home/johnh/BIN/DB/dbmultistats size bw
+	#  | /home/johnh/BIN/DB/dbcol size mean stddev pct_rsd
+(The whole command was:
+	cat DATA/http_bandwidth | dbcoldefine size bw |
+		dbmultistats size bw | dbcol size mean stddev pct_rsd
+all on one line.)
+
+Then post-process them to get rid of the exponential notation
+(dbroweval '_mean = sprintf("%8.0f", _mean); _stddev = sprintf("%8.0f", _stddev);')
+	#h      size    mean    stddev  pct_rsd
+	1024     1496200          284970        19.047
+	10240    5028600          601030        11.952
+	102400   4921600          309390        6.2863
+	#  | dbcoldefine size bw
+	#  | /home/johnh/BIN/DB/dbmultistats size bw
+	#  | /home/johnh/BIN/DB/dbcol size mean stddev pct_rsd
+	#  | /home/johnh/BIN/DB/dbroweval   { _mean = sprintf("%8.0f", _mean); _stddev = sprintf("%8.0f", _stddev); }
+(The whole command is as before, with the dbroweval tacked on the end.)
+
+In a few lines, raw data is transformed to processed output.
+
+
+Suppose you expect there is an odd distribution of results of one
+datapoint.  JDB can easily produce a CDF (cumulative distribution
+function) of the data, suitable for graphing:
+
+cat DB/DATA/http_bandwidth | dbcoldefine size bw | \
+	dbrow '_size == 102400' | \
+	dbcol bw | dbsort -n bw | \
+	dbrowenumerate | dbcolpercentile count | \
+	dbcol bw percentile | xgraph
+
+The steps, per line:
+	1. get the raw input data and turn it into jdb format
+	2. pick out just the relevant column (for efficiency) and sort it
+	3. for each data point, assign a CDF percentage to it
+	4. pick out the two columns to graph and show them
+
+
+A GRADEBOOK EXAMPLE
+-------------------
+
+The first commercial program I wrote was a gradebook,
+so here's how to do it with JDB.
+
+Format your data like DATA/grades.
+	#h name email id test1
+	a a@ucla.edu 1 80
+	b b@usc.edu 2 70
+	c c@isi.edu 3 65
+	d d@lmu.edu 4 90
+	e e@caltech.edu 5 70
+	f f@oxy.edu 6 90
+
+To compute statistics on an exam, do
+	cat DATA/grades | dbstats test1 |dblistize
+
+	#L  ...
+	mean:        77.5
+	stddev:      10.84
+	pct_rsd:     13.987
+	conf_range:  11.377
+	conf_low:    66.123
+	conf_high:   88.877
+	conf_pct:    0.95
+	sum:         465
+	sum_squared: 36625
+	min:         65
+	max:         90
+	n:           6
+	...
+
+To do a histogram:
+	cat DATA/grades | dbcolhisto -n 5 -g test1
+
+	#h low histogram
+	65      *
+	70      **
+	75
+	80      *
+	85
+	90      **
+	#  | /home/johnh/BIN/DB/dbhistogram -n 5 -g test1
+
+Now you want to send out grades to the students by e-mail.
+Create a form-letter (in the file test1.txt):
+	To: _email (_name)
+	From: J. Random Professor <jrp@usc.edu>
+	Subject: test1 scores
+
+	_name, your score on test1 was _test1.
+	86+   A
+	75-85 B
+	70-74 C
+	0-69  F
+
+Generate the shell script that will send the mail out:
+	cat DATA/grades | dbformmail test1.txt > test1.sh
+And run it:
+	sh <test1.sh
+
+The last two steps can be combined:
+	cat DATA/grades | dbformmail test1.txt | sh
+(but I like to keep a copy of exactly what I send).
+
+
+If you got the data originally from a spreadsheet, save it in
+"tab-delimited" format and convert it with tabdelim_to_db
+(run tabdelim_to_db -? for examples).
+
+
+A PASSWORD EXAMPLE
+------------------
+
+To convert the Unix password file to db:
+
+	cat /etc/passwd | sed 's/:/  /g'| \
+		dbcoldefine -F S login password uid gid gecos home shell \
+		>passwd.jdb
+
+To convert the group file
+
+	cat /etc/group | sed 's/:/  /g' | \
+		dbcoldefine -F S group password gid members \
+		>group.jdb
+
+To show the names of the groups that div7-members are in
+(assuming DIV7 is in the gecos field):
+
+	cat passwd.jdb | dbrow '_gecos =~ /DIV7/' | dbcol login gid | \
+		dbjoin - group.jdb gid | dbcol login group
+
+
+SHORT EXAMPLES
+--------------
+
+Which db programs are the most complicated (based on number of test cases)?
+
+	ls TEST/*.cmd | \
+		dbcoldefine test | \
+		dbroweval '_test =~ s@^TEST/([^_]+).*$@$1@' | \
+		dbrowuniq -c | \
+		dbsort -nr count | \
+		dbcolneaten
+
+(Answer: dbstats, then dbjoin.)
+
+Stats on an exam (in FILE, with COLUMN==the name of the exam)
+	cat $FILE | dbstats -q 4 $COLUMN <$FILE | dblistize | dbstripcomments
+	cat $FILE | dbcolhisto -g -n 20 $COLUMN | dbcolneaten | dbstripcomments
+
+Merging a the hw1 column from file hw1.jdb into grades.jdb assuing
+there's a common student id in column "id":
+	dbcol id hw1 <hw1.jdb >t.jdb
+	dbjoin -i -e - grades.jdb t.jdb id |dbsort name|dbcolneaten >new_grades.jdb
+
+
+HISTORY
+-------
+
+There have been two versions of JDB;
+the current is a complete re-write of the first.
+
+JDB (in its various forms) has been used extensively by its author
+since 1991.  Since 1995 it's been used by two other researchers at
+UCLA and several at ISI.  In February 1998 it was announced to the
+Internet.
+
+JDB includes code ported from Geoff Kuenning (DbTDistr.pm).
+
+JDB contributors:  Ashvin Goel <goel@cse.oge.edu>, Geoff Kuenning
+<geoff@fmg.cs.ucla.edu>, Vikram Visweswariah <visweswa@isi.edu>,
+Kannan Varadahan <kannan@isi.edu>, Lars Eggert <larse@isi.edu>, Arkadi
+Gelfond <arkadig@dyna.com>, Haobo Yu <haoboy@packetdesign.com>, Pavlin
+Radoslavov <pavlin@catarina.usc.edu>, Fabio Silva <fabio@isi.edu>,
+Jerry Zhao <zhaoy@isi.edu>, Ning Xu <nxu@aludra.usc.edu>.
+
+
+
+RELATED WORK
+------------
+
+As stated in the introduction, JDB is an incompatible reimplementation
+of the ideas found in /rdb.  By storing data in simple text files and
+processing it with pipelines it is easy to experiment (in the shell)
+and look at the output.  The original implementation of this idea was
+/rdb, a commercial product described in the book ``UNIX relational
+database management: application development in the UNIX environment''
+by Rod Manis, Evan Schaffer, and Robert Jorgensen (and also at the web
+page <http://www.rdb.com/>).
+
+In August, 2002 I found out Carlo Strozzi extended RDB with his
+package NoSQL <http://www.linux.it/~carlos/nosql/>.  According to
+Mr. Strozzi, he implemented NoSQL in awk to avoid the Perl start-up of
+RDB.  Although I haven't found Perl startup overhead to be a big
+problem on my platforms (from old Sparcstation IPCs to 2GHz
+Pentium-4s), you may want to evaluate his system.  (At some point I'll
+try to do a comparison of JDB and NoSQL.)
+
+
+RELEASE NOTES
+-------------
+
+Versions prior to 1.0 were released informally on my web page
+but were not announced.
+
+1.0, 22-Jul-97:  adds autoconf support and a test script.
+
+1.1, 20-Jan-98:  support for double space field separators, better tests
+
+1.2, 11-Feb-98: minor changes and release on comp.lang.perl.announce
+
+1.3, 17-Mar-98
+	- adds median and quartile options to dbstats
+	- adds dmalloc_to_db converter
+	- fixes some warnings
+	- dbjoin now can run on unsorted input
+	- fixes a dbjoin bug
+	- some more tests in the test suite
+
+1.4, 27-Mar-98
+	- improves error messages
+		(all should now report the program that makes the error)
+	- fixed a bug in dbstats output when the mean is zero
+
+1.5, 25-Jun-98
+	- BUG FIX: dbcolhisto, dbcolpercentile now handles non-numeric
+		values like dbstats
+	- NEW: dbcolstats computes zscores and tscores over a column
+	- NEW: dbcolscorrelate computes correlation coefficients
+		between two columns
+	- INTERNAL: ficus_getopt.pl has been replaced by DbGetopt.pm
+	- BUG FIX: all tests are now ``portable'' (previously some tests
+		ran only on my system)
+	- BUG FIX: you no longer need to have the db programs in your path
+		(fix arose from a discussion with Arkadi Gelfond)
+	- BUG FIX: installation no longer uses cp -f (to work on SunOS 4)
+
+1.6, 24-May-99
+
+	- NEW: dbsort, dbstats, dbmultistats now run in constant memory
+		(using tmp files if necessary)
+	- NEW: dbcolmovingstats does moving means over a series of data
+	- NEW: dbcol has a -v option to get all columns except those listed
+	- NEW: dbmultistats does quartitles and medians
+	- NEW: dbstripextraheaders now also cleans up bogus comments
+		before the fist header
+	- BUG FIX: dbcolneaten works better with double-space-separated data
+
+1.7,  5-Jan-00
+
+- NEW: dbcolize now detects and rejects lines that contain embedded
+	copies of the field separator
+
+- NEW: configure tries harder to prevent people from improperly 
+	configuring/installing jdb
+
+- NEW: tcpdump_to_db converter (incomplete)
+
+- NEW: tabdelim_to_db converter:  from spreadsheet tab-delimited files to db
+
+- NEW: mailing lists for jdb are
+	jdb-announce@heidemann.la.ca.us and
+	jdb-talk@heidemann.la.ca.us
+     To subscribe to either, send mail to
+	jdb-announce-request@heidemann.la.ca.us
+	or jdb-talk-request@heidemann.la.ca.us.
+     with "subscribe" in the BODY of the message.
+
+- BUG FIX:  dbjoin used to produce incorrect output if there
+	were extra, unmatched values in the 2nd table.
+	Thanks to Graham Phillips for providing a test case.
+
+- BUG FIX:  the sample commands in the usage strings
+	now all should explicitly include the source of data
+	(typically from "cat foo.jdb |").  Thanks to Ya Xu
+	for pointing out this documentation deficiency.
+
+- BUG FIX (DOCUMENTATION): dbcolmovingstats had incorrect sample output.
+
+1.8, 28-Jun-00
+
+- BUG FIX:  header options are now preserved when writing with dblistize
+
+- NEW:  dbrowuniq now optionally checks for uniqueness only on certain fields
+
+- NEW: dbrowsplituniq makes one pass through a file and splits it into
+	separate files based on the given fields
+
+- NEW:  converter for "crl" format network traces
+
+- NEW:  anywhere you use arbitrary code (like dbroweval),
+	_last_foo now maps to the last row's value for field _foo.
+
+- OPTIMIZATION: comment processing slightly changed so that
+	dbmultistats now is much faster on files with lots of comments
+	(for example, ~100k lines of comments and 700 lines of data!)
+	(Thanks to Graham Phillips for pointing out this performance
+	problem.)
+
+- BUG FIX: dbstats with median/quartiles now correctly handles singleton
+	data points
+
+1.9,  6-Nov-00
+
+- NEW: dbfilesplit, split a single input file into multiple output files
+	(based on code contributed by Pavlin Radoslavov).
+
+- BUG FIX: dbsort now works with perl-5.6
+
+1.10, 10-Apr-01
+
+- BUG FIX: dbstats now handles the case where there are more n-tiles
+	than data
+- NEW: dbstats now includes a -S option to optimize work on
+	pre-sorted data (inspired by code contributed by Haobo Yu)
+- BUG FIX: dbsort now has a better estimate of memory usage when
+	run on data with very short records (problem detected by Haobo Yu)
+- BUG FIX: cleanup of temporary files is slightly better
+
+1.11,  2-Nov-01
+
+- BUG FIX: dbcolneaten now runs in constant memory
+- NEW: dbcolneaten now supports "field specifiers" that
+	allow some control over how wide columns should be
+- OPTIMIZATION: dbsort now tries hard to be filesystem cache-friendly
+	(inspired by "Information and Control in Gray-box Systems" by
+	the Arpaci-Dusseau's at SOSP 2001)
+- INTERNAL: t_distr now ported to perl5 module DbTDistr
+
+1.12,  30-Oct-02
+
+- BUG FIX: dbmultistats documentation typo fixed
+- NEW: dbcolmultiscale
+- NEW: dbcol has -r option for "relaxed error checking"
+- NEW: dbcolneaten has new -e option to strip end-of-line spaces
+- NEW: dbrow finally has a -v option to negate the test
+- BUG FIX: math bug in dbcoldiff fixed by Ashvin Goel
+	*** need to check Scheaffer test cases
+- BUG FIX: some patches to run with Perl 5.8
+	Note: some programs (dbcolmultiscale, dbmultistats, dbrowsplituniq)
+	generate warnings like:
+		Use of uninitialized value in concatenation (.)
+		or string at /usr/lib/perl5/5.8.0/FileCache.pm line 98,
+		<STDIN> line 2.
+	Please ignore this until I figure out how to suppress it.
+	(Thanks to Jerry Zhao for noticing perl-5.8 problems.)
+- BUG FIX: fixed an autoconf problem where configure would fail
+	to find a reasonable prefix (thanks to Fabio Silva
+	for reporting the problem)
+- NEW: db_to_html_table: simple conversion to html tables
+	(NO fancy stuff)
+- NEW: dblib now has a function dblib_text2html() that will
+	do simple conversion of iso-8859-1 to HTML
+
+MISSING FEATURES
+----------------
+
+Some features that have been requested but not yet provided:
+
+- handling null values  From mike_schulz@csgsystems.com, 29-Mar-01.
+
+
+ISPELL WORDS
+------------
+
+ LocalWords:  Exp rdb Manis Evan Schaffer passwd uid gid fullname homedir greg
+ LocalWords:  gnuplot jgraph dbrow dbcol dbcolcreate dbcoldefine JDB README un
+ LocalWords:  dbcolrename dbcolmerge dbcolsplit dbjoin dbsort dbcoldiff Perl bw
+ LocalWords:  dbmultistats dbrowdiff dbrowenumerate dbroweval dbstats dblistize
+ LocalWords:  dbcolneaten dbcoltighten dbstripcomments dbstripextraheaders pct
+ LocalWords:  dbstripleadingspace stddev rsd dbsetheader sprintf LIBDIR BINDIR
+ LocalWords:  LocalWords isi URL com dbpercentile dbhistogram GRADEBOOK min ss
+ LocalWords:  gradebook conf std dev dbrowaccumulate dbcolpercentile db dcliff
+ LocalWords:  dbuniq uniq dbcolize distr pl Apr autoconf Jul html printf Fx jdb
+ LocalWords:  printfs dbrowuniq dbrecolize dbformmail kitrace geoff ns berkeley
+ LocalWords:  comp lang perl Haobo Yu outliers Jorgensen csh dbrowsplituniq crl
+
+
+COPYRIGHT
+---------
+
+JDB is Copyright (C) 1991-2002 by John Heidemann <johnh@isi.edu>.
+
+This program is free software; you can redistribute it and/or modify
+it under the terms of version 2 of the GNU General Public License as
+published by the Free Software Foundation.
+
+This program is distributed in the hope that it will be useful, but
+WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+
+A copy of the GNU General Public License can be found in the file
+``COPYING''.
+
+
+COMMENTS
+--------
+
+Any comments about these programs should be sent to John Heidemann
+<johnh@isi.edu>.
+
+At ISI, these programs can be run directly out of /home/johnh/BIN/DB.
+
+   -John Heidemann
+
+
+ISPELL WORDS
+------------
+
+ LocalWords:  dbcolmovingstats dbcolstats zscores tscores dbcolhisto columnar
+ LocalWords:  dmalloc tabdelim stats numerics datapoint CDF xgraph max txt sed
+ LocalWords:  login gecos div cmd nr hw hw assuing Kuenning Vikram Visweswariah
+ LocalWords:  Kannan Varadahan Arkadi Gelfond Pavlin Radoslavov quartile getopt
+ LocalWords:  dbcolscorrelate DbGetopt cp tmp quartitles nd Ya Xu dbfilesplit
+ LocalWords:  MERCHANTABILITY tba

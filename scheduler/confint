@@ -1,0 +1,185 @@
+#!/usr/bin/perl -w
+
+#
+# dbmultistats
+# Copyright (C) 1991-1998 by John Heidemann <johnh@isi.edu>
+# $Id: dbmultistats,v 1.23 2003/05/23 04:17:45 johnh Exp $
+#
+# This program is distributed under terms of the GNU general
+# public license, version 2.  See the file COPYING
+# in $dblibdir for details.
+#
+sub usage {
+	print STDERR <<END;
+usage: $0 [-dm] [-c ConfidencePercent] [-f FormatForm] [-q NumberOfQuartiles] TagField ValueField
+
+Computes a series of stats for a table from stdin,
+consuming the data.
+For each unique value of TagField, mean is run over ValueField.
+
+This program consumes O(1) memory.
+
+Options:
+    -c ConfidencePercent    specify confidence interval
+    -f FormatForm	    specify output format
+    -m      compute median value
+    -q N    compute quartile (if N=4) or n-tile values (the scores
+	    that are 1 Nth of the way across the population)
+    -d			    debugging
+
+Bugs:
+Currently doesn't correctly pass through field seperators.
+
+Sample input:
+#h experiment duration
+ufs_mab_sys 37.2
+ufs_mab_sys 37.3
+ufs_rcp_real 264.5
+ufs_rcp_real 277.9
+
+Sample command:
+cat DATA/stats.jdb | dbmultistats experiment duration
+
+Sample output:
+#h      experiment      mean    stddev  pct_rsd conf_range      conf_low       conf_high        conf_pct        sum     sum_squared     min     max     n
+ufs_mab_sys     37.25 0.070711 0.18983 0.6353 36.615 37.885 0.95 74.5 2775.1 37.2 37.3 2
+ufs_rcp_real    271.2 9.4752 3.4938 85.13 186.07 356.33 0.95 542.4 1.4719e+05 264.5 277.9 2
+#  | /home/johnh/BIN/DB/dbmultistats experiment duration
+
+END
+# '
+	exit 1;
+}
+
+BEGIN {
+    $dbbindir = "/home/ashvin/code/jdb/bin";
+    $dblibdir = "/home/ashvin/code/jdb/share";
+    push(@INC, $dblibdir);
+
+}
+use DbGetopt;
+use FileCache;
+require "$dblibdir/dblib.pl";
+
+@orig_argv = @ARGV;
+my($prog) = &progname;
+my($conf_pct) = undef;
+my($format) = "%.5g";
+my($debug) = undef;
+my($dbopts) = new DbGetopt("c:df:mq:?", \@ARGV);
+my($ntile, $median);
+my($ch);
+while ($dbopts->getopt) {
+    $ch = $dbopts->opt;
+    if ($ch eq 'c') {
+	$conf_pct = $dbopts->optarg;
+    
+    } elsif ($ch eq 'f') {
+	$format = $dbopts->optarg;
+    
+    } elsif ($ch eq 'd') {
+	$debug = 1;
+    
+    } elsif ($ch eq 'm') {
+	$median = 1;
+    
+    } elsif ($ch eq 'q') {
+	$ntile = $dbopts->optarg;
+    
+    } else {
+	&usage;
+    
+    };
+
+};
+
+&usage if ($#ARGV != 1);
+my($tagcol, $valcol) = @ARGV;
+
+&readprocess_header;
+die ("$prog: unknown column name ``$tagcol''.\n") if (!defined($colnametonum{$tagcol}));
+my($tagf) = $colnametonum{$tagcol};
+my($tagname) = $colnames[$tagf];
+die ("$prog: unknown column name ``$valcol''.\n") if (!defined($colnametonum{$valcol}));
+my($valf) = $colnametonum{$valcol};
+
+my(%tag_files, %tag_counts, $tag, $path);
+
+
+# read data
+while (<STDIN>) {
+    &delayed_pass_comments() && next;
+    &split_cols;
+
+    $tag = $f[$tagf];
+    $val = $f[$valf];
+
+    if (defined($tag_files{$tag})) {
+	$tag_counts{$tag}++;
+    
+    } else {
+	# open a new file
+	$path = $tag_files{$tag} = &db_tmpfile(TMP);
+	close(TMP);
+	cacheout $path;
+	print $path "$col_headertag data\n";
+	$tag_counts{$tag} = 1;
+    
+    };
+    $path = $tag_files{$tag};
+    cacheout $path;
+    print $path "$val\n";
+
+};
+
+@dbstats_args = ("$dbbindir/dbstats");
+push(@dbstats_args, '-c', $conf_pct) if (defined($conf_pct));
+push(@dbstats_args, '-q', $ntile) if (defined($ntile));
+push(@dbstats_args, '-m') if (defined($median));
+push(@dbstats_args, '0');
+
+# send each tag to mean
+foreach $tag (sort keys %tag_files) {
+    # close it
+    $path = $tag_files{$tag};
+    cacheout $path;
+    close($path);
+
+    open(FROMMEAN, join(" ", @dbstats_args) . " <$tag_files{$tag} |") || die "$prog: cannot run dbstats.\n";
+    @meanout = <FROMMEAN>;    
+    close(FROMMEAN);
+
+    if (defined($meanoutheader)) {
+        print "# $tag\n" if ($debug);
+    	die("$prog: dbstats header mismatch on tag ``$tag''.\n". join("\n", @meanout) . "\n")
+	    if ($meanout[0] ne $meanoutheader);
+    
+    } else {
+    	$meanoutheader = $meanout[0];
+    	&process_header($meanoutheader);
+	&col_create($tagname, 0);   # create the tag column at the beginning
+	&write_header();
+        print "# $tag\n" if ($debug);
+    
+    };
+
+    print "$tag$outfs$meanout[1]";
+
+}
+
+# close up shop
+&delayed_flush_comments();
+print "#  | $prog ", join(" ", @orig_argv), "\n";
+exit 0;
+
+if (0) {
+    my($x);
+    $x = $col_headertag;
+    $x = $outfs;
+    $x = $colnames;
+    $x = <TMP>;
+    $x = <TMP>;
+
+}
+'
+}

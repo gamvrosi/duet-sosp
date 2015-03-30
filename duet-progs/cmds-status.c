@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 George Amvrosiadis.  All rights reserved.
+ * Copyright (C) 2014-2015 George Amvrosiadis.  All rights reserved.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public
@@ -50,12 +50,12 @@ static const char * const cmd_status_stop_usage[] = {
 static int cmd_status_start(int fd, int argc, char **argv)
 {
 	int ret = 0;
-	struct duet_ioctl_status_args args;
+	struct duet_ioctl_cmd_args args;
 
 	memset(&args, 0, sizeof(args));
-	args.cmd_flags = DUET_STATUS_START;
+	args.cmd_flags = DUET_START;
 
-	ret = ioctl(fd, DUET_IOC_STATUS, &args);
+	ret = ioctl(fd, DUET_IOC_CMD, &args);
 	if (ret < 0) {
 		perror("status start ioctl error");
 		usage(cmd_status_start_usage);
@@ -66,12 +66,12 @@ static int cmd_status_start(int fd, int argc, char **argv)
 static int cmd_status_stop(int fd, int argc, char **argv)
 {
 	int ret = 0;
-	struct duet_ioctl_status_args args;
+	struct duet_ioctl_cmd_args args;
 
 	memset(&args, 0, sizeof(args));
-	args.cmd_flags = DUET_STATUS_STOP;
+	args.cmd_flags = DUET_STOP;
 
-	ret = ioctl(fd, DUET_IOC_STATUS, &args);
+	ret = ioctl(fd, DUET_IOC_CMD, &args);
 	if (ret < 0) {
 		perror("status stop ioctl error");
 		usage(cmd_status_stop_usage);

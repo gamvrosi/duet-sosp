@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 George Amvrosiadis.  All rights reserved.
+ * Copyright (C) 2014-2015 George Amvrosiadis.  All rights reserved.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public
@@ -74,12 +74,10 @@ static void duet_bmap_set_bits(__u8 *bmap, __u32 start, __u32 num, __u8 set)
 	f_mask = (1 << (8 - f_bits)) - 1;
 	l_mask = ~((1 << (8 - l_bits - 1)) - 1);
 
-#ifdef CONFIG_DUET_DEBUG
-	printk(KERN_DEBUG
+	duet_dbg(KERN_DEBUG
 		"duet_bmap_set_bits: start=%u, num=%u, fbits=%02x, "
 		"l_bits=%02x, f_mask=%02x, l_mask=%02x\n", start, num,
 		f_bits, l_bits, f_mask, l_mask);
-#endif /* CONFIG_DUET_DEBUG */
 
 	if (8 - f_bits >= num) {
 		/* We are marking stuff only in one byte block */
@@ -140,9 +138,9 @@ static int duet_bmap_chk_bits(__u8 *bmap, __u32 start, __u32 num, __u8 set)
 	int *buf, ret = 1;
 
 	/*
-	 * We are asked to check an arbitrary number of bits, and it may look like
-	 * the following diagram, and we don't want to loop here; we'd rather
-	 * memcmp bytes if we can:
+	 * We are asked to check an arbitrary number of bits, and it may look
+	 * like the following diagram, and we don't want to loop here; we'd
+	 * rather memcmp bytes if we can:
 	 *             01234567     01234567           01234567 
 	 *           +----------+ +----------+       +----------+
 	 *           | *****sss | | ssssssss |  ...  | ssss**** |
@@ -155,12 +153,10 @@ static int duet_bmap_chk_bits(__u8 *bmap, __u32 start, __u32 num, __u8 set)
 	f_mask = (1 << (8 - f_bits)) - 1;
 	l_mask = ~((1 << (8 - l_bits - 1)) - 1);
 
-#ifdef CONFIG_DUET_DEBUG
-	printk(KERN_DEBUG
+	duet_dbg(KERN_DEBUG
 		"duet_bmap_chk_bits: start=%u, num=%lu, fbits=%02x, "
 		"l_bits=%02x, f_mask=%02x, l_mask=%02x\n", start,
 		(long unsigned int) num, f_bits, l_bits, f_mask, l_mask);
-#endif /* CONFIG_DUET_DEBUG */
 
 	if (8 - f_bits >= num) {
 		/* We are checking stuff only in one byte block */
@@ -185,7 +181,7 @@ static int duet_bmap_chk_bits(__u8 *bmap, __u32 start, __u32 num, __u8 set)
 
 		/* Check the intermediate byte blocks */
 		if (n_bytes) {
-			buf = kzalloc(n_bytes, GFP_NOFS);
+			buf = kzalloc(n_bytes, GFP_ATOMIC);
 			memset(buf, set ? 0xff : 0, n_bytes);
 			ret &= (1 - memcmp(&bmap[(start/8)+1], buf, n_bytes));
 			kfree(buf);

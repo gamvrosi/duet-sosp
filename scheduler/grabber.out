@@ -1,0 +1,12 @@
+n = 1, time = 1427400929.342448
+signum = 14, iteration count = 422144063, time difference = 5001 ms
+iterations/unit time = 84411.929688
+n = 2, time = 1427400934.343511
+signum = 14, iteration count = 424255826, time difference = 5001 ms
+iterations/unit time = 84834.203125
+n = 3, time = 1427400939.344537
+signum = 14, iteration count = 424853496, time difference = 5001 ms
+iterations/unit time = 84953.710938
+n = 4, time = 1427400944.345559
+signum = 14, iteration count = 424037570, time difference = 5001 ms
+iterations/unit time = 84790.554688

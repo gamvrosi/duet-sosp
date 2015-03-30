@@ -30,6 +30,9 @@
 #include "rsync.h"
 #include "ifuncs.h"
 #include "inums.h"
+#ifdef HAVE_DUET
+#include "duet/duet.h"
+#endif /* HAVE_DUET */
 
 /** If no timeout is specified then use a 60 second select timeout */
 #define SELECT_TIMEOUT 60
@@ -64,6 +67,11 @@ extern struct file_list *cur_flist;
 extern int filesfrom_convert;
 extern iconv_t ic_send, ic_recv;
 #endif
+#ifdef HAVE_DUET
+extern int out_of_order, duet_fd;
+extern __u8 tid;
+extern struct inode_tree itree;
+#endif /* HAVE_DUET */
 
 int csum_length = SHORT_SUM_LENGTH; /* initial value */
 int allowed_lull = 0;
@@ -748,6 +756,13 @@ static char *perform_io(size_t needed, int flags)
 			}
 			if (extra_flist_sending_enabled) {
 				extra_flist_sending_enabled = False;
+//#ifdef HAVE_DUET
+//				/* Update the itree now that we're chilling */
+//				if (out_of_order && itree_update(&itree, tid, duet_fd)) {
+//					rprintf(FERROR, "itree_update failed\n");
+//					exit_cleanup(RERR_DUET);
+//				}
+//#endif /* HAVE_DUET */
 				send_extra_file_list(sock_f_out, -1);
 				extra_flist_sending_enabled = !flist_eof;
 			} else
@@ -1024,7 +1039,11 @@ void send_msg_int(enum msgcode code, int num)
 
 static void got_flist_entry_status(enum festatus status, int ndx)
 {
-	struct file_list *flist = flist_for_ndx(ndx, "got_flist_entry_status");
+	struct file_list *flist = flist_for_ndx(ndx, "got_flist_entry_status", 1);
+#ifdef HAVE_DUET
+	if (!flist)
+		return;
+#endif /* HAVE_DUET */
 
 	if (remove_source_files) {
 		active_filecnt--;
@@ -1033,6 +1052,9 @@ static void got_flist_entry_status(enum festatus status, int ndx)
 
 	if (inc_recurse)
 		flist->in_progress--;
+
+	if (DEBUG_GTE(FLIST, 4))
+		output_all_flists("got_flist_entry_status.2");
 
 	switch (status) {
 	case FES_SUCCESS:
@@ -1660,6 +1682,8 @@ static void drain_multiplex_messages(void)
 
 void wait_for_receiver(void)
 {
+	struct file_list *flist;
+
 	if (!iobuf.raw_input_ends_before)
 		read_a_msg();
 
@@ -1675,11 +1699,27 @@ void wait_for_receiver(void)
 			case NDX_DONE:
 				msgdone_cnt++;
 				break;
+#ifdef HAVE_DUET
+			case NDX_LIST_O3:
+				flist_receiving_enabled = False;
+				if (DEBUG_GTE(FLIST, 2)) {
+					rprintf(FINFO, "[%s] receiving o3 flist\n",
+						who_am_i());
+				}
+				flist = recv_o3_file_list(iobuf.in_fd);
+				flist->parent_ndx = ndx;
+#ifdef SUPPORT_HARD_LINKS
+				if (preserve_hard_links)
+					match_hard_links(flist);
+#endif
+				flist_receiving_enabled = True;
+			case NDX_O3_DONE: /* Nothing to do */
+				break;
+#endif /* HAVE_DUET */
 			default:
 				exit_cleanup(RERR_STREAMIO);
 			}
 		} else {
-			struct file_list *flist;
 			flist_receiving_enabled = False;
 			if (DEBUG_GTE(FLIST, 2)) {
 				rprintf(FINFO, "[%s] receiving flist for dir %d\n",
@@ -2168,6 +2208,12 @@ void write_ndx(int f, int32 ndx)
 	static int32 prev_positive = -1, prev_negative = 1;
 	int32 diff, cnt = 0;
 	char b[6];
+
+#ifdef HAVE_DUET
+	if (DEBUG_GTE(SEND, 4))
+		rprintf(FINFO, "[%s] write_ndx: writing ndx %d\n",
+			who_am_i(), ndx);
+#endif /* HAVE_DUET */
 
 	if (protocol_version < 30 || read_batch) {
 		write_int(f, ndx);

@@ -29,12 +29,10 @@
 #include "check-integrity.h"
 #include "rcu-string.h"
 #include "raid56.h"
-#ifdef CONFIG_DUET_BTRFS
-#include <linux/duet.h>
-#endif /* CONFIG_DUET_BTRFS */
 #ifdef CONFIG_BTRFS_DUET_SCRUB
+#include "mapping.h"
+#include <linux/duet.h>
 #include <linux/genhd.h>
-#include <linux/workqueue.h>
 #endif /* CONFIG_BTRFS_DUET_SCRUB */
 #ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
 #include <linux/timer.h>
@@ -45,6 +43,12 @@
 #ifdef CONFIG_BTRFS_FS_SCRUB_READA
 #define BTRFS_SCRUB_MAX_READA	20 /* Max concurrent readahead sessions */
 #endif /* CONFIG_BTRFS_FS_SCRUB_READA */
+
+#ifdef CONFIG_BTRFS_DUET_SCRUB_DEBUG
+#define scrub_dbg(...)	printk(__VA_ARGS__)
+#else
+#define scrub_dbg(...)
+#endif
 
 /*
  * This is only the first step towards a full-features scrub. It reads all
@@ -190,23 +194,8 @@ struct scrub_ctx {
 	spinlock_t		stat_lock;
 
 #ifdef CONFIG_BTRFS_DUET_SCRUB
-#ifdef CONFIG_BTRFS_DUET_BMAP_STATS
-	__u64			last_physical;
-#endif /* CONFIG_BTRFS_DUET_BMAP_STATS */
-
-	__u8			taskid;
-	struct block_device	*scrub_bdev;
-	spinlock_t		wq_lock;
-	struct workqueue_struct	*syn_wq;
-};
-
-struct scrub_synwork {
-        struct work_struct work;
-        struct block_device *bdev;
-	__u8 code;
-        u64 lbn;
-        u64 len;
-        struct scrub_ctx *sctx;
+	u8			taskid;
+	struct block_device	*scrub_dev;
 #endif /* CONFIG_BTRFS_DUET_SCRUB */
 };
 
@@ -406,9 +395,6 @@ static void scrub_free_csums(struct scrub_ctx *sctx)
 static noinline_for_stack void scrub_free_ctx(struct scrub_ctx *sctx)
 {
 	int i;
-#ifdef CONFIG_BTRFS_DUET_SCRUB
-	struct workqueue_struct *tmp_wq = NULL;
-#endif /* CONFIG_BTRFS_DUET_SCRUB */
 
 	if (!sctx)
 		return;
@@ -416,17 +402,9 @@ static noinline_for_stack void scrub_free_ctx(struct scrub_ctx *sctx)
 	scrub_free_wr_ctx(&sctx->wr_ctx);
 
 #ifdef CONFIG_BTRFS_DUET_SCRUB
-	/* Flush and destroy work queue */
-	spin_lock(&sctx->wq_lock);
-	tmp_wq = sctx->syn_wq;
-	sctx->syn_wq = NULL;
-	spin_unlock(&sctx->wq_lock);
-	flush_workqueue(tmp_wq);
-	destroy_workqueue(tmp_wq);
-
 	/* Deregister the task from the Duet framework */
-	if (duet_task_deregister(sctx->taskid))
-		printk(KERN_ERR "scrub: failed to deregister from duet framework\n");
+	if (sctx->taskid && duet_deregister(sctx->taskid))
+		printk(KERN_ERR "scrub: failed to deregister with duet\n");
 #endif /* CONFIG_BTRFS_DUET_SCRUB */
 
 	/* this can happen when scrub is cancelled */
@@ -666,97 +644,121 @@ out:
 
 #ifdef CONFIG_BTRFS_DUET_SCRUB
 /*
- * This is the core of the synergistic scrubber. We are passed the physical
- * range that was read or written, and we need to mark or unmark it
- * respectively.
+ * This is the core of the synergistic scrubber. We fetch page-related events,
+ * and mark or unmark the corresponding LBN range(s), depending on whether the
+ * event that occurred was an ADD or MOD of a page.
+ *
+ * Pages that are not found to have a logical/physical mapping yet, are enqueued
+ * until we receive another event for them. Then we check them again.
+ * TODO: Implement this functionality. It's not that important for scrubbing.
+ *
+ * We try to process up to 256 events at a time. However, we will stop if an
+ * event requires us to fetch metadata from disk. If all operations took place
+ * in memory, we return 0 if we run out of items, so that the scrubber knows it
+ * can go ahead and queue bios. Otherwise we return 1, indicating that some IO
+ * already occurred, or there's more than 256 events, so we need to give the
+ * foreground workload a chance. That's ok, though, because we'll be processing
+ * while the foreground workload is running anyway.
  */
-static void __handle_event(struct work_struct *work)
+static int process_duet_events(struct scrub_ctx *sctx)
 {
-	struct scrub_synwork *swork = (struct scrub_synwork *)work;
+	int ret = 256, mret = 0, stop = 0;
+	u16 itret;
+	u64 pstart, mapped_length;
+	u64 len = PAGE_CACHE_SIZE;
+	u64 dstart = sctx->scrub_dev->bd_part->start_sect << 9;
+	struct duet_item itm;
+	struct extent_map *em;
+	struct inode *inode;
+	struct btrfs_bio *bbio = NULL;
+	struct btrfs_fs_info *fs_info = sctx->dev_root->fs_info;
+	struct btrfs_device *pdev;
 
-	switch (swork->code) {
-	case DUET_EVENT_BTRFS_WRITE:
-		if (duet_mark_todo(swork->sctx->taskid,
-				   swork->bdev->bd_part->start_sect << 9,
-				   swork->lbn, swork->len) == -1)
-			printk(KERN_ERR "duet-scrub: failed to mark_todo "
-				"[%llu, %llu] range for task #%d\n",
-				swork->lbn, swork->lbn + swork->len,
-				swork->sctx->taskid);
-		break;
-	case DUET_EVENT_BTRFS_READ:
-		if (duet_mark_done(swork->sctx->taskid,
-				   swork->bdev->bd_part->start_sect << 9,
-				   swork->lbn, swork->len) == -1)
-			printk(KERN_ERR "duet-scrub: failed to mark_done "
-				"[%llu, %llu] range for task #%d\n",
-				swork->lbn, swork->lbn + swork->len,
-				swork->sctx->taskid);
-		break;
-	default:
-		printk(KERN_ERR "duet-scrub: received unsupported event code "
-			"(%d). This is a bug.\n", swork->code);
-		break;
+	while (ret) {
+		if (duet_fetch(sctx->taskid, 1, &itm, &itret)) {
+			printk(KERN_ERR "duet-scrub: duet_fetch failed\n");
+			return 0;
+		}
+
+		/* If there were no events, return 0 */
+		if (!itret)
+			return 0;
+
+		/* If this inode came from disk, remember to stop and give the
+		 * other processes a chance */
+		if (btrfs_iget_ino(fs_info, itm.ino, &inode, &stop))
+			goto done;
+
+		if (btrfs_get_logical(inode, itm.idx, &em, &stop))
+			goto idone;
+
+		/* Get the LBN range(s) corresponding to this item */
+		bbio = NULL;
+		mapped_length = PAGE_CACHE_SIZE;
+		mret = btrfs_map_block(fs_info, READ, em->block_start,
+			&mapped_length, &bbio, 0);
+		if (mret || !bbio || mapped_length < len ||
+			!bbio->stripes[0].dev->bdev) {
+			scrub_dbg(KERN_INFO "duet-scrub: btrfs_map_block failed\n");
+			kfree(bbio);
+			goto idone;
+		}
+
+		pstart = bbio->stripes[0].physical +
+			 ((itm.idx << PAGE_CACHE_SHIFT) - em->start);
+		pdev = bbio->stripes[0].dev;
+		kfree(bbio);
+
+		scrub_dbg(KERN_INFO "duet-scrub: dev offt %llu\n", dstart);
+		scrub_dbg(KERN_INFO "duet-scrub: phys offt %llu, len %llu\n",
+			pstart, len);
+
+		if (pdev->bdev->bd_contains != sctx->scrub_dev->bd_contains) {
+			printk(KERN_INFO "duet-scrub: event refers to wrong "
+				"device\n");
+			goto idone;
+		}
+
+		if (itm.state == DUET_PAGE_ADDED) {
+			scrub_dbg(KERN_INFO "duet-scrub: marking [%llu, %llu] --"
+				" dstart = %llu\n",
+				dstart+pstart, dstart+pstart+len, dstart);
+			if (duet_mark(sctx->taskid, dstart+pstart, len) == -1)
+				printk(KERN_ERR "duet-scrub: failed to mark"
+					" [%llu, %llu] range for task #%d\n",
+					dstart + pstart, dstart + pstart +
+					mapped_length, sctx->taskid);
+		} else if (itm.state & DUET_PAGE_DIRTY) {
+			scrub_dbg(KERN_INFO "duet-scrub: clearing [%llu, %llu] --"
+				" dstart = %llu\n",
+				dstart+pstart, dstart+pstart+len, dstart);
+			if (duet_unmark(sctx->taskid, dstart+pstart, len) == -1)
+				printk(KERN_ERR "duet-scrub: failed to unmark"
+					" [%llu, %llu] range for task #%d\n",
+					dstart + pstart, dstart + pstart +
+					mapped_length, sctx->taskid);
+		} else {
+			printk(KERN_ERR "duet-scrub: received unknown event\n");
+		}
+
+idone:
+		free_extent_map(em);
+		iput(inode);
+done:
+		ret--;
+		if (stop)
+			break;
 	}
 
-	kfree((void *)work);
-}
+	/*
+	 * We need to let the foreground workload go if we've touched the disk.
+	 * Otherwise, let the scrubber do one stripe.
+	 * 1. If ret == 0 and stop == 0: there may be more, return 1
+	 * 2. If ret > 0 and stop == 0: out of items, return 0
+	 * 3. If ret > 0 and stop == 1: we hit the disk, return 1
+	 */
 
-static void btrfs_scrub_duet_handler(__u8 taskid, __u8 event_code, void *owner,
-	__u64 offt, __u32 len, void *data, int data_type, void *privdata)
-{
-	struct scrub_ctx *sctx = (struct scrub_ctx *)privdata;
-        struct scrub_synwork *swork;
-	struct block_device *bdev;
-
-#ifdef CONFIG_BTRFS_FS_SCRUB_DEBUG
-	printk(KERN_DEBUG "duet: In the btrfs_scrub_duet_handler\n");
-#endif /* CONFIG_BTRFS_FS_SCRUB_DEBUG */
-
-#ifdef CONFIG_BTRFS_DUET_BMAP_STATS
-	if (sctx->stats.last_physical > sctx->last_physical + 32768) {
-		sctx->last_physical = sctx->stats.last_physical;
-		duet_trim_rbbt(taskid, sctx->last_physical);
-	}
-#endif /* CONFIG_BTRFS_DUET_BMAP_STATS */
-
-	/* Verify that this event code is valid (redundant) */
-	if (!(event_code & (DUET_EVENT_BTRFS_WRITE | DUET_EVENT_BTRFS_READ)))
-		return;
-
-	/* Verify that the event refers to the device we're scrubbing */
-	bdev = (struct block_device *)owner;
-	if (sctx->scrub_bdev != bdev->bd_contains)
-		return;
-
-	/* Since we got all the way here, we're on the right device. Create
-	 * a work items to handle the event. */
-	swork = (struct scrub_synwork *)kzalloc(sizeof(struct scrub_synwork),
-								GFP_ATOMIC);
-	if (!swork) {
-		printk(KERN_ERR "duet-scrub: failed to allocate work item\n");
-		return;
-	}
-
-	INIT_WORK((struct work_struct *)swork, __handle_event);
-
-	/* We don't need to get the bio or its pages, since we won't be accessing
-	 * it, or any of its data. Just populate the synergistic work struct. */
-	swork->bdev = bdev;
-	swork->lbn = offt;
-	swork->len = len;
-	swork->sctx = sctx;
-	swork->code = event_code;
-
-	spin_lock(&sctx->wq_lock);
-	if (!sctx->syn_wq || queue_work(sctx->syn_wq,
-					(struct work_struct *)swork) != 1) {
-		printk(KERN_ERR "duet-scrub: failed to queue up work\n");
-		spin_unlock(&sctx->wq_lock);
-		kfree(swork);
-		return;
-	}
-	spin_unlock(&sctx->wq_lock);
+	return (!ret || stop);
 }
 #endif /* CONFIG_BTRFS_DUET_SCRUB */
 
@@ -917,24 +919,13 @@ struct scrub_ctx *scrub_setup_ctx(struct btrfs_device *dev, u64 deadline,
 	}
 
 #ifdef CONFIG_BTRFS_DUET_SCRUB
-	sctx->scrub_bdev = dev->bdev;
-	while (sctx->scrub_bdev != sctx->scrub_bdev->bd_contains)
-		sctx->scrub_bdev = sctx->scrub_bdev->bd_contains;
-
-	/* Synergistic work will be put on this work queue */
-	spin_lock_init(&sctx->wq_lock);
-	sctx->syn_wq = alloc_workqueue("duet-scrub", WQ_UNBOUND | WQ_HIGHPRI, 0);
-	if (!sctx->syn_wq) {
-		printk(KERN_ERR "scrub: failed to allocate work queue\n");
-		return ERR_PTR(-EFAULT);
-	}
+	sctx->scrub_dev = dev->bdev;
 
 	/* Register the task with the Duet framework */
-	if (duet_task_register(&sctx->taskid, "btrfs-scrub",
-			fs_info->sb->s_blocksize, 32768 /* 32Kb */,
-			DUET_EVENT_BTRFS_READ | DUET_EVENT_BTRFS_WRITE,
-			btrfs_scrub_duet_handler, (void *)sctx)) {
-		printk(KERN_ERR "scrub: failed to register with the duet framework\n");
+	if (duet_online() && duet_register(&sctx->taskid, "btrfs-scrub",
+	    DUET_PAGE_ADDED | DUET_PAGE_DIRTY, fs_info->sb->s_blocksize,
+	    fs_info->sb, NULL)) {
+		printk(KERN_ERR "scrub: failed to register with duet\n");
 		return ERR_PTR(-EFAULT);
 	}
 #endif /* CONFIG_BTRFS_DUET_SCRUB */
@@ -1803,9 +1794,6 @@ static void scrub_recheck_block(struct btrfs_fs_info *fs_info,
 				u16 csum_size)
 {
 	int page_num;
-#ifdef CONFIG_DUET_BTRFS
-	struct duet_bw_hook_data hook_data;
-#endif /* CONFIG_DUET_BTRFS */
 
 	sblock->no_io_error_seen = 1;
 	sblock->header_error = 0;
@@ -1832,20 +1820,8 @@ static void scrub_recheck_block(struct btrfs_fs_info *fs_info,
 		bio->bi_sector = page->physical >> 9;
 
 		bio_add_page(bio, page->page, PAGE_SIZE, 0);
-#ifdef CONFIG_DUET_BTRFS
-		duet_hook(0, DUET_SETUP_HOOK_BW_START, (void *)bio);
-#endif /* CONFIG_DUET_BTRFS */
 		if (btrfsic_submit_bio_wait(READ, bio))
 			sblock->no_io_error_seen = 0;
-#ifdef CONFIG_DUET_BTRFS
-#ifdef CONFIG_DUET_DEBUG
-		printk(KERN_DEBUG "duet: hooking on scrub_recheck_block\n");
-#endif /* CONFIG_DUET_DEBUG */
-		hook_data.bio = bio;
-		hook_data.offset = page->physical;
-		duet_hook(DUET_EVENT_BTRFS_READ, DUET_SETUP_HOOK_BW_END,
-							(void *)&hook_data);
-#endif /* CONFIG_DUET_BTRFS */
 
 		bio_put(bio);
 	}
@@ -1942,9 +1918,6 @@ static int scrub_repair_page_from_good_copy(struct scrub_block *sblock_bad,
 {
 	struct scrub_page *page_bad = sblock_bad->pagev[page_num];
 	struct scrub_page *page_good = sblock_good->pagev[page_num];
-#ifdef CONFIG_DUET_BTRFS
-	struct duet_bw_hook_data hook_data;
-#endif /* CONFIG_DUET_BTRFS */
 
 	BUG_ON(page_bad->page == NULL);
 	BUG_ON(page_good->page == NULL);
@@ -1971,9 +1944,6 @@ static int scrub_repair_page_from_good_copy(struct scrub_block *sblock_bad,
 			return -EIO;
 		}
 
-#ifdef CONFIG_DUET_BTRFS
-		duet_hook(0, DUET_SETUP_HOOK_BW_START, (void *)bio);
-#endif /* CONFIG_DUET_BTRFS */
 		if (btrfsic_submit_bio_wait(WRITE, bio)) {
 			btrfs_dev_stat_inc_and_print(page_bad->dev,
 				BTRFS_DEV_STAT_WRITE_ERRS);
@@ -1983,15 +1953,6 @@ static int scrub_repair_page_from_good_copy(struct scrub_block *sblock_bad,
 			bio_put(bio);
 			return -EIO;
 		}
-#ifdef CONFIG_DUET_BTRFS
-#ifdef CONFIG_DUET_DEBUG
-		printk(KERN_DEBUG "duet: hooking on scrub_repair_page_from_good_copy\n");
-#endif /* CONFIG_DUET_DEBUG */
-		hook_data.bio = bio;
-		hook_data.offset = page_bad->physical;
-		duet_hook(DUET_EVENT_BTRFS_WRITE, DUET_SETUP_HOOK_BW_END,
-							(void *)&hook_data);
-#endif /* CONFIG_DUET_BTRFS */
 		bio_put(bio);
 	}
 
@@ -2115,13 +2076,6 @@ static void scrub_wr_submit(struct scrub_ctx *sctx)
 #ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
 	scrub_pending_bio_alloc_inc(sctx);
 #endif /* CONFIG_BTRFS_FS_SCRUB_ADAPT */
-#ifdef CONFIG_DUET_BTRFS
-#ifdef CONFIG_DUET_DEBUG
-	printk(KERN_DEBUG "duet: hooking on scrub_wr_submit\n");
-#endif /* CONFIG_DUET_DEBUG */
-	duet_hook(DUET_EVENT_BTRFS_WRITE, DUET_SETUP_HOOK_BA,
-		(void *)sbio->bio);
-#endif /* CONFIG_DUET_BTRFS */
 	/* process all writes in a single worker thread. Then the block layer
 	 * orders the requests before sending them to the driver which
 	 * doubled the write performance on spinning disks when measured
@@ -2615,13 +2569,6 @@ static void scrub_submit(struct scrub_ctx *sctx)
 			"btrfs: scrub_submit(bio bdev == NULL) is unexpected!\n");
 		bio_endio(sbio->bio, -EIO);
 	} else {
-#ifdef CONFIG_DUET_BTRFS
-#ifdef CONFIG_DUET_DEBUG
-		printk(KERN_DEBUG "duet: hooking on scrub_submit\n");
-#endif /* CONFIG_DUET_DEBUG */
-		duet_hook(DUET_EVENT_BTRFS_READ, DUET_SETUP_HOOK_BA,
-			(void *)sbio->bio);
-#endif /* CONFIG_DUET_BTRFS */
 		btrfsic_submit_bio(READ, sbio->bio);
 	}
 }
@@ -3130,6 +3077,9 @@ static int scrub_extent(struct scrub_ctx *sctx, u64 logical, u64 len,
 	int ret=0;
 	u8 csum[BTRFS_CSUM_SIZE];
 	u32 blocksize;
+#ifdef CONFIG_BTRFS_DUET_SCRUB
+	u64 dstart = sctx->scrub_dev->bd_part->start_sect << 9;
+#endif /* CONFIG_BTRFS_DUET_SCRUB */
 
 	if (flags & BTRFS_EXTENT_FLAG_DATA) {
 		blocksize = sctx->sectorsize;
@@ -3158,9 +3108,12 @@ static int scrub_extent(struct scrub_ctx *sctx, u64 logical, u64 len,
 		 * us the green light. Only then we *skip* this block. Note
 		 * that chk_done does not verify we're on the right device;
 		 * this should be de facto since we're calling it from here */
-		if (!sctx->is_dev_replace && (duet_chk_done(sctx->taskid,
-		    dev->bdev->bd_part->start_sect << 9, physical /* lbn */,
-		    l /* len */) == 1)) {
+		scrub_dbg(KERN_INFO "duet-scrub: checking [%llu, %llu] --"
+			" dstart = %llu\n",
+			dstart+physical, dstart+physical+l, dstart);
+		if (!sctx->is_dev_replace && (duet_check(sctx->taskid,
+		    dstart + physical, l) == 1)) {
+			scrub_dbg(KERN_INFO "duet-scrub: found!\n");
 			goto behind_scrub_pages;
 		} else if (!sctx->is_dev_replace) {
 			/* We're actually getting verified */
@@ -3258,6 +3211,7 @@ static noinline_for_stack int scrub_stripe(struct scrub_ctx *sctx,
 #endif /* CONFIG_BTRFS_FS_SCRUB_READA */
 #ifdef CONFIG_BTRFS_DUET_SCRUB
 	u64 tot_skipped = 0;
+	u64 dstart = scrub_dev->bdev->bd_part->start_sect << 9;
 #endif /* CONFIG_BTRFS_DUET_SCRUB */
 
 	if (map->type & (BTRFS_BLOCK_GROUP_RAID5 |
@@ -3315,7 +3269,7 @@ static noinline_for_stack int scrub_stripe(struct scrub_ctx *sctx,
 	wake_up(&fs_info->scrub_pause_wait);
 
 #ifdef CONFIG_BTRFS_FS_SCRUB_READA
-	if (!sctx->is_dev_replace || !duet_is_online()) {
+	if (!sctx->is_dev_replace || !duet_online()) {
 vanilla_reada:
 		printk(KERN_INFO "scrub: vanilla readahead started\n");
 #endif /* CONFIG_BTRFS_FS_SCRUB_READA */
@@ -3367,9 +3321,8 @@ vanilla_reada:
 			ret = 0;
 			while (logical < logic_end) {
 				/* Check if this stripe should be skipped */
-				if (!duet_chk_done(sctx->taskid,
-				    scrub_dev->bdev->bd_part->start_sect << 9,
-				    physical /*lbn*/, p_increment /*len*/)) {
+				if (!duet_check(sctx->taskid, dstart + physical,
+				    p_increment)) {
 					ret = 1;
 					break;
 				} else {
@@ -3384,9 +3337,8 @@ vanilla_reada:
 
 			while (logical <= logic_end) {
 				/* Check if this stripe should _not_ be skipped */
-				if (!duet_chk_done(sctx->taskid,
-				    scrub_dev->bdev->bd_part->start_sect << 9,
-				    physical /*lbn*/, p_increment /*len*/)) {
+				if (!duet_check(sctx->taskid, dstart + physical,
+				    p_increment)) {
 					break;
 				} else {
 					logical += increment;
@@ -3495,10 +3447,14 @@ back_to_paused:
 			mutex_lock(&fs_info->scrub_lock);
 			/* Time to wait for the transaction to be over */
 			while (atomic_read(&fs_info->scrub_pause_req)) {
-				mutex_unlock(&fs_info->scrub_lock);
+			    mutex_unlock(&fs_info->scrub_lock);
+#ifdef CONFIG_BTRFS_DUET_SCRUB
+			    /* If there's no more to process, wait */
+			    if (!duet_online() || !sctx->taskid || !process_duet_events(sctx))
+#endif
 				wait_event(fs_info->scrub_pause_wait,
 				   atomic_read(&fs_info->scrub_pause_req) == 0);
-				mutex_lock(&fs_info->scrub_lock);
+			    mutex_lock(&fs_info->scrub_lock);
 			}
 #ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
 			if (sctx->deadline && sctx->first_free == -1) {
@@ -3519,6 +3475,12 @@ back_to_paused:
 			mutex_unlock(&fs_info->scrub_lock);
 			wake_up(&fs_info->scrub_pause_wait);
 		}
+
+#ifdef CONFIG_BTRFS_DUET_SCRUB
+		/* If we hit the disk, we try to give the workload a chance. */
+		if (duet_online() && sctx->taskid && process_duet_events(sctx))
+			continue;
+#endif /* CONFIG_BTRFS_DUET_SCRUB */
 
 #ifdef CONFIG_BTRFS_FS_SCRUB_ADAPT
 		btrfs_release_path(path);
@@ -3643,9 +3605,14 @@ again:
 			 * save time and IO needed to look into the checksum
 			 * tree. Criteria: if the entire extent portion can be
 			 * filtered out, skip. */
-			if (!is_dev_replace && (duet_chk_done(sctx->taskid,
-			    scrub_dev->bdev->bd_part->start_sect << 9,
-			    extent_physical, extent_len) == 1)) {
+			scrub_dbg(KERN_INFO "duet-scrub: checking [%llu, %llu] --"
+				" dstart = %llu\n",
+				dstart +extent_physical,
+				dstart +extent_physical + extent_len,
+				dstart);
+			if (!is_dev_replace && (duet_check(sctx->taskid,
+			    dstart + extent_physical, extent_len) == 1)) {
+				scrub_dbg(KERN_INFO "duet-scrub: found!\n");
 				tot_skipped++;
 				if (flags & BTRFS_EXTENT_FLAG_DATA) {
 					spin_lock(&sctx->stat_lock);
@@ -4584,9 +4551,6 @@ static int write_page_nocow(struct scrub_ctx *sctx,
 	struct bio *bio;
 	struct btrfs_device *dev;
 	int ret;
-#ifdef CONFIG_DUET_BTRFS
-	struct duet_bw_hook_data hook_data;
-#endif /* CONFIG_DUET_BTRFS */
 
 	dev = sctx->wr_ctx.tgtdev;
 	if (!dev)
@@ -4614,20 +4578,8 @@ leave_with_eio:
 		return -EIO;
 	}
 
-#ifdef CONFIG_DUET_BTRFS
-	duet_hook(0, DUET_SETUP_HOOK_BW_START, (void *)bio);
-#endif /* CONFIG_DUET_BTRFS */
 	if (btrfsic_submit_bio_wait(WRITE_SYNC, bio))
 		goto leave_with_eio;
-#ifdef CONFIG_DUET_BTRFS
-#ifdef CONFIG_DUET_DEBUG
-	printk(KERN_DEBUG "duet: hooking on write_page_nocow\n");
-#endif /* CONFIG_DUET_DEBUG */
-	hook_data.bio = bio;
-	hook_data.offset = physical_for_dev_replace;
-	duet_hook(DUET_EVENT_BTRFS_WRITE, DUET_SETUP_HOOK_BW_END,
-							(void *)&hook_data);
-#endif /* CONFIG_DUET_BTRFS */
 
 	bio_put(bio);
 	return 0;
