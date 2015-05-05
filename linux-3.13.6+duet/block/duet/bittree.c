@@ -52,10 +52,10 @@ static struct bmap_rbnode *bnode_init(__u32 bmapsize, __u64 idx,
 void bnode_dispose(struct bmap_rbnode *bnode, struct rb_node *rbnode,
 	struct rb_root *root, struct duet_task *task)
 {
-#ifdef CONFIG_DUET_BMAP_STATS
+#ifdef CONFIG_DUET_STATS
 	if (task)
 		(task->stat_bit_cur)--;
-#endif /* CONFIG_DUET_BMAP_STATS */
+#endif /* CONFIG_DUET_STATS */
 	rb_erase(rbnode, root);
 	kfree(bnode->bmap);
 	kfree(bnode);
