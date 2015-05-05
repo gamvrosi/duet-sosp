@@ -661,14 +661,13 @@ static unsigned int get_cb_cost(struct f2fs_sb_info *sbi, unsigned int segno)
 #endif /* CONFIG_F2FS_DUET_GC */
 	}
 
-	for (i = 0; i < sbi->segs_per_sec; i++)
-		mtime += get_seg_entry(sbi, start + i)->mtime;
 	vblocks = get_valid_blocks(sbi, segno, sbi->segs_per_sec);
 #ifdef CONFIG_F2FS_DUET_GC
 	//printk(KERN_DEBUG "f2fs-gc: examining segno %u - segs_per_sec %u, "
 	//		"valid = %u, inmem = %u\n",
 	//	segno, sbi->segs_per_sec, vblocks, inmem);
-	vblocks -= min(div_u64(inmem, sbi->segs_per_sec), (unsigned long long)vblocks); // >> 0;
+	vblocks -= min(div_u64(inmem, sbi->segs_per_sec),
+			(unsigned long long)vblocks); // >> 0;
 #endif
 
 	mtime = div_u64(mtime, sbi->segs_per_sec);

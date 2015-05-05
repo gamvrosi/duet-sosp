@@ -444,8 +444,7 @@ int f2fs_get_device_info(struct f2fs_configuration *c)
 	if (S_ISREG(stat_buf.st_mode)) {
 		c->total_sectors = stat_buf.st_size / c->sector_size;
 	} else if (S_ISBLK(stat_buf.st_mode)) {
-#ifdef BLKGETSIZE64
-		if (ioctl(fd, BLKGETSIZE64, &c->total_sectors) < 0) {
+		if (ioctl(fd, BLKSSZGET, &sector_size) < 0) {
 			MSG(0, "\tError: Using the default sector size\n");
 		} else {
 			if (c->sector_size < sector_size) {
@@ -458,7 +457,8 @@ int f2fs_get_device_info(struct f2fs_configuration *c)
 			}
 		}
 
-		if (ioctl(fd, BLKGETSIZE, &c->total_sectors) < 0) {
+#ifdef BLKGETSIZE64
+		if (ioctl(fd, BLKGETSIZE64, &c->total_sectors) < 0) {
 			MSG(0, "\tError: Cannot get the device size\n");
 			return -1;
 		}
