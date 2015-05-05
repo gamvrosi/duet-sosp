@@ -26,18 +26,18 @@
 
 /*
  * Duet can be either state- and/or event-based.
- * State-based Duet monitors changes in the page cache. Registering for EXISTS
- * events means that fetch will be returning ADDED or REMOVED events if the
- * state of the page changes since the last fetch (i.e. the two events cancel
- * each other out). Registering for MODIFIED events means that fetch will be
- * returning DIRTY or FLUSHED events if the state of the page changes since the
- * last fetch.
  * Event-based Duet monitors events that have happened on a page, which include
  * all events in the lifetime of a cache page: ADDED, REMOVED, DIRTY, FLUSHED.
  * Add and remove events are triggered when a page __descriptor__ is inserted or
  * removed from the page cache. Modification events are triggered when the page
  * is dirtied (nb: during writes, pages are added, then dirtied), and flush
  * events are triggered when a page is marked for writeback.
+ * State-based Duet monitors changes in the page cache. Registering for EXISTS
+ * events means that fetch will be returning ADDED or REMOVED events if the
+ * state of the page changes since the last fetch (i.e. the two events cancel
+ * each other out). Registering for MODIFIED events means that fetch will be
+ * returning DIRTY or FLUSHED events if the state of the page changes since the
+ * last fetch.
  */
 #define DUET_PAGE_ADDED		(1 << 0)
 #define DUET_PAGE_REMOVED	(1 << 1)
@@ -45,13 +45,14 @@
 #define DUET_PAGE_FLUSHED	(1 << 3)
 #define DUET_PAGE_MODIFIED	(1 << 4)
 #define DUET_PAGE_EXISTS	(1 << 5)
-#define DUET_USE_IMAP		(1 << 7)
+#define DUET_USE_IMAP		(1 << 6)
+#define DUET_MASK_VALID		(1 << 7)
 
 /*
- * Item struct returned for processing. For both state- and event- based duet,
- * we return 4 bits, for page addition, removal, dirtying, and flushing. The
- * acceptable combinations, however, will differ based on what the task has
- * subscribed for.
+ * Item struct returned for processing. We return 6 bits. For state-based duet,
+ * we mark a page if it EXISTS or is MODIFIED. For event-based duet, we mark a
+ * page for page addition, removal, dirtying, and flushing. The acceptable
+ * combinations, however, will differ based on what the task has subscribed for.
  */
 struct duet_item {
 	unsigned long ino;
@@ -79,8 +80,8 @@ int duet_unmark(__u8 taskid, __u64 idx, __u32 num);
 int duet_fetch(__u8 taskid, __u16 req, struct duet_item *items, __u16 *ret);
 
 /* Framework debugging functions */
-int duet_print_bittree(__u8 taskid);
-int duet_print_itmtree(__u8 taskid);
+int duet_print_bitmap(__u8 taskid);
+int duet_print_events(__u8 taskid);
 
 /* Hook functions that trasmit event info to the framework core */
 typedef void (duet_hook_t) (__u8, void *);

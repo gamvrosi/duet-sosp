@@ -22,7 +22,7 @@ static struct bmap_rbnode *bnode_init(__u32 bmapsize, __u64 idx,
 {
 	struct bmap_rbnode *bnode = NULL;
 
-#ifdef CONFIG_DUET_TREE_STATS
+#ifdef CONFIG_DUET_STATS
 	if (task) {
 		(task->stat_bit_cur)++;
 		if (task->stat_bit_cur > task->stat_bit_max) {
@@ -32,7 +32,7 @@ static struct bmap_rbnode *bnode_init(__u32 bmapsize, __u64 idx,
 				task->stat_bit_max,task->stat_bit_max * task->bmapsize);
 		}
 	}
-#endif /* CONFIG_DUET_TREE_STATS */
+#endif /* CONFIG_DUET_STATS */
 	
 	bnode = kzalloc(sizeof(*bnode), GFP_ATOMIC);
 	if (!bnode)
@@ -251,116 +251,27 @@ inline int bittree_unmark(struct rb_root *bittree, __u32 range, __u32 bmapsize,
 	return bittree_chkupd(bittree, range, bmapsize, idx, num, 0, 0, task);
 }
 
-static struct item_rbnode *tnode_init(struct duet_task *task, unsigned long ino,
-	unsigned long idx, __u8 state)
+int bittree_print(struct duet_task *task)
 {
-	struct item_rbnode *tnode = NULL;
+	struct bmap_rbnode *bnode = NULL;
+	struct rb_node *node;
+	__u32 bits_on;
 
-#ifdef CONFIG_DUET_TREE_STATS
-	(task->stat_itm_cur)++;
-	if (task->stat_itm_cur > task->stat_itm_max) {
-		task->stat_itm_max = task->stat_itm_cur;
-		printk(KERN_INFO "duet: Task#%d (%s): %llu nodes in ItmTree.\n",
-			task->id, task->name, task->stat_itm_max);
+	mutex_lock(&task->bittree_lock);
+	printk(KERN_INFO "duet: Printing BitTree for task #%d\n", task->id);
+	node = rb_first(&task->bittree);
+	while (node) {
+		bnode = rb_entry(node, struct bmap_rbnode, node);
+
+		/* Print node information */
+		printk(KERN_INFO "duet: Node key = %llu\n", bnode->idx);
+		bits_on = duet_bmap_count(bnode->bmap, task->bmapsize);
+		printk(KERN_INFO "duet:   Bits set: %u out of %u\n", bits_on,
+			task->bmapsize * 8);
+
+		node = rb_next(node);
 	}
-#endif /* CONFIG_DUET_TREE_STATS */
-
-	tnode = kzalloc(sizeof(*tnode), GFP_ATOMIC);
-	if (!tnode)
-		return NULL;
-
-	RB_CLEAR_NODE(&tnode->node);
-	tnode->item.ino = ino;
-	tnode->item.idx = idx;
-	tnode->item.state = state;
-	return tnode;
-}
-
-void tnode_dispose(struct item_rbnode *tnode, struct rb_node *rbnode,
-	struct rb_root *root)
-{
-	if (rbnode && root)
-		rb_erase(rbnode, root);
-	kfree(tnode);
-}
-
-/*
- * Creates and inserts an item in the ItemTree. Assumes the relevant locks have
- * been obtained. Returns 1 on failure.
- */
-int itmtree_insert(struct duet_task *task, unsigned long ino,
-	unsigned long index, __u8 state, __u8 replace)
-{
-	int found = 0;
-	struct rb_node **link, *parent = NULL;
-	struct item_rbnode *cur, *tnode;
-
-	/* Find where to insert it */
-	link = &task->itmtree.rb_node;
-	while (*link) {
-		parent = *link;
-		cur = rb_entry(parent, struct item_rbnode, node);
-
-		/* We order based on (inode, page index) */
-		if (cur->item.ino > ino) {
-			link = &(*link)->rb_left;
-		} else if (cur->item.ino < ino) {
-			link = &(*link)->rb_right;
-		} else {
-			/* Found inode, look for index */
-			if (cur->item.idx > index) {
-				link = &(*link)->rb_left;
-			} else if (cur->item.idx < index) {
-				link = &(*link)->rb_right;
-			} else {
-				found = 1;
-				break;
-			}
-		}
-	}
-
-	duet_dbg(KERN_DEBUG "duet: %s page node (ino%lu, idx%lu)\n",
-		found ? (replace ? "replacing" : "updating") : "inserting",
-		ino, index);
-
-	state &= task->evtmask;
-	if (!state)
-		return 0;
-
-	if (found && replace) {
-		cur->item.state = state;
-	} else if (found) {
-		cur->item.state |= state;
-
-		/* Negate previous events and remove if needed */
-		if (task->evtmask & DUET_PAGE_EXISTS) {
-			if ((cur->item.state & DUET_PAGE_ADDED) &&
-			    (cur->item.state & DUET_PAGE_REMOVED))
-				cur->item.state &= ~(DUET_PAGE_ADDED |
-						      DUET_PAGE_REMOVED);
-		}
-
-		if (task->evtmask & DUET_PAGE_MODIFIED) {
-			if ((cur->item.state & DUET_PAGE_DIRTY) &&
-			    (cur->item.state & DUET_PAGE_FLUSHED))
-				cur->item.state &= ~(DUET_PAGE_DIRTY |
-						      DUET_PAGE_FLUSHED);
-		}
-
-		if (!cur->item.state)
-			tnode_dispose(cur, parent, &task->itmtree);
-	} else if (!found) {
-		/* Create the node */
-		tnode = tnode_init(task, ino, index, state);
-		if (!tnode) {
-			printk(KERN_ERR "duet: tnode alloc failed\n");
-			return 1;
-		}
-
-		/* Insert node in tree */
-		rb_link_node(&tnode->node, parent, link);
-		rb_insert_color(&tnode->node, &task->itmtree);
-	}
+	mutex_unlock(&task->bittree_lock);
 
 	return 0;
 }

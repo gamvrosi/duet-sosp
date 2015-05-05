@@ -15,13 +15,13 @@ config DUET
 
 	  If unsure, say N.
 
-config DUET_TREE_STATS
-	bool "Duet tree stats support"
+config DUET_STATS
+	bool "Duet stats support"
 	depends on DUET
 
 	help
-	  This option enabled support for keeping statistics about
-	  memory consumption of trees (BitTree and NodeTree).
+	  This option enabled support for keeping statistics about the data
+	  structures used internally.
 
 	  If unsure, say N.
 

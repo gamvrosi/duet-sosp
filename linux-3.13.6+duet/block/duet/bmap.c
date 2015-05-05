@@ -14,6 +14,9 @@
  * License along with this program; if not, write to the
  * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
  * Boston, MA 021110-1307, USA.
+ *
+ * TODO: Get rid of all this code by replacing with internal LK bitmap
+ * implementation
  */
 #include "common.h"
 

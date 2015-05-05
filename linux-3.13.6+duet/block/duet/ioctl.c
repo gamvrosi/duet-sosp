@@ -39,11 +39,7 @@ int duet_bootstrap(void)
 
 	spin_lock_init(&duet_env.evtwq_lock);
 
-	/*
-	 * Events will be put on this work queue as they arrive. It needs to be
-	 * ordered, otherwise state model won't work.
-	 * XXX: Would WQ_HIGHPRI make sense in this case?
-	 */
+	/* Initialize ordered event work queue (XXX: use WQ_HIGHPRI?) */
 	duet_env.evtwq = alloc_ordered_workqueue("duet-evtwq", 0);
 	if (!duet_env.evtwq) {
 		printk(KERN_ERR "duet: failed to allocate event work queue\n");
@@ -51,6 +47,14 @@ int duet_bootstrap(void)
 		return 1;
 	}
 
+	/* Initialize global hash table */
+	if (hash_init()) {
+		printk(KERN_ERR "duet: failed to initialize hash table\n");
+		destroy_workqueue(duet_env.evtwq);
+		return 1;
+	}
+
+	/* Initialize task list */
 	INIT_LIST_HEAD(&duet_env.tasks);
 	mutex_init(&duet_env.task_list_mutex);
 	atomic_set(&duet_env.status, DUET_STATUS_ON);
@@ -100,13 +104,16 @@ int duet_shutdown(void)
 	}
 	mutex_unlock(&duet_env.task_list_mutex);
 
+	/* Destroy global hash table */
+	vfree((void *)duet_env.itm_hash_table);
+
 	INIT_LIST_HEAD(&duet_env.tasks);
 	mutex_destroy(&duet_env.task_list_mutex);
 	atomic_set(&duet_env.status, DUET_STATUS_OFF);
 	return 0;
 }
 
-/* Scan through the page cache, and populate the task's tree. */
+/* Scan through the page cache for a given inode */
 static int find_get_inode(struct super_block *sb, unsigned long c_ino,
 	struct inode **c_inode)
 {
@@ -182,7 +189,6 @@ static int duet_getpath(__u8 tid, unsigned long c_ino, char *cpath)
 		memcpy(cpath, p, len - (p - task->pathbuf) + 1);
 	}
 
-done_put:
 	iput(c_inode);
 done:
 	/* decref and wake up cleaner if needed */
@@ -332,11 +338,11 @@ reg_done:
 		break;
 
 	case DUET_PRINTBIT:
-		ca->ret = duet_print_bittree(ca->tid);
+		ca->ret = duet_print_bitmap(ca->tid);
 		break;
 
 	case DUET_PRINTITEM:
-		ca->ret = duet_print_itmtree(ca->tid);
+		ca->ret = duet_print_events(ca->tid);
 		break;
 
 	case DUET_GETPATH:

@@ -15,6 +15,9 @@
  * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
  * Boston, MA 021110-1307, USA.
  */
+/*
+ * TODO: Update duet_fetch to match SOSP submission format
+ */
 #include <linux/fs.h>
 #include <linux/mm.h>
 #include "common.h"
@@ -34,17 +37,14 @@
  */
 
 /*
- * Fetches up to itreq items from the ItemTree. The number of items fetched is
+ * Fetches up to itreq items from the ItemTable. The number of items fetched is
  * given by itret. Items are checked against the bitmap, and discarded if they
  * have been marked; this is possible because an insertion could have happened
  * between the last fetch and the last mark.
  */
 int duet_fetch(__u8 taskid, __u16 itreq, struct duet_item *items, __u16 *itret)
 {
-	struct rb_node *rbnode;
-	struct item_rbnode *tnode;
 	struct duet_task *task = duet_find_task(taskid);
-
 	if (!task) {
 		printk(KERN_ERR "duet_fetch: invalid taskid (%d)\n", taskid);
 		return 1;	
@@ -53,35 +53,17 @@ int duet_fetch(__u8 taskid, __u16 itreq, struct duet_item *items, __u16 *itret)
 	/* We'll either run out of items, or grab itreq items. */
 	*itret = 0;
 
-	spin_lock(&task->itm_lock);
 again:
-
-	/* Grab first item from the tree */
-	if (!RB_EMPTY_ROOT(&task->itmtree)) {
-		rbnode = rb_first(&task->itmtree);
-		tnode = rb_entry(rbnode, struct item_rbnode, node);
-		rb_erase(rbnode, &task->itmtree);
-	} else {
-		goto done;
-	}
-
-	/* Copy fields off to items array */
-	items[*itret] = tnode->item;
-	//items[*itret].ino = tnode->item->ino;
-	//items[*itret].idx = tnode->item->idx;
-	//items[*itret].state = tnode->item->state;
+	hash_fetch(task, &items[*itret]);
 
 	duet_dbg(KERN_INFO "duet_fetch: sending (ino%lu, idx%lu, %x)\n",
 		items[*itret].ino, items[*itret].idx, items[*itret].state);
 
 	(*itret)++;
-
-	tnode_dispose(tnode, NULL, NULL);
 	if (*itret < itreq)
 		goto again;
 
 done:
-	spin_unlock(&task->itm_lock);
 	/* decref and wake up cleaner if needed */
 	if (atomic_dec_and_test(&task->refcount))
 		wake_up(&task->cleaner_queue);
@@ -116,11 +98,9 @@ static void __handle_event(struct work_struct *work)
 				continue;
 		}
 
-		/* Update the ItemTree */
-		spin_lock(&cur->itm_lock);
-		if (itmtree_insert(cur, ework->ino, ework->idx, ework->evt, 0))
-			printk(KERN_ERR "duet: itmtree insert failed\n");
-		spin_unlock(&cur->itm_lock);
+		/* Update the hash table */
+		if (hash_add(cur, ework->ino, ework->idx, ework->evt, 0))
+			printk(KERN_ERR "duet: hash table add failed\n");
 	}
 	rcu_read_unlock();
 

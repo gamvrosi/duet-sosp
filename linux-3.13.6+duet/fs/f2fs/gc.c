@@ -92,14 +92,15 @@ static struct seg_entry* get_seg_entry_from_blkaddr(struct f2fs_sb_info *sbi,
 
 	se = NULL;
 	segno = GET_SEGNO(sbi, blkaddr);
-	if (segno == NULL_SEGNO)
+	if (segno == NULL_SEGNO) {
 		/* blkaddr == NEW_ADDR, ignore */
-	else if (segno >= TOTAL_SEGS(sbi))
+	} else if (segno >= TOTAL_SEGS(sbi)) {
 		f2fs_duet_debug(KERN_ERR "f2fs: duet-gc: "
 			"segno %u out of range of [0-%u)\n",
 			segno, TOTAL_SEGS(sbi));
-	else
+	} else {
 		se = get_seg_entry(sbi, segno);
+	}
 
 	return se;
 }
@@ -667,7 +668,7 @@ static unsigned int get_cb_cost(struct f2fs_sb_info *sbi, unsigned int segno)
 	//printk(KERN_DEBUG "f2fs-gc: examining segno %u - segs_per_sec %u, "
 	//		"valid = %u, inmem = %u\n",
 	//	segno, sbi->segs_per_sec, vblocks, inmem);
-	vblocks -= min(div_u64(inmem, sbi->segs_per_sec), vblocks); // >> 0;
+	vblocks -= min(div_u64(inmem, sbi->segs_per_sec), (unsigned long long)vblocks); // >> 0;
 #endif
 
 	mtime = div_u64(mtime, sbi->segs_per_sec);

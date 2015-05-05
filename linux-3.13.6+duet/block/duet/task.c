@@ -54,19 +54,14 @@ static int process_inode(struct duet_task *task, struct inode *inode)
 	/* Go through all pages of this inode */
 	rcu_read_lock();
 	radix_tree_for_each_slot(slot, &inode->i_mapping->page_tree, &iter, 0) {
-		struct page *page;
-
-		page = radix_tree_deref_slot(slot);
+		struct page *page = radix_tree_deref_slot(slot);
 		if (unlikely(!page))
 			continue;
 
-		spin_lock(&task->itm_lock);
 		state = DUET_PAGE_ADDED;
 		if (PageDirty(page))
 			state |= DUET_PAGE_DIRTY;
-		state &= task->evtmask;
-		itmtree_insert(task, inode->i_ino, page->index, state, 1);
-		spin_unlock(&task->itm_lock);
+		hash_add(task, inode->i_ino, page->index, state, 1);
 	}
 	rcu_read_unlock();
 
@@ -144,40 +139,8 @@ struct duet_task *duet_find_task(__u8 taskid)
 	return task;
 }
 
-/* TODO */
-static int itmtree_print(struct duet_task *task)
-{
-	printk(KERN_INFO "duet: ItemTree printing not implemented\n");
-	return 0;
-}
-
-static int bittree_print(struct duet_task *task)
-{
-	struct bmap_rbnode *bnode = NULL;
-	struct rb_node *node;
-	__u32 bits_on;
-
-	mutex_lock(&task->bittree_lock);
-	printk(KERN_INFO "duet: Printing BitTree for task #%d\n", task->id);
-	node = rb_first(&task->bittree);
-	while (node) {
-		bnode = rb_entry(node, struct bmap_rbnode, node);
-
-		/* Print node information */
-		printk(KERN_INFO "duet: Node key = %llu\n", bnode->idx);
-		bits_on = duet_bmap_count(bnode->bmap, task->bmapsize);
-		printk(KERN_INFO "duet:   Bits set: %u out of %u\n", bits_on,
-			task->bmapsize * 8);
-
-		node = rb_next(node);
-	}
-	mutex_unlock(&task->bittree_lock);
-
-	return 0;
-}
-
 /* Do a preorder print of the BitTree */
-int duet_print_bittree(__u8 taskid)
+int duet_print_bitmap(__u8 taskid)
 {
 	struct duet_task *task;
 
@@ -197,22 +160,16 @@ int duet_print_bittree(__u8 taskid)
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(duet_print_bittree);
+EXPORT_SYMBOL_GPL(duet_print_bitmap);
 
-/* Do a preorder print of the ItemTree */
-int duet_print_itmtree(__u8 taskid)
+/* Do a preorder print of the global hash table */
+int duet_print_events(__u8 taskid)
 {
-	struct duet_task *task;
-
-	task = duet_find_task(taskid);
+	struct duet_task *task = duet_find_task(taskid);
 	if (!task)
 		return -ENOENT;
 
-	if (itmtree_print(task)) {
-		printk(KERN_ERR "duet: failed to print ItemTree for task %d\n",
-			task->id);
-		return -1;
-	}
+	hash_print(task);
 
 	/* decref and wake up cleaner if needed */
 	if (atomic_dec_and_test(&task->refcount))
@@ -220,7 +177,7 @@ int duet_print_itmtree(__u8 taskid)
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(duet_print_itmtree);
+EXPORT_SYMBOL_GPL(duet_print_events);
 
 /* Checks the blocks in the range from idx to idx+num are done */
 int duet_check(__u8 taskid, __u64 idx, __u32 num)
@@ -334,7 +291,7 @@ static int duet_task_init(struct duet_task **task, const char *name,
 	if (!(*task))
 		return -ENOMEM;
 
-	(*task)->pathbuf = kmalloc(4096, GFP_NOFS);
+	(*task)->pathbuf = kzalloc(4096, GFP_NOFS);
 	if (!(*task)->pathbuf) {
 		printk(KERN_ERR "duet: failed to allocate pathbuf for task\n");
 		kfree(*task);
@@ -343,21 +300,27 @@ static int duet_task_init(struct duet_task **task, const char *name,
 
 	(*task)->id = 1;
 	memcpy((*task)->name, name, MAX_NAME);
-
 	atomic_set(&(*task)->refcount, 0);
-
-	spin_lock_init(&(*task)->itm_lock);
-	mutex_init(&(*task)->bittree_lock);
-
 	INIT_LIST_HEAD(&(*task)->task_list);
 	init_waitqueue_head(&(*task)->cleaner_queue);
-	(*task)->bittree = RB_ROOT;
-	(*task)->itmtree = RB_ROOT;
 
-	/* We no longer expose this at registration. Fixed to 32KB. */
+	/* Initialize bitmap tree. Use fixed 32KB bitmaps per node. */
+	mutex_init(&(*task)->bittree_lock);
+	(*task)->bittree = RB_ROOT;
 	(*task)->bmapsize = 32768;
 
-	/* Do some sanity checking on event mask */
+	/* Initialize hash table bitmap */
+	spin_lock_init(&(*task)->bbmap_lock);
+	(*task)->bucket_bmap = kzalloc(sizeof(unsigned long) *
+		BITS_TO_LONGS(1U << duet_env.itm_hash_shift), GFP_NOFS);
+	if (!(*task)->bucket_bmap) {
+		printk(KERN_ERR "duet: failed to allocate bucket bitmap\n");
+		kfree((*task)->pathbuf);
+		kfree(*task);
+		return -ENOMEM;
+	}
+
+	/* Do some sanity checking on event mask. */
 	if (evtmask & DUET_PAGE_EXISTS) {
 		if (evtmask & (DUET_PAGE_ADDED | DUET_PAGE_REMOVED)) {
 			printk(KERN_DEBUG "duet: failed to register EXIST events\n");
@@ -377,7 +340,6 @@ static int duet_task_init(struct duet_task **task, const char *name,
 	(*task)->evtmask = evtmask;
 	(*task)->f_sb = f_sb;
 	(*task)->p_dentry = p_dentry;
-
 	if (bitrange)
 		(*task)->bitrange = bitrange;
 	else
@@ -398,21 +360,18 @@ void duet_task_dispose(struct duet_task *task)
 {
 	struct rb_node *rbnode;
 	struct bmap_rbnode *bnode;
-	struct item_rbnode *tnode;
+	struct duet_item itm;
 
-	/* Dispose of the BitTree */
+	/* Dispose of the bitmap tree */
 	while (!RB_EMPTY_ROOT(&task->bittree)) {
 		rbnode = rb_first(&task->bittree);
 		bnode = rb_entry(rbnode, struct bmap_rbnode, node);
 		bnode_dispose(bnode, rbnode, &task->bittree, NULL);
 	}
 
-	/* Dispose of the ItemTree */
-	while (!RB_EMPTY_ROOT(&task->itmtree)) {
-		rbnode = rb_first(&task->itmtree);
-		tnode = rb_entry(rbnode, struct item_rbnode, node);
-		tnode_dispose(tnode, rbnode, &task->itmtree);
-	}
+	/* Dispose of hash table entries, bucket bitmap */
+	while (hash_fetch(task, &itm) == 1);
+	kfree(task->bucket_bmap);
 
 	if (task->p_dentry)
 		dput(task->p_dentry);
