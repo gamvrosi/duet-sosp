@@ -29,7 +29,7 @@ build-essential
 kernel-package
 libncurses5-dev
 
-For the tools:
+For the btrfs tools:
 
 uuid-dev
 libblkid-dev
@@ -38,6 +38,17 @@ liblzo2-dev
 libattr1-dev
 libacl1-dev
 e2fslibs-dev
+
+For the f2fs tools:
+
+autoconf
+libtool
+pkg-config
+
+For rsync:
+
+libpopt-dev
+yodl
 
 Setting up inter-VM linux kernel debugging (for VirtualBox 4.1+):
 ----------------------------------------------------------------
@@ -48,8 +59,10 @@ Note: To speed things up we'll compile on a server, outside the VMs
 2. Create two virtual machines, one of which (the debugger VM) will have a disk
    with the source code attached
 3. On both VMs create a serial port in VM settings (e.g. COM1 on ```/tmp/vmcom1```
-   on a Linux host, or ```\\.\pipe\vmcom1``` on a Windows host).
-   On the debugger, check the "Create pipe" box.
+   on a Linux host, or ```\\.\pipe\vmcom1``` on a Windows host). On the debugger,
+   check the "Create pipe" box. However, if on Windows 7 you may need to check the
+   "Create pipe" box in the debugee to avoid getting initial messages scrambled
+   (not sure why this happens).
 4. Set up two network interfaces per VM. The first is a 'Bridged Adapter' network
    for access to the outside world. The second is a 'Host-only Adapter' for NFS
    traffic (may need to edit ```/etc/network/interfaces``` and restart networking service).
@@ -67,11 +80,18 @@ Note: To speed things up we'll compile on a server, outside the VMs
    set remotebaud 115200
    target remote /dev/ttyS0
    ```
-10. On the debuggee, edit the ```/etc/default/grub``` line:
+10. On the debuggee, edit ```/etc/default/grub```:
 
    ```
+   GRUB_DEFAULT="Ubuntu, with Linux 3.13.6+duet"
+   GRUB_DISABLE_SUBMENU=y
    GRUB_LINUX_DEFAULT="kgdboc=ttyS0,115200 kgdbwait"
-   and run 'sudo update-grub'
+   ```
+
+   Then do:
+
+   ```
+   # sudo update-grub
    ```
 11. To get NFS server up and running on the debugger, do:
 
@@ -83,7 +103,7 @@ Note: To speed things up we'll compile on a server, outside the VMs
    Update /etc/fstab:
 
    ```
-   /home/users    /export/users   none    bind  0  0
+   /home/iris    /export/iris   none    bind  0  0
    ```
 
    Update /etc/exports:
@@ -91,6 +111,12 @@ Note: To speed things up we'll compile on a server, outside the VMs
    ```
    /export       192.168.56.0/24(rw,fsid=0,insecure,no_subtree_check,async)
    /export/iris  192.168.56.0/24(rw,nohide,insecure,no_subtree_check,async)
+   ```
+
+   Then run:
+
+   ```
+   # exportfs -a
    ```
 12. To get NFS client up and running on the debuggee, do:
 
@@ -101,7 +127,7 @@ Note: To speed things up we'll compile on a server, outside the VMs
    Update /etc/fstab:
 
    ```
-   192.168.56.101:/   /mnt   nfs    auto  0  0
+   192.168.56.101:/iris   /media/iris   nfs    auto  0  0
    ```
 13. Reboot debuggee. On debugger run ```sudo gdb -x gdbinit vmlinux``` and press
    ```c``` to allow debuggee to boot.
