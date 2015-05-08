@@ -312,7 +312,7 @@ static int duet_task_init(struct duet_task **task, const char *name,
 	/* Initialize hash table bitmap */
 	spin_lock_init(&(*task)->bbmap_lock);
 	(*task)->bucket_bmap = kzalloc(sizeof(unsigned long) *
-		BITS_TO_LONGS(1U << duet_env.itm_hash_shift), GFP_NOFS);
+							BITS_TO_LONGS(duet_env.itm_hash_size), GFP_NOFS);
 	if (!(*task)->bucket_bmap) {
 		printk(KERN_ERR "duet: failed to allocate bucket bitmap\n");
 		kfree((*task)->pathbuf);

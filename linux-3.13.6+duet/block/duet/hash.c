@@ -35,16 +35,25 @@ static unsigned long hash(unsigned long ino, unsigned long idx)
 
 int hash_init(void)
 {
-	duet_env.itm_hash_table = alloc_large_system_hash("Page event table",
-					sizeof(struct hlist_bl_head), 0,
-					ilog2(totalram_pages), 0,
-					&duet_env.itm_hash_shift,
-					&duet_env.itm_hash_mask, 0, 0);
+	/* Allocate power-of-2 number of buckets */
+	duet_env.itm_hash_shift = ilog2(totalram_pages);
+	duet_env.itm_hash_size = 1 << duet_env.itm_hash_shift;
+	duet_env.itm_hash_mask = duet_env.itm_hash_size - 1;
+
+	printk(KERN_DEBUG "duet: allocated global hash table (%lu buckets)\n",
+			duet_env.itm_hash_size);
+	duet_env.itm_hash_table = vmalloc(sizeof(struct hlist_bl_head) *
+										duet_env.itm_hash_size);
+//	duet_env.itm_hash_table = alloc_large_system_hash("Page event table",
+//					sizeof(struct hlist_bl_head), 0,
+//					ilog2(totalram_pages), 0,
+//					&duet_env.itm_hash_shift,
+//					&duet_env.itm_hash_mask, 0, 0);
 	if (!duet_env.itm_hash_table)
 		return 1;
 
-	memset(duet_env.itm_hash_table, 0,
-		sizeof(struct hlist_bl_head) << duet_env.itm_hash_shift);
+	memset(duet_env.itm_hash_table, 0, sizeof(struct hlist_bl_head) *
+										duet_env.itm_hash_size);
 	return 0;
 }
  
@@ -152,8 +161,8 @@ int hash_fetch(struct duet_task *task, struct duet_item *itm)
 	struct hlist_bl_node *n, *t;
 	struct item_hnode *itnode;
 
-	bnum = find_first_bit(task->bucket_bmap, 1U << duet_env.itm_hash_shift);
-	if (bnum == (1U << duet_env.itm_hash_shift))
+	bnum = find_first_bit(task->bucket_bmap, duet_env.itm_hash_size);
+	if (bnum == duet_env.itm_hash_size)
 		return found;
 	b = duet_env.itm_hash_table + bnum;
 
@@ -214,11 +223,11 @@ void hash_print(struct duet_task *task)
 	struct hlist_bl_node *n;
 	struct item_hnode *itnode;
 
-	count = (1U << duet_env.itm_hash_shift) / 100;
+	count = duet_env.itm_hash_size / 100;
 	tnodes = nodes = buckets = start = end = 0;
 	printk(KERN_INFO "duet: Printing hash table in 100 buckets"
 			" (%lu real buckets each)\n", count);
-	for (loop = 0; loop < (1U << duet_env.itm_hash_shift); loop++) {
+	for (loop = 0; loop < duet_env.itm_hash_size; loop++) {
 		if (loop - start >= count) {
 			printk(KERN_INFO "duet:   Buckets %lu - %lu: %llu nodes (task: %llu)\n",
 				start, end, nodes, tnodes);

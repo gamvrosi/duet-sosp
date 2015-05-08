@@ -54,7 +54,8 @@ int duet_fetch(__u8 taskid, __u16 itreq, struct duet_item *items, __u16 *itret)
 	*itret = 0;
 
 again:
-	hash_fetch(task, &items[*itret]);
+	if (!hash_fetch(task, &items[*itret]))
+		goto done;
 
 	duet_dbg(KERN_INFO "duet_fetch: sending (ino%lu, idx%lu, %x)\n",
 		items[*itret].ino, items[*itret].idx, items[*itret].state);
