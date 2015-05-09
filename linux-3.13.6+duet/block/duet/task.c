@@ -201,10 +201,10 @@ int duet_check(__u8 taskid, __u64 idx, __u32 num)
 	 * flags), and only the calls that are required to add/remove nodes to
 	 * the tree will be costly
 	 */
-	mutex_lock(&task->bittree_lock);
+	spin_lock(&task->bittree_lock);
 	ret = bittree_check(&task->bittree, task->bitrange, task->bmapsize,
 		idx, num, task);
-	mutex_unlock(&task->bittree_lock);
+	spin_unlock(&task->bittree_lock);
 
 	/* decref and wake up cleaner if needed */
 	if (atomic_dec_and_test(&task->refcount))
@@ -235,10 +235,10 @@ int duet_unmark(__u8 taskid, __u64 idx, __u32 num)
 	 * flags), and only the calls that are required to add/remove nodes to
 	 * the tree will be costly
 	 */
-	mutex_lock(&task->bittree_lock);
+	spin_lock(&task->bittree_lock);
 	ret = bittree_unmark(&task->bittree, task->bitrange, task->bmapsize,
 		idx, num, task);
-	mutex_unlock(&task->bittree_lock);
+	spin_unlock(&task->bittree_lock);
 
 	/* decref and wake up cleaner if needed */
 	if (atomic_dec_and_test(&task->refcount))
@@ -269,10 +269,10 @@ int duet_mark(__u8 taskid, __u64 idx, __u32 num)
 	 * flags), and only the calls that are required to add/remove nodes to
 	 * the tree will be costly
 	 */
-	mutex_lock(&task->bittree_lock);
+	spin_lock(&task->bittree_lock);
 	ret = bittree_mark(&task->bittree, task->bitrange, task->bmapsize,
 		idx, num, task);
-	mutex_unlock(&task->bittree_lock);
+	spin_unlock(&task->bittree_lock);
 
 	/* decref and wake up cleaner if needed */
 	if (atomic_dec_and_test(&task->refcount))
@@ -305,7 +305,7 @@ static int duet_task_init(struct duet_task **task, const char *name,
 	init_waitqueue_head(&(*task)->cleaner_queue);
 
 	/* Initialize bitmap tree. Use fixed 32KB bitmaps per node. */
-	mutex_init(&(*task)->bittree_lock);
+	spin_lock_init(&(*task)->bittree_lock);
 	(*task)->bittree = RB_ROOT;
 	(*task)->bmapsize = 32768;
 

@@ -43,17 +43,12 @@ int hash_init(void)
 	printk(KERN_DEBUG "duet: allocated global hash table (%lu buckets)\n",
 			duet_env.itm_hash_size);
 	duet_env.itm_hash_table = vmalloc(sizeof(struct hlist_bl_head) *
-										duet_env.itm_hash_size);
-//	duet_env.itm_hash_table = alloc_large_system_hash("Page event table",
-//					sizeof(struct hlist_bl_head), 0,
-//					ilog2(totalram_pages), 0,
-//					&duet_env.itm_hash_shift,
-//					&duet_env.itm_hash_mask, 0, 0);
+						duet_env.itm_hash_size);
 	if (!duet_env.itm_hash_table)
 		return 1;
 
 	memset(duet_env.itm_hash_table, 0, sizeof(struct hlist_bl_head) *
-										duet_env.itm_hash_size);
+						duet_env.itm_hash_size);
 	return 0;
 }
  
@@ -129,7 +124,7 @@ check_dispose:
 		if (!evtmask)
 			goto done;
 
-		itnode = kzalloc(sizeof(struct hlist_bl_node), GFP_ATOMIC);
+		itnode = kzalloc(sizeof(struct item_hnode), GFP_ATOMIC);
 		if (!itnode) {
 			printk(KERN_ERR "duet: failed to allocate hash node\n");
 			return 1;

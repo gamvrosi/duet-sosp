@@ -90,10 +90,10 @@ static void __handle_event(struct work_struct *work)
 
 		/* Use the inode bitmap to filter this event out, if needed */
 		if (cur->evtmask & DUET_USE_IMAP) {
-			mutex_lock(&cur->bittree_lock);
+			spin_lock(&cur->bittree_lock);
 			ret = bittree_check(&cur->bittree, cur->bitrange,
 					cur->bmapsize, ework->ino, 1, cur);
-			mutex_unlock(&cur->bittree_lock);
+			spin_unlock(&cur->bittree_lock);
 
 			if (ret == 1)
 				continue;
