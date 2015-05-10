@@ -17,8 +17,90 @@
  */
 #include "common.h"
 
-static struct bmap_rbnode *bnode_init(__u32 bmapsize, __u64 idx,
-	struct duet_task *task)
+/*
+ * Generic function to (un)mark a bitmap. We need information on the bitmap,
+ * and information on the byte range it represents, and the byte range that
+ * needs to be (un)marked.
+ * A return value of 0 implies success, while -1 implies failure.
+ */
+static int duet_bmap_set(unsigned long *bmap, __u64 first_byte, __u32 bitrange,
+	__u64 req_byte, __u32 req_len, __u8 set)
+{
+	__u64 start;
+	__u32 len;
+
+	/* TODO: Examine to check if it would mark a block which is only
+	 * partially included in the range */
+	start = (req_byte - first_byte);
+	do_div(start, bitrange);
+
+	len = req_len;
+	if (do_div(len, bitrange))
+		len++;
+
+	if (start + len >= (first_byte + (DUET_BITS_PER_NODE * bitrange)))
+		return -1;
+
+	if (set)
+		bitmap_set(bmap, (unsigned int)start, (int)len);
+	else
+		bitmap_clear(bmap, (unsigned int)start, (int)len);
+
+	return 0;
+}
+
+/* checks bits [start, start + num) for bmap, to ensure they match 'set' */
+static int duet_bmap_chk_bits(unsigned long *bmap, unsigned int start, int len,
+	__u8 set)
+{
+	unsigned long *p = bmap + BIT_WORD(start);
+	const unsigned int size = start + len;
+	int bits_to_chk = BITS_PER_LONG - (start % BITS_PER_LONG);
+	unsigned long mask_to_chk = BITMAP_FIRST_WORD_MASK(start);
+
+	while (len - bits_to_chk >= 0) {
+		if (set && !(((*p) & mask_to_chk) == mask_to_chk))
+			return 0;
+		else if (!set && !((~(*p) & mask_to_chk) == mask_to_chk))
+			return 0;
+		len -= bits_to_chk;
+		bits_to_chk = BITS_PER_LONG;
+		mask_to_chk = ~0UL;
+		p++;
+	}
+	if (len) {
+		mask_to_chk &= BITMAP_LAST_WORD_MASK(size);
+		if (set && !(((*p) & mask_to_chk) == mask_to_chk))
+			return 0;
+		else if (!set && !((~(*p) & mask_to_chk) == mask_to_chk))
+			return 0;
+	}
+
+	return 1;
+}
+
+/* Returns 1, if all bytes in [req_bytes, req_bytes+req_bytelen) are set/reset,
+ * 0 otherwise. If an error occurs, then -1 is returned. */
+static int duet_bmap_chk(unsigned long *bmap, __u64 first_byte, __u32 bitrange,
+	__u64 req_byte, __u32 req_len, __u8 set)
+{
+	__u64 start;
+	__u32 len;
+
+	start = (req_byte - first_byte);
+	do_div(start, bitrange);
+
+	len = req_len;
+	if (do_div(len, bitrange))
+		len++;
+
+	if (start + len >= (first_byte + (DUET_BITS_PER_NODE * bitrange)))
+		return -1;
+
+	return duet_bmap_chk_bits(bmap, (unsigned int)start, (int)len, set);
+}
+
+static struct bmap_rbnode *bnode_init(__u64 idx, struct duet_task *task)
 {
 	struct bmap_rbnode *bnode = NULL;
 
@@ -29,7 +111,7 @@ static struct bmap_rbnode *bnode_init(__u32 bmapsize, __u64 idx,
 			task->stat_bit_max = task->stat_bit_cur;
 			printk(KERN_INFO "duet: Task#%d (%s): %llu nodes in BitTree.\n"
 				"      That's %llu bytes.\n", task->id, task->name,
-				task->stat_bit_max,task->stat_bit_max * task->bmapsize);
+				task->stat_bit_max, task->stat_bit_max * DUET_BITS_PER_NODE / 8);
 		}
 	}
 #endif /* CONFIG_DUET_STATS */
@@ -38,7 +120,8 @@ static struct bmap_rbnode *bnode_init(__u32 bmapsize, __u64 idx,
 	if (!bnode)
 		return NULL;
 
-	bnode->bmap = kzalloc(bmapsize, GFP_NOWAIT);
+	bnode->bmap = kzalloc(sizeof(unsigned long) *
+			BITS_TO_LONGS(DUET_BITS_PER_NODE), GFP_NOWAIT);
 	if (!bnode->bmap) {
 		kfree(bnode);
 		return NULL;
@@ -75,12 +158,12 @@ void bnode_dispose(struct bmap_rbnode *bnode, struct rb_node *rbnode,
  * - a return value of 0 means all LBNs were marked properly
  * - a return value of -1 denotes the occurrence of an error
  */
-static int bittree_chkupd(struct rb_root *bittree, __u32 range, __u32 bmapsize,
-	__u64 lbn, __u32 len, __u8 set, __u8 chk, struct duet_task *task)
+static int bittree_chkupd(struct rb_root *bittree, __u32 range, __u64 lbn,
+	__u32 len, __u8 set, __u8 chk, struct duet_task *task)
 {
 	int ret, found;
 	__u64 cur_lbn, node_lbn, lbn_gran, cur_len, rlbn, div_rem;
-	__u32 i, rem_len;
+	__u32 rem_len;
 	struct rb_node **link, *parent;
 	struct bmap_rbnode *bnode = NULL;
 	__u8 id = 0;
@@ -96,7 +179,7 @@ static int bittree_chkupd(struct rb_root *bittree, __u32 range, __u32 bmapsize,
 
 	cur_lbn = rlbn;
 	rem_len = len;
-	lbn_gran = range * bmapsize * 8;
+	lbn_gran = range * DUET_BITS_PER_NODE;
 	div64_u64_rem(rlbn, lbn_gran, &div_rem);
 	node_lbn = rlbn - div_rem;
 
@@ -150,7 +233,7 @@ static int bittree_chkupd(struct rb_root *bittree, __u32 range, __u32 bmapsize,
 		if (set) {
 			if (!found && !chk) {
 				/* Insert the new node */
-				bnode = bnode_init(bmapsize, node_lbn, task);
+				bnode = bnode_init(node_lbn, task);
 				if (!bnode) {
 					ret = -1;
 					goto done;
@@ -165,15 +248,15 @@ static int bittree_chkupd(struct rb_root *bittree, __u32 range, __u32 bmapsize,
 			}
 
 			/* Set the bits */
-			if (!chk && duet_bmap_set(bnode->bmap, bmapsize,
-			    bnode->idx, range, cur_lbn, cur_len, 1)) {
+			if (!chk && duet_bmap_set(bnode->bmap, bnode->idx,
+				range, cur_lbn, cur_len, 1)) {
 				/* We got -1, something went wrong */
 				ret = -1;
 				goto done;
 			/* Check the bits */
 			} else if (chk) {
-				ret = duet_bmap_chk(bnode->bmap, bmapsize,
-					bnode->idx, range, cur_lbn, cur_len, 1);
+				ret = duet_bmap_chk(bnode->bmap, bnode->idx,
+						range, cur_lbn, cur_len, 1);
 				/* Check if we failed, or found a bit set/unset
 				 * when it shouldn't be */
 				if (ret != 1)
@@ -182,35 +265,24 @@ static int bittree_chkupd(struct rb_root *bittree, __u32 range, __u32 bmapsize,
 
 		} else if (found) {
 			/* Clear the bits */
-			if (!chk && duet_bmap_set(bnode->bmap, bmapsize,
-			    bnode->idx, range, cur_lbn, cur_len, 0)) {
+			if (!chk && duet_bmap_set(bnode->bmap, bnode->idx,
+				range, cur_lbn, cur_len, 0)) {
 				/* We got -1, something went wrong */
 				ret = -1;
 				goto done;
 			/* Check the bits */
 			} else if (chk) {
-				ret = duet_bmap_chk(bnode->bmap, bmapsize,
-					bnode->idx, range, cur_lbn, cur_len, 0);
+				ret = duet_bmap_chk(bnode->bmap, bnode->idx,
+						range, cur_lbn, cur_len, 0);
 				/* Check if we failed, or found a bit set/unset
 				 * when it shouldn't be */
 				if (ret != 1)
 					goto done;
 			}
 
-			if (!chk) {
-				/* Dispose of the node? */
-				ret = 0;
-				for (i=0; i<bmapsize; i++) {
-					if (bnode->bmap[i]) {
-						ret = 1;
-						break;
-					}
-				}
-
-				if (!ret)
-					bnode_dispose(bnode, parent, bittree,
-							task);
-			}
+			/* Dispose of the node if empty */
+			if (!chk && bitmap_empty(bnode->bmap, DUET_BITS_PER_NODE))
+				bnode_dispose(bnode, parent, bittree, task);
 		}
 
 		rem_len -= cur_len;
@@ -233,29 +305,29 @@ done:
 	return ret;
 }
 
-inline int bittree_check(struct rb_root *bittree, __u32 range, __u32 bmapsize,
-	__u64 idx, __u32 num, struct duet_task *task)
+inline int bittree_check(struct rb_root *bittree, __u32 range, __u64 idx,
+	__u32 num, struct duet_task *task)
 {
-	return bittree_chkupd(bittree, range, bmapsize, idx, num, 1, 1, task);
+	return bittree_chkupd(bittree, range, idx, num, 1, 1, task);
 }
 
-inline int bittree_mark(struct rb_root *bittree, __u32 range, __u32 bmapsize,
-	__u64 idx, __u32 num, struct duet_task *task)
+inline int bittree_mark(struct rb_root *bittree, __u32 range, __u64 idx,
+	__u32 num, struct duet_task *task)
 {
-	return bittree_chkupd(bittree, range, bmapsize, idx, num, 1, 0, task);
+	return bittree_chkupd(bittree, range, idx, num, 1, 0, task);
 }
 
-inline int bittree_unmark(struct rb_root *bittree, __u32 range, __u32 bmapsize,
-	__u64 idx, __u32 num, struct duet_task *task)
+inline int bittree_unmark(struct rb_root *bittree, __u32 range, __u64 idx,
+	__u32 num, struct duet_task *task)
 {
-	return bittree_chkupd(bittree, range, bmapsize, idx, num, 0, 0, task);
+	return bittree_chkupd(bittree, range, idx, num, 0, 0, task);
 }
 
 int bittree_print(struct duet_task *task)
 {
 	struct bmap_rbnode *bnode = NULL;
 	struct rb_node *node;
-	__u32 bits_on;
+	size_t bits_on;
 
 	mutex_lock(&task->bittree_lock);
 	printk(KERN_INFO "duet: Printing BitTree for task #%d\n", task->id);
@@ -265,9 +337,9 @@ int bittree_print(struct duet_task *task)
 
 		/* Print node information */
 		printk(KERN_INFO "duet: Node key = %llu\n", bnode->idx);
-		bits_on = duet_bmap_count(bnode->bmap, task->bmapsize);
-		printk(KERN_INFO "duet:   Bits set: %u out of %u\n", bits_on,
-			task->bmapsize * 8);
+		bits_on = bitmap_weight(bnode->bmap, DUET_BITS_PER_NODE);
+		printk(KERN_INFO "duet:   Bits set: %zu out of %d\n", bits_on,
+			DUET_BITS_PER_NODE);
 
 		node = rb_next(node);
 	}

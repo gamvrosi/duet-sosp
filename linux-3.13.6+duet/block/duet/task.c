@@ -64,16 +64,14 @@ again:
 				continue;
 
 			/* If we haven't seen this inode before, process it. */
-			if (bittree_check(&inodetree, 1, 32768, inode->i_ino, 1,
-			    NULL) != 1) {
+			if (bittree_check(&inodetree, 1, inode->i_ino, 1, NULL) != 1) {
 				spin_lock(&inode->i_lock);
 				__iget(inode);
 				spin_unlock(&inode->i_lock);
 
 				spin_unlock(duet_inode_hash_lock);
 				process_inode(task, inode);
-				bittree_mark(&inodetree, 1, 32768, inode->i_ino,
-						1, NULL);
+				bittree_mark(&inodetree, 1, inode->i_ino, 1, NULL);
 				iput(inode);
 				goto again;
 			}
@@ -175,8 +173,7 @@ int duet_check(__u8 taskid, __u64 idx, __u32 num)
 	 * the tree will be costly
 	 */
 	mutex_lock(&task->bittree_lock);
-	ret = bittree_check(&task->bittree, task->bitrange, task->bmapsize,
-		idx, num, task);
+	ret = bittree_check(&task->bittree, task->bitrange, idx, num, task);
 	mutex_unlock(&task->bittree_lock);
 
 	/* decref and wake up cleaner if needed */
@@ -209,8 +206,7 @@ int duet_unmark(__u8 taskid, __u64 idx, __u32 num)
 	 * the tree will be costly
 	 */
 	mutex_lock(&task->bittree_lock);
-	ret = bittree_unmark(&task->bittree, task->bitrange, task->bmapsize,
-		idx, num, task);
+	ret = bittree_unmark(&task->bittree, task->bitrange, idx, num, task);
 	mutex_unlock(&task->bittree_lock);
 
 	/* decref and wake up cleaner if needed */
@@ -243,8 +239,7 @@ int duet_mark(__u8 taskid, __u64 idx, __u32 num)
 	 * the tree will be costly
 	 */
 	mutex_lock(&task->bittree_lock);
-	ret = bittree_mark(&task->bittree, task->bitrange, task->bmapsize,
-		idx, num, task);
+	ret = bittree_mark(&task->bittree, task->bitrange, idx, num, task);
 	mutex_unlock(&task->bittree_lock);
 
 	/* decref and wake up cleaner if needed */
@@ -280,7 +275,6 @@ static int duet_task_init(struct duet_task **task, const char *name,
 	/* Initialize bitmap tree. Use fixed 32KB bitmaps per node. */
 	mutex_init(&(*task)->bittree_lock);
 	(*task)->bittree = RB_ROOT;
-	(*task)->bmapsize = 32768;
 
 	/* Initialize hash table bitmap */
 	spin_lock_init(&(*task)->bbmap_lock);

@@ -24,6 +24,9 @@
 #include <linux/hash.h>
 #include "common.h"
 
+#define DUET_NEGATE_EXISTS	(DUET_PAGE_ADDED | DUET_PAGE_REMOVED)
+#define DUET_NEGATE_MODIFIED	(DUET_PAGE_DIRTY | DUET_PAGE_FLUSHED)
+
 static unsigned long hash(unsigned long ino, unsigned long idx)
 {
 	unsigned long tmp;
@@ -56,6 +59,7 @@ int hash_init(void)
 int hash_add(struct duet_task *task, unsigned long ino, unsigned long idx,
 	__u8 evtmask, short in_scan)
 {
+	__u8 curmask = 0;
 	short found = 0;
 	unsigned long bnum;
 	struct hlist_bl_head *b;
@@ -88,37 +92,33 @@ int hash_add(struct duet_task *task, unsigned long ino, unsigned long idx,
 		ino, idx);
 
 	if (found) {
-		/* Avoid up'ing refcount if we're just updating the mask */
-		if (!(itnode->state[task->id] & DUET_MASK_VALID))
-			itnode->refcount++;
+		curmask = itnode->state[task->id];
 
-		if (in_scan || !(itnode->state[task->id] & DUET_MASK_VALID)) {
-			itnode->state[task->id] = evtmask | DUET_MASK_VALID;
+		/* Avoid up'ing refcount if we're just updating the mask */
+		if (!(curmask & DUET_MASK_VALID) || in_scan) {
+			if (!in_scan)
+				itnode->refcount++;
+			curmask = evtmask | DUET_MASK_VALID;
 			goto check_dispose;
 		}
 
-		itnode->state[task->id] |= evtmask | DUET_MASK_VALID;
+		curmask |= evtmask | DUET_MASK_VALID;
 
 		/* Negate previous events and remove if needed */
-		if (task->evtmask & DUET_PAGE_EXISTS) {
-			if ((itnode->state[task->id] & DUET_PAGE_ADDED) &&
-			    (itnode->state[task->id] & DUET_PAGE_REMOVED))
-				itnode->state[task->id] &= ~(DUET_PAGE_ADDED |
-							DUET_PAGE_REMOVED);
-		}
+		if ((task->evtmask & DUET_PAGE_EXISTS) &&
+		   ((curmask & DUET_NEGATE_EXISTS) == DUET_NEGATE_EXISTS))
+			curmask &= ~DUET_NEGATE_EXISTS;
 
-		if (task->evtmask & DUET_PAGE_MODIFIED) {
-			if ((itnode->state[task->id] & DUET_PAGE_DIRTY) &&
-			    (itnode->state[task->id] & DUET_PAGE_FLUSHED))
-				itnode->state[task->id] &= ~(DUET_PAGE_DIRTY |
-							DUET_PAGE_FLUSHED);
-		}
+		if ((task->evtmask & DUET_PAGE_MODIFIED) &&
+		   ((curmask & DUET_NEGATE_MODIFIED) == DUET_NEGATE_MODIFIED))
+			curmask &= ~DUET_NEGATE_MODIFIED;
 
 check_dispose:
-		if ((itnode->state[task->id] == DUET_MASK_VALID) &&
-		    (itnode->refcount == 1)) {
+		if ((curmask == DUET_MASK_VALID) && (itnode->refcount == 1)) {
 			hlist_bl_del(&itnode->node);
 			kfree(itnode);
+		} else {
+			itnode->state[task->id] = curmask;
 		}
 	} else if (!found) {
 		if (!evtmask)

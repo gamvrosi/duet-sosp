@@ -14,8 +14,7 @@
  * License along with this program; if not, write to the
  * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
  * Boston, MA 021110-1307, USA.
- */
-/*
+ *
  * TODO: Update duet_fetch to match SOSP submission format
  */
 #include <linux/fs.h>
@@ -92,7 +91,7 @@ static void __handle_event(struct work_struct *work)
 		if (cur->evtmask & DUET_USE_IMAP) {
 			mutex_lock(&cur->bittree_lock);
 			ret = bittree_check(&cur->bittree, cur->bitrange,
-					cur->bmapsize, ework->ino, 1, cur);
+					ework->ino, 1, cur);
 			mutex_unlock(&cur->bittree_lock);
 
 			if (ret == 1)
