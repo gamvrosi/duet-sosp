@@ -80,8 +80,8 @@ static void __handle_event(struct work_struct *work)
 	int ret;
 
 	/* Look for tasks interested in this event type and invoke callbacks */
-	rcu_read_lock();
-	list_for_each_entry_rcu(cur, &duet_env.tasks, task_list) {
+	mutex_lock(&duet_env.task_list_mutex);
+	list_for_each_entry(cur, &duet_env.tasks, task_list) {
 		/* Verify that the event refers to the fs we're interested in */
 		if (cur->f_sb && cur->f_sb != ework->isb) {
 			duet_dbg(KERN_INFO "duet: event sb not matching\n");
@@ -90,10 +90,10 @@ static void __handle_event(struct work_struct *work)
 
 		/* Use the inode bitmap to filter this event out, if needed */
 		if (cur->evtmask & DUET_USE_IMAP) {
-			spin_lock(&cur->bittree_lock);
+			mutex_lock(&cur->bittree_lock);
 			ret = bittree_check(&cur->bittree, cur->bitrange,
 					cur->bmapsize, ework->ino, 1, cur);
-			spin_unlock(&cur->bittree_lock);
+			mutex_unlock(&cur->bittree_lock);
 
 			if (ret == 1)
 				continue;
@@ -103,7 +103,7 @@ static void __handle_event(struct work_struct *work)
 		if (hash_add(cur, ework->ino, ework->idx, ework->evt, 0))
 			printk(KERN_ERR "duet: hash table add failed\n");
 	}
-	rcu_read_unlock();
+	mutex_unlock(&duet_env.task_list_mutex);
 
 	kfree(ework);
 }

@@ -89,18 +89,20 @@ int duet_shutdown(void)
 	/* Remove all tasks */
 	mutex_lock(&duet_env.task_list_mutex);
 	while (!list_empty(&duet_env.tasks)) {
-		task = list_entry_rcu(duet_env.tasks.next, struct duet_task,
-			task_list);
-		list_del_rcu(&task->task_list);
-		mutex_unlock(&duet_env.task_list_mutex);
+		task = list_entry(duet_env.tasks.next, struct duet_task,
+				task_list);
+		list_del(&task->task_list);
 
+again:
 		/* Make sure everyone's let go before we free it */
-		synchronize_rcu();
+		mutex_unlock(&duet_env.task_list_mutex);
 		wait_event(task->cleaner_queue,
 			atomic_read(&task->refcount) == 0);
-		duet_task_dispose(task);
-
 		mutex_lock(&duet_env.task_list_mutex);
+		if (atomic_read(&task->refcount) != 0)
+			goto again;
+
+		duet_task_dispose(task);
 	}
 	mutex_unlock(&duet_env.task_list_mutex);
 
@@ -382,8 +384,8 @@ static int duet_ioctl_tlist(void __user *arg)
 		return PTR_ERR(la);
 
 	/* We will only send the first MAX_TASKS, and that's ok */
-	rcu_read_lock();
-	list_for_each_entry_rcu(cur, &duet_env.tasks, task_list) {
+	mutex_lock(&duet_env.task_list_mutex);
+	list_for_each_entry(cur, &duet_env.tasks, task_list) {
 		la->tid[i] = cur->id;
 		memcpy(la->tnames[i], cur->name, MAX_NAME);
 		la->bitrange[i] = cur->bitrange;
@@ -392,7 +394,7 @@ static int duet_ioctl_tlist(void __user *arg)
 		if (i == MAX_TASKS)
 			break;
         }
-        rcu_read_unlock();
+	mutex_unlock(&duet_env.task_list_mutex);
 
 	if (copy_to_user(arg, la, sizeof(*la))) {
 		printk(KERN_ERR "duet: failed to copy out tasklist\n");

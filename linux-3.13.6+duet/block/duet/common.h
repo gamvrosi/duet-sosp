@@ -72,7 +72,7 @@ struct duet_task {
 	/* BitTree -- progress bitmap tree */
 	__u32			bitrange;	/* range per bmap bit */
 	__u32			bmapsize;	/* bytes per bmap */
-	spinlock_t		bittree_lock;
+	struct mutex		bittree_lock;
 	struct rb_root		bittree;
 #ifdef CONFIG_DUET_STATS
 	__u64			stat_bit_cur;	/* Cur # of BitTree nodes */
@@ -92,9 +92,10 @@ struct evtwork {
 struct duet_info {
 	atomic_t		status;
 
-	/* 
-	 * List or registered tasks, protected by a mutex so we can safely walk
-	 * it to find handlers without worrying about add/remove operations
+	/*
+	 * Access to the task list is synchronized via a mutex. However, any
+	 * operations that are on-going for a task (e.g. fetch) will increase
+	 * its refcount. This refcount is consulted when disposing of the task.
 	 */
 	struct mutex		task_list_mutex;
 	struct list_head	tasks;

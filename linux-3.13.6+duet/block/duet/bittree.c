@@ -257,7 +257,7 @@ int bittree_print(struct duet_task *task)
 	struct rb_node *node;
 	__u32 bits_on;
 
-	spin_lock(&task->bittree_lock);
+	mutex_lock(&task->bittree_lock);
 	printk(KERN_INFO "duet: Printing BitTree for task #%d\n", task->id);
 	node = rb_first(&task->bittree);
 	while (node) {
@@ -271,7 +271,7 @@ int bittree_print(struct duet_task *task)
 
 		node = rb_next(node);
 	}
-	spin_unlock(&task->bittree_lock);
+	mutex_unlock(&task->bittree_lock);
 
 	return 0;
 }
