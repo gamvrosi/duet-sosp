@@ -416,6 +416,7 @@ again:
 				goto again;
 
 			duet_task_dispose(cur);
+			mutex_unlock(&duet_env.task_list_mutex);
 			return 0;
 		}
 	}

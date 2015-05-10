@@ -134,7 +134,7 @@ int duet_bmap_chk(__u8 *bmap, __u32 bmap_bytelen, __u64 first_byte,
 /* hash.c */
 int hash_init(void);
 int hash_add(struct duet_task *task, unsigned long ino, unsigned long idx,
-	__u8 evtmask, short replace);
+	__u8 evtmask, short in_scan);
 int hash_fetch(struct duet_task *task, struct duet_item *itm);
 void hash_print(struct duet_task *task);
 

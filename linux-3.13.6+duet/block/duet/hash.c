@@ -51,10 +51,10 @@ int hash_init(void)
 						duet_env.itm_hash_size);
 	return 0;
 }
- 
+
 /* Add one event into the hash table */
 int hash_add(struct duet_task *task, unsigned long ino, unsigned long idx,
-	__u8 evtmask, short replace)
+	__u8 evtmask, short in_scan)
 {
 	short found = 0;
 	unsigned long bnum;
@@ -84,7 +84,7 @@ int hash_add(struct duet_task *task, unsigned long ino, unsigned long idx,
 	duet_env.itm_stat_num++;
 #endif /* CONFIG_DUET_STATS */
 	duet_dbg(KERN_DEBUG "duet: %s hash node (ino%lu, idx%lu)\n",
-		found ? (replace ? "replacing" : "updating") : "inserting",
+		found ? (in_scan ? "replacing" : "updating") : "inserting",
 		ino, idx);
 
 	if (found) {
@@ -92,7 +92,7 @@ int hash_add(struct duet_task *task, unsigned long ino, unsigned long idx,
 		if (!(itnode->state[task->id] & DUET_MASK_VALID))
 			itnode->refcount++;
 
-		if (replace || !(itnode->state[task->id] & DUET_MASK_VALID)) {
+		if (in_scan || !(itnode->state[task->id] & DUET_MASK_VALID)) {
 			itnode->state[task->id] = evtmask | DUET_MASK_VALID;
 			goto check_dispose;
 		}
@@ -124,7 +124,7 @@ check_dispose:
 		if (!evtmask)
 			goto done;
 
-		itnode = kzalloc(sizeof(struct item_hnode), GFP_KERNEL);
+		itnode = kzalloc(sizeof(struct item_hnode), GFP_NOWAIT);
 		if (!itnode) {
 			printk(KERN_ERR "duet: failed to allocate hash node\n");
 			return 1;
