@@ -72,7 +72,7 @@ static struct itree_node *itnode_init(unsigned long ino, __u8 inmem)
 {
 	struct itree_node *itnode = NULL;
 
-	itnode = kzalloc(sizeof(*itnode), in_interrupt() ? GFP_ATOMIC : GFP_KERNEL);
+	itnode = kmalloc(sizeof(*itnode), GFP_KERNEL);
 	if (!itnode)
 		return NULL;
 

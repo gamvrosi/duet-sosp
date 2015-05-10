@@ -34,11 +34,11 @@ static struct bmap_rbnode *bnode_init(__u32 bmapsize, __u64 idx,
 	}
 #endif /* CONFIG_DUET_STATS */
 	
-	bnode = kzalloc(sizeof(*bnode), in_interrupt() ? GFP_ATOMIC : GFP_KERNEL);
+	bnode = kmalloc(sizeof(*bnode), GFP_NOWAIT);
 	if (!bnode)
 		return NULL;
 
-	bnode->bmap = kzalloc(bmapsize, in_interrupt() ? GFP_ATOMIC : GFP_KERNEL);
+	bnode->bmap = kzalloc(bmapsize, GFP_NOWAIT);
 	if (!bnode->bmap) {
 		kfree(bnode);
 		return NULL;

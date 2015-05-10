@@ -287,11 +287,11 @@ static int duet_task_init(struct duet_task **task, const char *name,
 	__u8 evtmask, __u32 bitrange, struct super_block *f_sb,
 	struct dentry *p_dentry)
 {
-	*task = kzalloc(sizeof(**task), in_interrupt() ? GFP_ATOMIC : GFP_KERNEL);
+	*task = kzalloc(sizeof(**task), GFP_KERNEL);
 	if (!(*task))
 		return -ENOMEM;
 
-	(*task)->pathbuf = kzalloc(4096, in_interrupt() ? GFP_ATOMIC : GFP_KERNEL);
+	(*task)->pathbuf = kzalloc(4096, GFP_KERNEL);
 	if (!(*task)->pathbuf) {
 		printk(KERN_ERR "duet: failed to allocate pathbuf for task\n");
 		kfree(*task);
@@ -312,8 +312,7 @@ static int duet_task_init(struct duet_task **task, const char *name,
 	/* Initialize hash table bitmap */
 	spin_lock_init(&(*task)->bbmap_lock);
 	(*task)->bucket_bmap = kzalloc(sizeof(unsigned long) *
-							BITS_TO_LONGS(duet_env.itm_hash_size),
-							in_interrupt() ? GFP_ATOMIC : GFP_KERNEL);
+		BITS_TO_LONGS(duet_env.itm_hash_size), GFP_KERNEL);
 	if (!(*task)->bucket_bmap) {
 		printk(KERN_ERR "duet: failed to allocate bucket bitmap\n");
 		kfree((*task)->pathbuf);

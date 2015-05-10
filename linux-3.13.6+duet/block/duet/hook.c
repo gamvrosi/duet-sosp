@@ -136,8 +136,7 @@ void duet_hook(__u8 evtcode, void *data)
 	}
 
 	/* We're good. Now enqueue a work item. */
-	ework = (struct evtwork *)kzalloc(sizeof(struct evtwork),
-								in_interrupt() ? GFP_ATOMIC : GFP_KERNEL);
+	ework = (struct evtwork *)kmalloc(sizeof(struct evtwork), GFP_NOWAIT);
 	if (!ework) {
 		printk(KERN_ERR "duet: failed to allocate work item\n");
 		return;
