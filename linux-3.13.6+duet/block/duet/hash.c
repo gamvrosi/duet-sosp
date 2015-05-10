@@ -124,7 +124,8 @@ check_dispose:
 		if (!evtmask)
 			goto done;
 
-		itnode = kzalloc(sizeof(struct item_hnode), GFP_ATOMIC);
+		itnode = kzalloc(sizeof(struct item_hnode),
+						in_interrupt() ? GFP_ATOMIC : GFP_KERNEL);
 		if (!itnode) {
 			printk(KERN_ERR "duet: failed to allocate hash node\n");
 			return 1;
