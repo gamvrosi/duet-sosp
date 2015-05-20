@@ -53,24 +53,29 @@ static int duet_bmap_set(unsigned long *bmap, __u64 bstart, __u32 bgran,
 static int duet_bmap_chk(unsigned long *bmap, __u64 bstart, __u32 bgran,
 	__u64 start, __u32 len, __u8 do_set)
 {
-	__u64 bofft = start - bstart;
-	__u32 blen = len;
-	int bits_to_chk;
+	__u64 bofft64 = start - bstart;
+	__u32 blen32 = len;
+	int bits_to_chk, blen;
 	unsigned long *p;
 	unsigned long mask_to_chk;
 	unsigned int size;
+	unsigned int bofft;
 
 	/* Convert range to bitmap granularity */
-	do_div(bofft, bgran);
-	if (do_div(blen, bgran))
-		blen++;
+	do_div(bofft64, bgran);
+	if (do_div(blen32, bgran))
+		blen32++;
 
-	if (bofft + blen >= (bstart + (DUET_BITS_PER_NODE * bgran)))
+	if (bofft64 + blen32 >= (bstart + (DUET_BITS_PER_NODE * bgran)))
 		return -1;
 
+	/* Now it is safe to cast these variables */
+	bofft = (unsigned int)bofft64;
+	blen = (int)blen32;
+
 	/* Check the bits */
-	p = bmap + BIT_WORD((unsigned int)bofft);
-	size = (unsigned int)bofft + blen;
+	p = bmap + BIT_WORD(bofft);
+	size = bofft + blen;
 	bits_to_chk = BITS_PER_LONG - (bofft % BITS_PER_LONG);
 	mask_to_chk = BITMAP_FIRST_WORD_MASK(bofft);
 
@@ -86,7 +91,7 @@ static int duet_bmap_chk(unsigned long *bmap, __u64 bstart, __u32 bgran,
 		p++;
 	}
 
-	if (len) {
+	if (blen) {
 		mask_to_chk &= BITMAP_LAST_WORD_MASK(size);
 		if (do_set && !(((*p) & mask_to_chk) == mask_to_chk))
 			return 0;
