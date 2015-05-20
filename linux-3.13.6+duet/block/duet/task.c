@@ -15,8 +15,17 @@
  * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
  * Boston, MA 021110-1307, USA.
  */
+
 #include <linux/pagemap.h>
 #include "common.h"
+
+/*
+ * To synchronize access to the task list and structures without compromising
+ * scalability, a two-level approach is used. At the task list level, which is
+ * rarely updated, RCU is used. For the task structures, we use traditional
+ * reference counting. The two techniques are interweaved to achieve overall
+ * consistency.
+ */
 
 static int process_inode(struct duet_task *task, struct inode *inode)
 {
@@ -97,15 +106,15 @@ struct duet_task *duet_find_task(__u8 taskid)
 {
 	struct duet_task *cur, *task = NULL;
 
-	mutex_lock(&duet_env.task_list_mutex);
-	list_for_each_entry(cur, &duet_env.tasks, task_list) {
+	rcu_read_lock();
+	list_for_each_entry_rcu(cur, &duet_env.tasks, task_list) {
 		if (cur->id == taskid) {
 			task = cur;
 			atomic_inc(&task->refcount);
 			break;
 		}
 	}
-	mutex_unlock(&duet_env.task_list_mutex);
+	rcu_read_unlock();
 
 	return task;
 }
@@ -172,9 +181,9 @@ int duet_check(__u8 taskid, __u64 idx, __u32 num)
 	 * flags), and only the calls that are required to add/remove nodes to
 	 * the tree will be costly
 	 */
-	mutex_lock(&task->bittree_lock);
+	spin_lock(&task->bittree_lock);
 	ret = bittree_check(&task->bittree, task->bitrange, idx, num, task);
-	mutex_unlock(&task->bittree_lock);
+	spin_unlock(&task->bittree_lock);
 
 	/* decref and wake up cleaner if needed */
 	if (atomic_dec_and_test(&task->refcount))
@@ -205,9 +214,9 @@ int duet_unmark(__u8 taskid, __u64 idx, __u32 num)
 	 * flags), and only the calls that are required to add/remove nodes to
 	 * the tree will be costly
 	 */
-	mutex_lock(&task->bittree_lock);
+	spin_lock(&task->bittree_lock);
 	ret = bittree_unmark(&task->bittree, task->bitrange, idx, num, task);
-	mutex_unlock(&task->bittree_lock);
+	spin_unlock(&task->bittree_lock);
 
 	/* decref and wake up cleaner if needed */
 	if (atomic_dec_and_test(&task->refcount))
@@ -238,9 +247,9 @@ int duet_mark(__u8 taskid, __u64 idx, __u32 num)
 	 * flags), and only the calls that are required to add/remove nodes to
 	 * the tree will be costly
 	 */
-	mutex_lock(&task->bittree_lock);
+	spin_lock(&task->bittree_lock);
 	ret = bittree_mark(&task->bittree, task->bitrange, idx, num, task);
-	mutex_unlock(&task->bittree_lock);
+	spin_unlock(&task->bittree_lock);
 
 	/* decref and wake up cleaner if needed */
 	if (atomic_dec_and_test(&task->refcount))
@@ -273,7 +282,7 @@ static int duet_task_init(struct duet_task **task, const char *name,
 	init_waitqueue_head(&(*task)->cleaner_queue);
 
 	/* Initialize bitmap tree. Use fixed 32KB bitmaps per node. */
-	mutex_init(&(*task)->bittree_lock);
+	spin_lock_init(&(*task)->bittree_lock);
 	(*task)->bittree = RB_ROOT;
 
 	/* Initialize hash table bitmap */
@@ -370,7 +379,7 @@ int duet_register(__u8 *taskid, const char *name, __u8 evtmask, __u32 bitrange,
 	 */
 	mutex_lock(&duet_env.task_list_mutex);
 	last = &duet_env.tasks;
-	list_for_each_entry(cur, &duet_env.tasks, task_list) {
+	list_for_each_entry_rcu(cur, &duet_env.tasks, task_list) {
 		if (cur->id == task->id)
 			(task->id)++;
 		else if (cur->id > task->id)
@@ -378,7 +387,7 @@ int duet_register(__u8 *taskid, const char *name, __u8 evtmask, __u32 bitrange,
 
 		last = &cur->task_list;
 	}
-	list_add(&task->task_list, last);
+	list_add_rcu(&task->task_list, last);
 	mutex_unlock(&duet_env.task_list_mutex);
 
 	/* Now that the task is receiving events, scan the page cache and
@@ -396,21 +405,20 @@ int duet_deregister(__u8 taskid)
 
 	/* Find the task in the list, then dispose of it */
 	mutex_lock(&duet_env.task_list_mutex);
-	list_for_each_entry(cur, &duet_env.tasks, task_list) {
+	list_for_each_entry_rcu(cur, &duet_env.tasks, task_list) {
 		if (cur->id == taskid) {
-			list_del(&cur->task_list);
-
-again:
-			/* Wait until everyone's done with it */
+#ifdef CONFIG_DUET_STATS
+			hash_print(cur);
+#endif /* CONFIG_DUET_STATS */
+			list_del_rcu(&cur->task_list);
 			mutex_unlock(&duet_env.task_list_mutex);
+
+			/* Wait until everyone's done with it */
+			synchronize_rcu();
 			wait_event(cur->cleaner_queue,
 				atomic_read(&cur->refcount) == 0);
-			mutex_lock(&duet_env.task_list_mutex);
-			if (atomic_read(&cur->refcount) != 0)
-				goto again;
 
 			duet_task_dispose(cur);
-			mutex_unlock(&duet_env.task_list_mutex);
 			return 0;
 		}
 	}

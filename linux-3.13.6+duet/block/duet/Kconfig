@@ -20,8 +20,10 @@ config DUET_STATS
 	depends on DUET
 
 	help
-	  This option enabled support for keeping statistics about the data
-	  structures used internally.
+	  This option enables support for keeping statistics about Duet's
+	  operation. It will print information about the data structures
+	  used internally, and profiling information about the framework's
+	  operation.
 
 	  If unsure, say N.
 

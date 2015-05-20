@@ -15,6 +15,7 @@
  * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
  * Boston, MA 021110-1307, USA.
  */
+
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <linux/syscalls.h>
@@ -37,20 +38,9 @@ int duet_bootstrap(void)
 		return 1;
 	}
 
-	spin_lock_init(&duet_env.evtwq_lock);
-
-	/* Initialize ordered event work queue (XXX: use WQ_HIGHPRI?) */
-	duet_env.evtwq = alloc_ordered_workqueue("duet-evtwq", 0);
-	if (!duet_env.evtwq) {
-		printk(KERN_ERR "duet: failed to allocate event work queue\n");
-		atomic_set(&duet_env.status, DUET_STATUS_OFF);
-		return 1;
-	}
-
 	/* Initialize global hash table */
 	if (hash_init()) {
 		printk(KERN_ERR "duet: failed to initialize hash table\n");
-		destroy_workqueue(duet_env.evtwq);
 		return 1;
 	}
 
@@ -58,6 +48,11 @@ int duet_bootstrap(void)
 	INIT_LIST_HEAD(&duet_env.tasks);
 	mutex_init(&duet_env.task_list_mutex);
 	atomic_set(&duet_env.status, DUET_STATUS_ON);
+
+#ifdef CONFIG_DUET_STATS
+	/* Initialize stat counters */
+	duet_env.itm_stat_lkp = duet_env.itm_stat_num = 0;
+#endif /* CONFIG_DUET_STATS */
 
 	rcu_assign_pointer(duet_hook_cache_fp, duet_hook);
 	synchronize_rcu();
@@ -67,7 +62,6 @@ int duet_bootstrap(void)
 int duet_shutdown(void)
 {
 	struct duet_task *task;
-	struct workqueue_struct *tmp_wq = NULL;
 
 	if (atomic_cmpxchg(&duet_env.status, DUET_STATUS_ON, DUET_STATUS_CLEAN)
 	    != DUET_STATUS_ON) {
@@ -78,31 +72,21 @@ int duet_shutdown(void)
 	rcu_assign_pointer(duet_hook_cache_fp, NULL);
 	synchronize_rcu();
 
-	/* Flush and destroy work queue */
-	spin_lock_irq(&duet_env.evtwq_lock);
-	tmp_wq = duet_env.evtwq;
-	duet_env.evtwq = NULL;
-	spin_unlock_irq(&duet_env.evtwq_lock);
-	flush_workqueue(tmp_wq);
-	destroy_workqueue(tmp_wq);
-
 	/* Remove all tasks */
 	mutex_lock(&duet_env.task_list_mutex);
 	while (!list_empty(&duet_env.tasks)) {
-		task = list_entry(duet_env.tasks.next, struct duet_task,
+		task = list_entry_rcu(duet_env.tasks.next, struct duet_task,
 				task_list);
-		list_del(&task->task_list);
-
-again:
-		/* Make sure everyone's let go before we free it */
+		list_del_rcu(&task->task_list);
 		mutex_unlock(&duet_env.task_list_mutex);
+
+		/* Make sure everyone's let go before we free it */
+		synchronize_rcu();
 		wait_event(task->cleaner_queue,
 			atomic_read(&task->refcount) == 0);
-		mutex_lock(&duet_env.task_list_mutex);
-		if (atomic_read(&task->refcount) != 0)
-			goto again;
-
 		duet_task_dispose(task);
+
+		mutex_lock(&duet_env.task_list_mutex);
 	}
 	mutex_unlock(&duet_env.task_list_mutex);
 

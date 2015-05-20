@@ -15,6 +15,7 @@
  * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
  * Boston, MA 021110-1307, USA.
  */
+
 #include "common.h"
 
 #define get_ratio(ret, n, d)	\

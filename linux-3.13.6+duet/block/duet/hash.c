@@ -14,8 +14,7 @@
  * License along with this program; if not, write to the
  * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
  * Boston, MA 021110-1307, USA.
- */
-/*
+ *
  * TODO: Implement bulk update for multiple tasks on one item
  */
 
@@ -26,6 +25,11 @@
 
 #define DUET_NEGATE_EXISTS	(DUET_PAGE_ADDED | DUET_PAGE_REMOVED)
 #define DUET_NEGATE_MODIFIED	(DUET_PAGE_DIRTY | DUET_PAGE_FLUSHED)
+
+/*
+ * Page state for Duet is retained in a global hash table shared by all tasks.
+ * Indexing is based on inode number and the page's offset within said inode.
+ */
 
 static unsigned long hash(unsigned long ino, unsigned long idx)
 {
@@ -63,7 +67,7 @@ int hash_add(struct duet_task *task, unsigned long ino, unsigned long idx,
 	short found = 0;
 	unsigned long bnum;
 	struct hlist_bl_head *b;
-	struct hlist_bl_node *n, *t;
+	struct hlist_bl_node *n;
 	struct item_hnode *itnode;
 
 	evtmask &= task->evtmask;
@@ -74,7 +78,7 @@ int hash_add(struct duet_task *task, unsigned long ino, unsigned long idx,
 	hlist_bl_lock(b);
 
 	/* Lookup the item in the bucket */
-	hlist_bl_for_each_entry_safe(itnode, n, t, b, node) {
+	hlist_bl_for_each_entry(itnode, n, b, node) {
 #ifdef CONFIG_DUET_STATS
 		duet_env.itm_stat_lkp++;
 #endif /* CONFIG_DUET_STATS */
@@ -117,8 +121,30 @@ check_dispose:
 		if ((curmask == DUET_MASK_VALID) && (itnode->refcount == 1)) {
 			hlist_bl_del(&itnode->node);
 			kfree(itnode);
+
+			/* Are we still interested in this bucket? */
+			hlist_bl_for_each_entry(itnode, n, b, node) {
+#ifdef CONFIG_DUET_STATS
+				duet_env.itm_stat_lkp++;
+#endif /* CONFIG_DUET_STATS */
+				if (itnode->state[task->id] & DUET_MASK_VALID) {
+					found = 1;
+					break;
+				}
+			}
+
+			if (!found) {
+				spin_lock(&task->bbmap_lock);
+				clear_bit(bnum, task->bucket_bmap);
+				spin_unlock(&task->bbmap_lock);
+			}
 		} else {
 			itnode->state[task->id] = curmask;
+
+			/* Update bitmap */
+			spin_lock(&task->bbmap_lock);
+			set_bit(bnum, task->bucket_bmap);
+			spin_unlock(&task->bbmap_lock);
 		}
 	} else if (!found) {
 		if (!evtmask)
@@ -136,12 +162,13 @@ check_dispose:
 		itnode->refcount++;
 
 		hlist_bl_add_head(&itnode->node, b);
+
+		/* Update bitmap */
+		spin_lock(&task->bbmap_lock);
+		set_bit(bnum, task->bucket_bmap);
+		spin_unlock(&task->bbmap_lock);
 	}
 
-	/* Update bitmap (in any case) */
-	spin_lock(&task->bbmap_lock);
-	set_bit(bnum, task->bucket_bmap);
-	spin_unlock(&task->bbmap_lock);
 done:
 	hlist_bl_unlock(b);
 	return 0;
@@ -156,6 +183,7 @@ int hash_fetch(struct duet_task *task, struct duet_item *itm)
 	struct hlist_bl_node *n, *t;
 	struct item_hnode *itnode;
 
+again:
 	bnum = find_first_bit(task->bucket_bmap, duet_env.itm_hash_size);
 	if (bnum == duet_env.itm_hash_size)
 		return found;
@@ -166,7 +194,7 @@ int hash_fetch(struct duet_task *task, struct duet_item *itm)
 	if (!b->first) {
 		printk(KERN_ERR "duet: empty hash bucket marked in bitmap\n");
 		hlist_bl_unlock(b);
-		return -1;
+		goto again;
 	}
 
 #ifdef CONFIG_DUET_STATS

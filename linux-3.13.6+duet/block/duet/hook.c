@@ -17,29 +17,30 @@
  *
  * TODO: Update duet_fetch to match SOSP submission format
  */
+
 #include <linux/fs.h>
 #include <linux/mm.h>
 #include "common.h"
 
 /*
- * The framework implements two event models defining how we update the page
- * state when a new event happens. The first model allows subscription to
- * PAGE_EXISTS and PAGE_MODIFIED events, which report whether the existence or
- * modification state of the page has **changed** since the last time the task
- * was told about it.
- * The second model is simpler. It just report an OR'ed mask of all the event
- * codes: PAGE_ADDED, PAGE_DIRTY, PAGE_REMOVED, PAGE_FLUSHED that occurred since
- * the last time the page was told.
- * Pages are put in a red-black tree, so that we can find them in O(logn) time.
- * Indexing is based on inode number (good enough when we look at one filesystem
- * at a time), and the index of the page within said inode.
+ * The framework implements two models that define how we update the page state
+ * when a new event occurs: the state-based, and the event-based model.
+ * Page state is retained in the global hash table.
+ *
+ * The state-based model allows subscription to PAGE_EXISTS and PAGE_MODIFIED
+ * events, which report whether the existence or modification state of the page
+ * has **changed** since the last time the task was told about it.
+ *
+ * The event-based model is simpler. It just reports all the event types that
+ * have occurred on a page, since the last time the task was informed. Supported
+ * events include: PAGE_ADDED, PAGE_DIRTY, PAGE_REMOVED, and PAGE_FLUSHED.
  */
 
 /*
- * Fetches up to itreq items from the ItemTable. The number of items fetched is
- * given by itret. Items are checked against the bitmap, and discarded if they
- * have been marked; this is possible because an insertion could have happened
- * between the last fetch and the last mark.
+ * Fetches up to itreq items. The number of items fetched is given by itret.
+ * Items are checked against the bitmap, and discarded if they have been marked;
+ * this is possible because an insertion could have happened between the last
+ * fetch and the last mark.
  */
 int duet_fetch(__u8 taskid, __u16 itreq, struct duet_item *items, __u16 *itret)
 {
@@ -72,52 +73,18 @@ done:
 }
 EXPORT_SYMBOL_GPL(duet_fetch);
 
-static void __handle_event(struct work_struct *work)
-{
-	struct evtwork *ework = (struct evtwork *)work;
-	struct duet_task *cur;
-	int ret;
-
-	/* Look for tasks interested in this event type and invoke callbacks */
-	mutex_lock(&duet_env.task_list_mutex);
-	list_for_each_entry(cur, &duet_env.tasks, task_list) {
-		/* Verify that the event refers to the fs we're interested in */
-		if (cur->f_sb && cur->f_sb != ework->isb) {
-			duet_dbg(KERN_INFO "duet: event sb not matching\n");
-			continue;
-		}
-
-		/* Use the inode bitmap to filter this event out, if needed */
-		if (cur->evtmask & DUET_USE_IMAP) {
-			mutex_lock(&cur->bittree_lock);
-			ret = bittree_check(&cur->bittree, cur->bitrange,
-					ework->ino, 1, cur);
-			mutex_unlock(&cur->bittree_lock);
-
-			if (ret == 1)
-				continue;
-		}
-
-		/* Update the hash table */
-		if (hash_add(cur, ework->ino, ework->idx, ework->evt, 0))
-			printk(KERN_ERR "duet: hash table add failed\n");
-	}
-	mutex_unlock(&duet_env.task_list_mutex);
-
-	kfree(ework);
-}
-
 /* Handle an event. We're in RCU context so whatever happens, stay awake! */
 void duet_hook(__u8 evtcode, void *data)
 {
 	struct page *page = (struct page *)data;
-	struct evtwork *ework;
 	struct inode *inode;
+	struct duet_task *cur;
 	unsigned long flags;
+	int ret;
 
 	/* Duet must be online, and the page must belong to a valid mapping */
 	if (!duet_online() || !page || !page_mapping(page) ||
-	    !page_mapping(page)->host)
+		!page_mapping(page)->host)
 		return;
 
 	inode = page_mapping(page)->host;
@@ -134,28 +101,32 @@ void duet_hook(__u8 evtcode, void *data)
 		return;
 	}
 
-	/* We're good. Now enqueue a work item. */
-	ework = (struct evtwork *)kmalloc(sizeof(struct evtwork), GFP_NOWAIT);
-	if (!ework) {
-		printk(KERN_ERR "duet: failed to allocate work item\n");
-		return;
-	}
+	/* Look for tasks interested in this event type and invoke callbacks */
+	rcu_read_lock();
+	list_for_each_entry_rcu(cur, &duet_env.tasks, task_list) {
+		/* Verify that the event refers to the fs we're interested in */
+		if (cur->f_sb && cur->f_sb != inode->i_sb) {
+			duet_dbg(KERN_INFO "duet: event sb not matching\n");
+			continue;
+		}
 
-	/* Populate event work struct */
-	INIT_WORK((struct work_struct *)ework, __handle_event);
-	ework->ino = inode->i_ino;
-	ework->idx = page->index;
-	ework->evt = evtcode;
-	ework->isb = inode->i_sb;
+		/* Use the inode bitmap to filter this event out, if needed */
+		if (cur->evtmask & DUET_USE_IMAP) {
+			spin_lock_irqsave(&cur->bittree_lock, flags);
+			ret = bittree_check(&cur->bittree, cur->bitrange,
+					inode->i_ino, 1, cur);
+			spin_unlock_irqrestore(&cur->bittree_lock, flags);
 
-	spin_lock_irqsave(&duet_env.evtwq_lock, flags);
-	if (!duet_env.evtwq ||
-	    queue_work(duet_env.evtwq, (struct work_struct *)ework) != 1) {
-		printk(KERN_ERR "duet: failed to queue up work\n");
-		spin_unlock_irq(&duet_env.evtwq_lock);
-		kfree(ework);
-		return;
+			if (ret == 1)
+				continue;
+		}
+
+		/* Update the hash table */
+		local_irq_save(flags);
+		if (hash_add(cur, inode->i_ino, page->index, evtcode, 0))
+			printk(KERN_ERR "duet: hash table add failed\n");
+		local_irq_restore(flags);
 	}
-	spin_unlock_irqrestore(&duet_env.evtwq_lock, flags);
+	rcu_read_unlock();
 }
 EXPORT_SYMBOL_GPL(duet_hook);

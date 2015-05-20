@@ -26,10 +26,9 @@
 #include <linux/bitmap.h>
 #include <linux/rculist.h>
 #include <linux/duet.h>
-#include <linux/workqueue.h>
 
-#define MAX_NAME	128
-#define MAX_TASKS	15
+#define MAX_NAME		128
+#define MAX_TASKS		15
 #define DUET_BITS_PER_NODE	32768
 
 enum {
@@ -72,21 +71,12 @@ struct duet_task {
 
 	/* BitTree -- progress bitmap tree */
 	__u32			bitrange;	/* range per bmap bit */
-	struct mutex		bittree_lock;
+	spinlock_t		bittree_lock;
 	struct rb_root		bittree;
 #ifdef CONFIG_DUET_STATS
 	__u64			stat_bit_cur;	/* Cur # of BitTree nodes */
 	__u64			stat_bit_max;	/* Max # of BitTree nodes */
 #endif /* CONFIG_DUET_STATS */
-};
-
-struct evtwork {
-	struct work_struct 	work;
-
-	__u8			evt;
-	unsigned long 		ino;
-	unsigned long 		idx;
-	struct super_block	*isb;
 };
 
 struct duet_info {
@@ -99,10 +89,6 @@ struct duet_info {
 	 */
 	struct mutex		task_list_mutex;
 	struct list_head	tasks;
-
-	/* Workqueue of events not processed yet */
-	spinlock_t		evtwq_lock;
-	struct workqueue_struct	*evtwq;
 
 	/* ItemTable -- Global page state hash table */
 	struct hlist_bl_head	*itm_hash_table;
