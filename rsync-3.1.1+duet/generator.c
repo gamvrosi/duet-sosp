@@ -2265,7 +2265,7 @@ void generate_files(int f_out, const char *local_name)
 	int save_info_progress = info_levels[INFO_PROGRESS];
 #ifdef HAVE_DUET
 	int done_flist = 0;
-	static int o3_counter = 0;
+//	static int o3_counter = 0;
 #endif /* HAVE_DUET */
 
 	if (protocol_version >= 29) {

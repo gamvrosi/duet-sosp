@@ -51,6 +51,16 @@ struct item_hnode {
 	__u8			state[MAX_TASKS];
 };
 
+struct duet_bittree {
+	__u32			range;
+	spinlock_t		lock;
+	struct rb_root		root;
+#ifdef CONFIG_DUET_STATS
+	__u64			statcur;	/* Cur # of BitTree nodes */
+	__u64			statmax;	/* Max # of BitTree nodes */
+#endif /* CONFIG_DUET_STATS */
+};
+
 struct duet_task {
 	__u8			id;
 	char			name[MAX_NAME];
@@ -70,13 +80,7 @@ struct duet_task {
 	unsigned long		*bucket_bmap;
 
 	/* BitTree -- progress bitmap tree */
-	__u32			bitrange;	/* range per bmap bit */
-	spinlock_t		bittree_lock;
-	struct rb_root		bittree;
-#ifdef CONFIG_DUET_STATS
-	__u64			stat_bit_cur;	/* Cur # of BitTree nodes */
-	__u64			stat_bit_max;	/* Max # of BitTree nodes */
-#endif /* CONFIG_DUET_STATS */
+	struct duet_bittree	bittree;
 };
 
 struct duet_info {
@@ -126,14 +130,11 @@ int duet_shutdown(void);
 long duet_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 
 /* bittree.c */
-void bnode_dispose(struct bmap_rbnode *bnode, struct rb_node *rbnode,
-		struct rb_root *root, struct duet_task *task);
-inline int bittree_check(struct rb_root *bittree, __u32 range, __u64 idx,
-			__u32 num, struct duet_task *task);
-inline int bittree_mark(struct rb_root *bittree, __u32 range, __u64 idx,
-			__u32 num, struct duet_task *task);
-inline int bittree_unmark(struct rb_root *bittree, __u32 range, __u64 idx,
-			__u32 num, struct duet_task *task);
+inline int bittree_check(struct duet_bittree *bittree, __u64 start, __u32 len);
+inline int bittree_mark(struct duet_bittree *bittree, __u64 start, __u32 len);
+inline int bittree_unmark(struct duet_bittree *bittree, __u64 start, __u32 len);
 int bittree_print(struct duet_task *task);
+void bittree_init(struct duet_bittree *bittree, __u32 range);
+void bittree_destroy(struct duet_bittree *bittree);
 
 #endif /* _COMMON_H */

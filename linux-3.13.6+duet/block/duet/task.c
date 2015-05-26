@@ -54,12 +54,11 @@ static int process_inode(struct duet_task *task, struct inode *inode)
 static int scan_page_cache(struct duet_task *task)
 {
 	unsigned int loop;
-	struct rb_node *rbnode;
 	struct hlist_head *head;
-	struct bmap_rbnode *bnode;
 	struct inode *inode = NULL;
-	struct rb_root inodetree = RB_ROOT;
+	struct duet_bittree inodetree;
 
+	bittree_init(&inodetree, 1);
 	printk(KERN_INFO "duet: page cache scan started\n");
 	loop = 0;
 again:
@@ -73,14 +72,14 @@ again:
 				continue;
 
 			/* If we haven't seen this inode before, process it. */
-			if (bittree_check(&inodetree, 1, inode->i_ino, 1, NULL) != 1) {
+			if (bittree_check(&inodetree, inode->i_ino, 1) != 1) {
 				spin_lock(&inode->i_lock);
 				__iget(inode);
 				spin_unlock(&inode->i_lock);
 
 				spin_unlock(duet_inode_hash_lock);
 				process_inode(task, inode);
-				bittree_mark(&inodetree, 1, inode->i_ino, 1, NULL);
+				bittree_mark(&inodetree, inode->i_ino, 1);
 				iput(inode);
 				goto again;
 			}
@@ -89,14 +88,8 @@ again:
 		spin_unlock(duet_inode_hash_lock);
 	}
 
-	/* Dispose of the BitTree */
-	while (!RB_EMPTY_ROOT(&inodetree)) {
-		rbnode = rb_first(&inodetree);
-		bnode = rb_entry(rbnode, struct bmap_rbnode, node);
-		bnode_dispose(bnode, rbnode, &inodetree, NULL);
-	}
-
 	printk(KERN_INFO "duet: page cache scan finished\n");
+	bittree_destroy(&inodetree);
 
 	return 0;
 }
@@ -173,17 +166,7 @@ int duet_check(__u8 taskid, __u64 idx, __u32 num)
 	if (!task)
 		return -ENOENT;
 
-	/*
-	 * Obtain RBBT lock. This will slow us down, but only the work queue
-	 * items and the maintenance threads should get here, so the foreground
-	 * workload should not be affected. Additionally, only a quarter of the
-	 * code will be executed at any call (depending on the set, chk, found
-	 * flags), and only the calls that are required to add/remove nodes to
-	 * the tree will be costly
-	 */
-	spin_lock(&task->bittree_lock);
-	ret = bittree_check(&task->bittree, task->bitrange, idx, num, task);
-	spin_unlock(&task->bittree_lock);
+	ret = bittree_check(&task->bittree, idx, num);
 
 	/* decref and wake up cleaner if needed */
 	if (atomic_dec_and_test(&task->refcount))
@@ -206,17 +189,7 @@ int duet_unmark(__u8 taskid, __u64 idx, __u32 num)
 	if (!task)
 		return -ENOENT;
 
-	/*
-	 * Obtain RBBT lock. This will slow us down, but only the work queue
-	 * items and the maintenance threads should get here, so the foreground
-	 * workload should not be affected. Additionally, only a quarter of the
-	 * code will be executed at any call (depending on the set, chk, found
-	 * flags), and only the calls that are required to add/remove nodes to
-	 * the tree will be costly
-	 */
-	spin_lock(&task->bittree_lock);
-	ret = bittree_unmark(&task->bittree, task->bitrange, idx, num, task);
-	spin_unlock(&task->bittree_lock);
+	ret = bittree_unmark(&task->bittree, idx, num);
 
 	/* decref and wake up cleaner if needed */
 	if (atomic_dec_and_test(&task->refcount))
@@ -239,17 +212,7 @@ int duet_mark(__u8 taskid, __u64 idx, __u32 num)
 	if (!task)
 		return -ENOENT;
 
-	/*
-	 * Obtain RBBT lock. This will slow us down, but only the work queue
-	 * items and the maintenance threads should get here, so the foreground
-	 * workload should not be affected. Additionally, only a quarter of the
-	 * code will be executed at any call (depending on the set, chk, found
-	 * flags), and only the calls that are required to add/remove nodes to
-	 * the tree will be costly
-	 */
-	spin_lock(&task->bittree_lock);
-	ret = bittree_mark(&task->bittree, task->bitrange, idx, num, task);
-	spin_unlock(&task->bittree_lock);
+	ret = bittree_mark(&task->bittree, idx, num);
 
 	/* decref and wake up cleaner if needed */
 	if (atomic_dec_and_test(&task->refcount))
@@ -281,9 +244,11 @@ static int duet_task_init(struct duet_task **task, const char *name,
 	INIT_LIST_HEAD(&(*task)->task_list);
 	init_waitqueue_head(&(*task)->cleaner_queue);
 
-	/* Initialize bitmap tree. Use fixed 32KB bitmaps per node. */
-	spin_lock_init(&(*task)->bittree_lock);
-	(*task)->bittree = RB_ROOT;
+	/* Initialize bitmap tree */
+	if (bitrange)
+		bittree_init(&(*task)->bittree, bitrange);
+	else
+		bittree_init(&(*task)->bittree, 4096);
 
 	/* Initialize hash table bitmap */
 	spin_lock_init(&(*task)->bbmap_lock);
@@ -316,10 +281,6 @@ static int duet_task_init(struct duet_task **task, const char *name,
 	(*task)->evtmask = evtmask;
 	(*task)->f_sb = f_sb;
 	(*task)->p_dentry = p_dentry;
-	if (bitrange)
-		(*task)->bitrange = bitrange;
-	else
-		(*task)->bitrange = 4096;
 
 	printk(KERN_DEBUG "duet: task registered with evtmask %u", evtmask);
 	return 0;
@@ -334,16 +295,10 @@ err:
  * task struct, so we don't need any locks */
 void duet_task_dispose(struct duet_task *task)
 {
-	struct rb_node *rbnode;
-	struct bmap_rbnode *bnode;
 	struct duet_item itm;
 
 	/* Dispose of the bitmap tree */
-	while (!RB_EMPTY_ROOT(&task->bittree)) {
-		rbnode = rb_first(&task->bittree);
-		bnode = rb_entry(rbnode, struct bmap_rbnode, node);
-		bnode_dispose(bnode, rbnode, &task->bittree, NULL);
-	}
+	bittree_destroy(&task->bittree);
 
 	/* Dispose of hash table entries, bucket bitmap */
 	while (hash_fetch(task, &itm) == 1);
@@ -407,9 +362,10 @@ int duet_deregister(__u8 taskid)
 	mutex_lock(&duet_env.task_list_mutex);
 	list_for_each_entry_rcu(cur, &duet_env.tasks, task_list) {
 		if (cur->id == taskid) {
-#ifdef CONFIG_DUET_STATS
+//#ifdef CONFIG_DUET_STATS
 			hash_print(cur);
-#endif /* CONFIG_DUET_STATS */
+			bittree_print(cur);
+//#endif /* CONFIG_DUET_STATS */
 			list_del_rcu(&cur->task_list);
 			mutex_unlock(&duet_env.task_list_mutex);
 

@@ -90,7 +90,6 @@ void duet_hook(__u8 evtcode, void *data)
 	inode = page_mapping(page)->host;
 
 	/* Verify that the inode does not belong to a special file */
-	/* XXX: Is this absolutely necessary? */
 	if (!S_ISREG(inode->i_mode) && !S_ISDIR(inode->i_mode)) {
 		duet_dbg(KERN_INFO "duet: event not on regular file\n");
 		return;
@@ -112,10 +111,9 @@ void duet_hook(__u8 evtcode, void *data)
 
 		/* Use the inode bitmap to filter this event out, if needed */
 		if (cur->evtmask & DUET_USE_IMAP) {
-			spin_lock_irqsave(&cur->bittree_lock, flags);
-			ret = bittree_check(&cur->bittree, cur->bitrange,
-					inode->i_ino, 1, cur);
-			spin_unlock_irqrestore(&cur->bittree_lock, flags);
+			local_irq_save(flags);
+			ret = bittree_check(&cur->bittree, inode->i_ino, 1);
+			local_irq_restore(flags);
 
 			if (ret == 1)
 				continue;

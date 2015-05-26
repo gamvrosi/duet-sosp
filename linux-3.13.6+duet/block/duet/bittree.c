@@ -18,6 +18,9 @@
 
 #include "common.h"
 
+#define DUET_BMAP_SET	(1<<0)
+#define DUET_BMAP_CHK	(1<<1)
+
 /*
  * The following two functions are wrappers for the basic bitmap functions.
  * The wrappers translate an arbitrary range of numbers to the range and
@@ -33,13 +36,13 @@ static int duet_bmap_set(unsigned long *bmap, __u64 bstart, __u32 bgran,
 	__u64 bofft = start - bstart;
 	__u32 blen = len;
 
+	if (bofft + blen >= (bstart + (DUET_BITS_PER_NODE * bgran)))
+		return -1;
+
 	/* Convert range to bitmap granularity */
 	do_div(bofft, bgran);
 	if (do_div(blen, bgran))
 		blen++;
-
-	if (bofft + blen >= (bstart + (DUET_BITS_PER_NODE * bgran)))
-		return -1;
 
 	if (do_set)
 		bitmap_set(bmap, (unsigned int)bofft, (int)blen);
@@ -61,13 +64,13 @@ static int duet_bmap_chk(unsigned long *bmap, __u64 bstart, __u32 bgran,
 	unsigned int size;
 	unsigned int bofft;
 
+	if (bofft64 + blen32 >= (bstart + (DUET_BITS_PER_NODE * bgran)))
+		return -1;
+
 	/* Convert range to bitmap granularity */
 	do_div(bofft64, bgran);
 	if (do_div(blen32, bgran))
 		blen32++;
-
-	if (bofft64 + blen32 >= (bstart + (DUET_BITS_PER_NODE * bgran)))
-		return -1;
 
 	/* Now it is safe to cast these variables */
 	bofft = (unsigned int)bofft64;
@@ -103,18 +106,18 @@ static int duet_bmap_chk(unsigned long *bmap, __u64 bstart, __u32 bgran,
 }
 
 /* Initializes a bitmap tree node */
-static struct bmap_rbnode *bnode_init(__u64 idx, struct duet_task *task)
+static struct bmap_rbnode *bnode_init(struct duet_bittree *bittree, __u64 idx)
 {
 	struct bmap_rbnode *bnode = NULL;
 
 #ifdef CONFIG_DUET_STATS
-	if (task) {
-		(task->stat_bit_cur)++;
-		if (task->stat_bit_cur > task->stat_bit_max) {
-			task->stat_bit_max = task->stat_bit_cur;
-			printk(KERN_INFO "duet: Task#%d (%s): %llu nodes in BitTree.\n"
-				"      That's %llu bytes.\n", task->id, task->name,
-				task->stat_bit_max, task->stat_bit_max * DUET_BITS_PER_NODE / 8);
+	if (bittree) {
+		(bittree->statcur)++;
+		if (bittree->statcur > bittree->statmax) {
+			bittree->statmax = bittree->statcur;
+			printk(KERN_INFO "duet: %llu nodes (%llu bytes) in BitTree.\n",
+				bittree->statmax,
+				bittree->statmax * DUET_BITS_PER_NODE / 8);
 		}
 	}
 #endif /* CONFIG_DUET_STATS */
@@ -135,69 +138,60 @@ static struct bmap_rbnode *bnode_init(__u64 idx, struct duet_task *task)
 	return bnode;
 }
 
-void bnode_dispose(struct bmap_rbnode *bnode, struct rb_node *rbnode,
-	struct rb_root *root, struct duet_task *task)
+static void bnode_dispose(struct bmap_rbnode *bnode, struct rb_node *rbnode,
+	struct duet_bittree *bittree)
 {
 #ifdef CONFIG_DUET_STATS
-	if (task)
-		(task->stat_bit_cur)--;
+	if (bittree)
+		(bittree->statcur)--;
 #endif /* CONFIG_DUET_STATS */
-	rb_erase(rbnode, root);
+	rb_erase(rbnode, &bittree->root);
 	kfree(bnode->bmap);
 	kfree(bnode);
 }
 
 /*
- * Looks through the bitmap tree for a node with the given LBN. Starting from
- * that node, it sets (or clears, or checks) all LBNs for the given len,
- * spilling over to subsequent nodes and inserting/removing them if needed.
+ * Looks through the bitmap nodes storing the given range. It then sets, clears,
+ * or checks all bits. It further inserts/removes nodes as needed.
  *
- * If chk is set then:
- * - a return value of 1 means all relevant LBNs were found set/cleared
- * - a return value of 0 means some of the LBNs were not found set/cleared
- * - a return value of -1 denotes an error occurred
- * If chk is not set then:
- * - a return value of 0 means all LBNs were marked properly
- * - a return value of -1 denotes an error occurred
+ * If DUET_BMAP_CHK flag is set:
+ * - a return value of 1 means the entire range was found set/cleared
+ * - a return value of 0 means the entire range was not found set/cleared
+ * - a return value of -1 denotes an error
+ * If DUET_BMAP_CHK flag is not set:
+ * - a return value of 0 means the entire range was updated properly
+ * - a return value of -1 denotes an error
  */
-static int bittree_chkupd(struct rb_root *bittree, __u32 range, __u64 lbn,
-	__u32 len, __u8 set, __u8 chk, struct duet_task *task)
+static int __update_tree(struct duet_bittree *bittree, __u64 start, __u32 len,
+	__u8 flags)
 {
-	int ret, found;
-	__u64 cur_lbn, node_lbn, lbn_gran, cur_len, rlbn, div_rem;
-	__u32 rem_len;
+	int found, ret;
+	__u64 node_offt, div_rem;
+	__u32 node_len;
 	struct rb_node **link, *parent;
 	struct bmap_rbnode *bnode = NULL;
-	__u8 id = 0;
 
-	if (task)
-		id = task->id;
+	spin_lock(&bittree->lock);
+	duet_dbg(KERN_INFO "duet: %s%s: start %llu, len %u\n",
+		(flags & DUET_BMAP_CHK) ? "checking if " : "marking as ",
+		(flags & DUET_BMAP_SET) ? "set" : "cleared", start, len);
 
-	rlbn = lbn;
+	div64_u64_rem(start, bittree->range * DUET_BITS_PER_NODE, &div_rem);
+	node_offt = start - div_rem;
 
-	duet_dbg(KERN_INFO "duet: task #%d %s%s: lbn%llu, len%u\n", id,
-		chk ? "checking if " : "marking as ", set ? "set" : "cleared",
-		rlbn, len);
-
-	cur_lbn = rlbn;
-	rem_len = len;
-	lbn_gran = range * DUET_BITS_PER_NODE;
-	div64_u64_rem(rlbn, lbn_gran, &div_rem);
-	node_lbn = rlbn - div_rem;
-
-	while (rem_len) {
-		/* Look up node_lbn */
+	while (len) {
+		/* Look up BitTree node */
 		found = 0;
-		link = &bittree->rb_node;
+		link = &bittree->root.rb_node;
 		parent = NULL;
 
 		while (*link) {
 			parent = *link;
 			bnode = rb_entry(parent, struct bmap_rbnode, node);
 
-			if (bnode->idx > node_lbn) {
+			if (bnode->idx > node_offt) {
 				link = &(*link)->rb_left;
-			} else if (bnode->idx < node_lbn) {
+			} else if (bnode->idx < node_offt) {
 				link = &(*link)->rb_right;
 			} else {
 				found = 1;
@@ -205,60 +199,62 @@ static int bittree_chkupd(struct rb_root *bittree, __u32 range, __u64 lbn,
 			}
 		}
 
-		duet_dbg(KERN_DEBUG "duet: node with LBN %llu %sfound\n",
-			node_lbn, found ? "" : "not ");
+		duet_dbg(KERN_DEBUG "duet: node starting at %llu %sfound\n",
+			node_offt, found ? "" : "not ");
 
 		/*
 		 * Take appropriate action based on whether we found the node
-		 * (found), and whether we plan to mark or unmark (set), and
-		 * whether we are only checking the values (chk).
+		 * and whether we plan to update (SET), or only check it (CHK).
 		 *
-		 *   !Chk  |       Found            !Found      |
+		 *   !CHK  |       Found            !Found      |
 		 *  -------+------------------------------------+
-		 *    Set  |     Set Bits     |  Init new node  |
+		 *    SET  |     Set Bits     |  Init new node  |
 		 *         |------------------+-----------------|
-		 *   !Set  | Clear (dispose?) |     Nothing     |
+		 *   !SET  | Clear (dispose?) |     Nothing     |
 		 *  -------+------------------------------------+
 		 *
-		 *    Chk  |       Found            !Found      |
+		 *    CHK  |       Found            !Found      |
 		 *  -------+------------------------------------+
-		 *    Set  |    Check Bits    |  Return false   |
+		 *    SET  |    Check Bits    |  Return false   |
 		 *         |------------------+-----------------|
-		 *   !Set  |    Check Bits    |    Continue     |
+		 *   !SET  |    Check Bits    |    Continue     |
 		 *  -------+------------------------------------+
 		 */
 
-		/* Find the last LBN on this node */
-		cur_len = min(cur_lbn + rem_len,
-			node_lbn + lbn_gran) - cur_lbn;
+		/* Trim len to this node */
+		node_len = min(start + len, node_offt +
+				(bittree->range * DUET_BITS_PER_NODE)) - start;
 
-		if (set) {
-			if (!found && !chk) {
+		if (flags & DUET_BMAP_SET) {
+			if (!found && !(flags & DUET_BMAP_CHK)) {
 				/* Insert the new node */
-				bnode = bnode_init(node_lbn, task);
+				bnode = bnode_init(bittree, node_offt);
 				if (!bnode) {
 					ret = -1;
 					goto done;
 				}
 
 				rb_link_node(&bnode->node, parent, link);
-				rb_insert_color(&bnode->node, bittree);
-			} else if (!found && chk) {
+				rb_insert_color(&bnode->node, &bittree->root);
+
+			} else if (!found && (flags & DUET_BMAP_CHK)) {
 				/* Looking for set bits, node didn't exist */
 				ret = 0;
 				goto done;
 			}
 
 			/* Set the bits */
-			if (!chk && duet_bmap_set(bnode->bmap, bnode->idx,
-				range, cur_lbn, cur_len, 1)) {
-				/* We got -1, something went wrong */
+			if (!(flags & DUET_BMAP_CHK) &&
+			    duet_bmap_set(bnode->bmap, bnode->idx,
+					  bittree->range, start, node_len, 1)) {
+				/* Something went wrong */
 				ret = -1;
 				goto done;
+
 			/* Check the bits */
-			} else if (chk) {
+			} else if (flags & DUET_BMAP_CHK) {
 				ret = duet_bmap_chk(bnode->bmap, bnode->idx,
-						range, cur_lbn, cur_len, 1);
+					bittree->range, start, node_len, 1);
 				/* Check if we failed, or found a bit set/unset
 				 * when it shouldn't be */
 				if (ret != 1)
@@ -267,15 +263,17 @@ static int bittree_chkupd(struct rb_root *bittree, __u32 range, __u64 lbn,
 
 		} else if (found) {
 			/* Clear the bits */
-			if (!chk && duet_bmap_set(bnode->bmap, bnode->idx,
-				range, cur_lbn, cur_len, 0)) {
-				/* We got -1, something went wrong */
+			if (!(flags & DUET_BMAP_CHK) &&
+			    duet_bmap_set(bnode->bmap, bnode->idx,
+					  bittree->range, start, node_len, 0)) {
+				/* Something went wrong */
 				ret = -1;
 				goto done;
+
 			/* Check the bits */
-			} else if (chk) {
+			} else if (flags & DUET_BMAP_CHK) {
 				ret = duet_bmap_chk(bnode->bmap, bnode->idx,
-						range, cur_lbn, cur_len, 0);
+					bittree->range, start, node_len, 0);
 				/* Check if we failed, or found a bit set/unset
 				 * when it shouldn't be */
 				if (ret != 1)
@@ -283,46 +281,46 @@ static int bittree_chkupd(struct rb_root *bittree, __u32 range, __u64 lbn,
 			}
 
 			/* Dispose of the node if empty */
-			if (!chk && bitmap_empty(bnode->bmap, DUET_BITS_PER_NODE))
-				bnode_dispose(bnode, parent, bittree, task);
+			if (!(flags & DUET_BMAP_CHK) &&
+			    bitmap_empty(bnode->bmap, DUET_BITS_PER_NODE))
+				bnode_dispose(bnode, parent, bittree);
 		}
 
-		rem_len -= cur_len;
-		cur_lbn += cur_len;
-		node_lbn = cur_lbn;
+		len -= node_len;
+		start += node_len;
+		node_offt = start;
 	}
 
 	/* If we managed to get here, then everything worked as planned.
-	 * Return 0 for success in the case that chk is not set, or 1 for
-	 * success when chk is set. */
-	if (!chk)
+	 * Return 0 for success in the case that CHK is not set, or 1 for
+	 * success when CHK is set. */
+	if (!(flags & DUET_BMAP_CHK))
 		ret = 0;
 	else
 		ret = 1;
 
 done:
 	if (ret == -1)
-		printk(KERN_ERR "duet: blocks were not %s %s for task %d\n",
-			chk ? "found" : "marked", set ? "set" : "unset", id);
+		printk(KERN_ERR "duet: blocks were not %s %s\n",
+			(flags & DUET_BMAP_CHK) ? "found" : "marked",
+			(flags & DUET_BMAP_SET) ? "set" : "unset");
+	spin_unlock(&bittree->lock);
 	return ret;
 }
 
-inline int bittree_check(struct rb_root *bittree, __u32 range, __u64 idx,
-	__u32 num, struct duet_task *task)
+inline int bittree_check(struct duet_bittree *bittree, __u64 start, __u32 len)
 {
-	return bittree_chkupd(bittree, range, idx, num, 1, 1, task);
+	return __update_tree(bittree, start, len, DUET_BMAP_SET|DUET_BMAP_CHK);
 }
 
-inline int bittree_mark(struct rb_root *bittree, __u32 range, __u64 idx,
-	__u32 num, struct duet_task *task)
+inline int bittree_mark(struct duet_bittree *bittree, __u64 start, __u32 len)
 {
-	return bittree_chkupd(bittree, range, idx, num, 1, 0, task);
+	return __update_tree(bittree, start, len, DUET_BMAP_SET);
 }
 
-inline int bittree_unmark(struct rb_root *bittree, __u32 range, __u64 idx,
-	__u32 num, struct duet_task *task)
+inline int bittree_unmark(struct duet_bittree *bittree, __u64 start, __u32 len)
 {
-	return bittree_chkupd(bittree, range, idx, num, 0, 0, task);
+	return __update_tree(bittree, start, len, 0);
 }
 
 int bittree_print(struct duet_task *task)
@@ -331,9 +329,9 @@ int bittree_print(struct duet_task *task)
 	struct rb_node *node;
 	size_t bits_on;
 
-	spin_lock(&task->bittree_lock);
+	spin_lock(&task->bittree.lock);
 	printk(KERN_INFO "duet: Printing BitTree for task #%d\n", task->id);
-	node = rb_first(&task->bittree);
+	node = rb_first(&task->bittree.root);
 	while (node) {
 		bnode = rb_entry(node, struct bmap_rbnode, node);
 
@@ -345,7 +343,29 @@ int bittree_print(struct duet_task *task)
 
 		node = rb_next(node);
 	}
-	spin_unlock(&task->bittree_lock);
+	spin_unlock(&task->bittree.lock);
 
 	return 0;
+}
+
+void bittree_init(struct duet_bittree *bittree, __u32 range)
+{
+	bittree->range = range;
+	spin_lock_init(&bittree->lock);
+	bittree->root = RB_ROOT;
+#ifdef CONFIG_DUET_STATS
+	bittree->statcur = bittree->statmax = 0;
+#endif /* CONFIG_DUET_STATS */
+}
+
+void bittree_destroy(struct duet_bittree *bittree)
+{
+	struct rb_node *rbnode;
+	struct bmap_rbnode *bnode;
+
+	while (!RB_EMPTY_ROOT(&bittree->root)) {
+		rbnode = rb_first(&bittree->root);
+		bnode = rb_entry(rbnode, struct bmap_rbnode, node);
+		bnode_dispose(bnode, rbnode, bittree);
+	}
 }

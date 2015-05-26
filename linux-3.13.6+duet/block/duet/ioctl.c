@@ -372,7 +372,7 @@ static int duet_ioctl_tlist(void __user *arg)
 	list_for_each_entry(cur, &duet_env.tasks, task_list) {
 		la->tid[i] = cur->id;
 		memcpy(la->tnames[i], cur->name, MAX_NAME);
-		la->bitrange[i] = cur->bitrange;
+		la->bitrange[i] = cur->bittree.range;
 		la->evtmask[i] = cur->evtmask;
 		i++;
 		if (i == MAX_TASKS)
