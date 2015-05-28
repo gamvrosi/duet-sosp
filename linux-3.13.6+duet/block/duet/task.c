@@ -152,21 +152,20 @@ int duet_print_events(__u8 taskid)
 }
 EXPORT_SYMBOL_GPL(duet_print_events);
 
-/* Checks the blocks in the range from idx to idx+num are done */
-int duet_check(__u8 taskid, __u64 idx, __u32 num)
+/* Checks whether items in the [start, start+len) range are done */
+int duet_check(__u8 taskid, __u64 start, __u32 len)
 {
 	int ret = 0;
 	struct duet_task *task;
 
 	if (!duet_online())
-		return -1;	
-
+		return -1;
 
 	task = duet_find_task(taskid);
 	if (!task)
 		return -ENOENT;
 
-	ret = bittree_check(&task->bittree, idx, num);
+	ret = bittree_check(&task->bittree, start, len);
 
 	/* decref and wake up cleaner if needed */
 	if (atomic_dec_and_test(&task->refcount))
@@ -176,8 +175,8 @@ int duet_check(__u8 taskid, __u64 idx, __u32 num)
 }
 EXPORT_SYMBOL_GPL(duet_check);
 
-/* Unmarks the blocks in the range from idx to idx+num as pending */
-int duet_unmark(__u8 taskid, __u64 idx, __u32 num)
+/* Unmarks items in the [start, start+len) range, i.e. not done */
+int duet_unmark(__u8 taskid, __u64 start, __u32 len)
 {
 	int ret = 0;
 	struct duet_task *task;
@@ -189,7 +188,7 @@ int duet_unmark(__u8 taskid, __u64 idx, __u32 num)
 	if (!task)
 		return -ENOENT;
 
-	ret = bittree_unmark(&task->bittree, idx, num);
+	ret = bittree_unmark(&task->bittree, start, len);
 
 	/* decref and wake up cleaner if needed */
 	if (atomic_dec_and_test(&task->refcount))
@@ -199,8 +198,8 @@ int duet_unmark(__u8 taskid, __u64 idx, __u32 num)
 }
 EXPORT_SYMBOL_GPL(duet_unmark);
 
-/* Marks the blocks in the range from idx to idx+num as done */
-int duet_mark(__u8 taskid, __u64 idx, __u32 num)
+/* Mark items in the [start, start+len) range, i.e. done */
+int duet_mark(__u8 taskid, __u64 start, __u32 len)
 {
 	int ret = 0;
 	struct duet_task *task;
@@ -212,7 +211,7 @@ int duet_mark(__u8 taskid, __u64 idx, __u32 num)
 	if (!task)
 		return -ENOENT;
 
-	ret = bittree_mark(&task->bittree, idx, num);
+	ret = bittree_mark(&task->bittree, start, len);
 
 	/* decref and wake up cleaner if needed */
 	if (atomic_dec_and_test(&task->refcount))

@@ -29,7 +29,7 @@
 
 #define MAX_NAME		128
 #define MAX_TASKS		15
-#define DUET_BITS_PER_NODE	32768
+#define DUET_BITS_PER_NODE	(32768 * 8)	/* 32KB bitmaps */
 
 enum {
 	DUET_STATUS_OFF = 0,

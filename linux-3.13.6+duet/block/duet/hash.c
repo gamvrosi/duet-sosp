@@ -96,7 +96,7 @@ int hash_add(struct duet_task *task, unsigned long ino, unsigned long idx,
 	if (found) {
 		curmask = itnode->state[task->id];
 
-		/* Avoid up'ing refcount if we're just updating the mask */
+		/* Only up the refcount if we are adding a new mask */
 		if (!(curmask & DUET_MASK_VALID) || in_scan) {
 			if (!in_scan)
 				itnode->refcount++;
@@ -117,8 +117,12 @@ int hash_add(struct duet_task *task, unsigned long ino, unsigned long idx,
 
 check_dispose:
 		if ((curmask == DUET_MASK_VALID) && (itnode->refcount == 1)) {
-			hlist_bl_del(&itnode->node);
-			kfree(itnode);
+			if (itnode->refcount != 1) {
+				itnode->state[task->id] = 0;
+			} else {
+				hlist_bl_del(&itnode->node);
+				kfree(itnode);
+			}
 
 			/* Are we still interested in this bucket? */
 			hlist_bl_for_each_entry(itnode, n, b, node) {
@@ -175,16 +179,21 @@ done:
 /* Fetch one item for a given task. Return found (1), empty (0), error (-1) */
 int hash_fetch(struct duet_task *task, struct duet_item *itm)
 {
-	int found = 0;
+	int found;
 	unsigned long bnum;
 	struct hlist_bl_head *b;
-	struct hlist_bl_node *n, *t;
+	struct hlist_bl_node *n;
 	struct item_hnode *itnode;
 
 again:
+	spin_lock(&task->bbmap_lock);
 	bnum = find_first_bit(task->bucket_bmap, duet_env.itm_hash_size);
-	if (bnum == duet_env.itm_hash_size)
-		return found;
+	if (bnum == duet_env.itm_hash_size) {
+		spin_unlock(&task->bbmap_lock);
+		return 1;
+	}
+	clear_bit(bnum, task->bucket_bmap);
+	spin_unlock(&task->bbmap_lock);
 	b = duet_env.itm_hash_table + bnum;
 
 	/* Grab first item from bucket */
@@ -195,10 +204,11 @@ again:
 		goto again;
 	}
 
+	found = 0;
+	hlist_bl_for_each_entry(itnode, n, b, node) {
 #ifdef CONFIG_DUET_STATS
-	duet_env.itm_stat_lkp++;
+		duet_env.itm_stat_lkp++;
 #endif /* CONFIG_DUET_STATS */
-	hlist_bl_for_each_entry_safe(itnode, n, t, b, node) {
 		if (itnode->state[task->id] & DUET_MASK_VALID) {
 			*itm = itnode->item;
 			itm->state = itnode->state[task->id] & (~DUET_MASK_VALID);
@@ -215,24 +225,37 @@ again:
 			found = 1;
 			break;
 		}
+	}
+
+	if (!found) {
+		printk(KERN_ERR "duet: uninteresting bucket marked in bitmap\n");
+		hlist_bl_unlock(b);
+		goto again;
+	}
+
+	/* Are we still interested in this bucket? */
+	found = 0;
+	hlist_bl_for_each_entry(itnode, n, b, node) {
 #ifdef CONFIG_DUET_STATS
 		duet_env.itm_stat_lkp++;
 #endif /* CONFIG_DUET_STATS */
+		if (itnode->state[task->id] & DUET_MASK_VALID) {
+			found = 1;
+			break;
+		}
+	}
+
+	if (found) {
+		spin_lock(&task->bbmap_lock);
+		set_bit(bnum, task->bucket_bmap);
+		spin_unlock(&task->bbmap_lock);
 	}
 
 #ifdef CONFIG_DUET_STATS
 	duet_env.itm_stat_num++;
 #endif /* CONFIG_DUET_STATS */
-
-	/* Update bitmap (if necessary) */
-	if (!b->first) {
-		spin_lock(&task->bbmap_lock);
-		clear_bit(bnum, task->bucket_bmap);
-		spin_unlock(&task->bbmap_lock);
-	}
-
 	hlist_bl_unlock(b);
-	return found;
+	return 0;
 }
 
 /* Warning: expensive printing function. Use with care. */

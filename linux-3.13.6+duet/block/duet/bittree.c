@@ -182,7 +182,7 @@ static int __update_tree(struct duet_bittree *bittree, __u64 start, __u32 len,
 	while (len) {
 		/* Look up BitTree node */
 		found = 0;
-		link = &bittree->root.rb_node;
+		link = &(bittree->root).rb_node;
 		parent = NULL;
 
 		while (*link) {
@@ -330,7 +330,7 @@ int bittree_print(struct duet_task *task)
 	size_t bits_on;
 
 	spin_lock(&task->bittree.lock);
-	printk(KERN_INFO "duet: Printing BitTree for task #%d\n", task->id);
+	printk(KERN_INFO "duet: Printing global hash table\n");
 	node = rb_first(&task->bittree.root);
 	while (node) {
 		bnode = rb_entry(node, struct bmap_rbnode, node);
@@ -344,6 +344,11 @@ int bittree_print(struct duet_task *task)
 		node = rb_next(node);
 	}
 	spin_unlock(&task->bittree.lock);
+	spin_lock(&task->bbmap_lock);
+	printk(KERN_INFO "duet: Task #%d bitmap has %zu out of %d bits set\n",
+		task->id, bitmap_weight(task->bucket_bmap,
+		duet_env.itm_hash_size), duet_env.itm_hash_size);
+	spin_unlock(&task->bbmap_lock);
 
 	return 0;
 }

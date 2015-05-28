@@ -681,8 +681,10 @@ static int process_duet_events(struct scrub_ctx *sctx)
 		}
 
 		/* If there were no events, return 0 */
-		if (!itret)
+		if (!itret) {
+			scrub_dbg(KERN_INFO "duet-scrub: fetch returned nothing\n");
 			return 0;
+		}
 
 		/* If this inode came from disk, remember to stop and give the
 		 * other processes a chance */
@@ -758,6 +760,7 @@ done:
 	 * 3. If ret > 0 and stop == 1: we hit the disk, return 1
 	 */
 
+	scrub_dbg(KERN_INFO "duet-scrub: done fetching\n");
 	return (!ret || stop);
 }
 #endif /* CONFIG_BTRFS_DUET_SCRUB */
