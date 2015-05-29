@@ -79,8 +79,6 @@ void duet_hook(__u8 evtcode, void *data)
 	struct page *page = (struct page *)data;
 	struct inode *inode;
 	struct duet_task *cur;
-	unsigned long flags;
-	int ret;
 
 	/* Duet must be online, and the page must belong to a valid mapping */
 	if (!duet_online() || !page || !page_mapping(page) ||
@@ -110,20 +108,13 @@ void duet_hook(__u8 evtcode, void *data)
 		}
 
 		/* Use the inode bitmap to filter this event out, if needed */
-		if (cur->evtmask & DUET_USE_IMAP) {
-			local_irq_save(flags);
-			ret = bittree_check(&cur->bittree, inode->i_ino, 1);
-			local_irq_restore(flags);
-
-			if (ret == 1)
-				continue;
-		}
+		if ((cur->evtmask & DUET_USE_IMAP) &&
+		   (bittree_check(&cur->bittree, inode->i_ino, 1) == 1))
+			continue;
 
 		/* Update the hash table */
-		local_irq_save(flags);
 		if (hash_add(cur, inode->i_ino, page->index, evtcode, 0))
 			printk(KERN_ERR "duet: hash table add failed\n");
-		local_irq_restore(flags);
 	}
 	rcu_read_unlock();
 }

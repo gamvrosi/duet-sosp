@@ -63,7 +63,7 @@ int hash_add(struct duet_task *task, unsigned long ino, unsigned long idx,
 {
 	__u8 curmask = 0;
 	short found = 0;
-	unsigned long bnum;
+	unsigned long bnum, flags;
 	struct hlist_bl_head *b;
 	struct hlist_bl_node *n;
 	struct item_hnode *itnode;
@@ -73,6 +73,7 @@ int hash_add(struct duet_task *task, unsigned long ino, unsigned long idx,
 	/* Get the bucket */
 	bnum = hash(ino, idx);
 	b = duet_env.itm_hash_table + bnum;
+	local_irq_save(flags);
 	hlist_bl_lock(b);
 
 	/* Lookup the item in the bucket */
@@ -173,6 +174,7 @@ check_dispose:
 
 done:
 	hlist_bl_unlock(b);
+	local_irq_restore(flags);
 	return 0;
 }
 
@@ -180,16 +182,18 @@ done:
 int hash_fetch(struct duet_task *task, struct duet_item *itm)
 {
 	int found;
-	unsigned long bnum;
+	unsigned long bnum, flags;
 	struct hlist_bl_head *b;
 	struct hlist_bl_node *n;
 	struct item_hnode *itnode;
 
+	local_irq_save(flags);
 again:
 	spin_lock(&task->bbmap_lock);
 	bnum = find_first_bit(task->bucket_bmap, duet_env.itm_hash_size);
 	if (bnum == duet_env.itm_hash_size) {
 		spin_unlock(&task->bbmap_lock);
+		local_irq_restore(flags);
 		return 1;
 	}
 	clear_bit(bnum, task->bucket_bmap);
@@ -255,13 +259,14 @@ again:
 	duet_env.itm_stat_num++;
 #endif /* CONFIG_DUET_STATS */
 	hlist_bl_unlock(b);
+	local_irq_restore(flags);
 	return 0;
 }
 
 /* Warning: expensive printing function. Use with care. */
 void hash_print(struct duet_task *task)
 {
-	unsigned long loop, count, start, end, buckets;
+	unsigned long loop, count, start, end, buckets, flags;
 	unsigned long long nodes, tnodes;
 	struct hlist_bl_head *b;
 	struct hlist_bl_node *n;
@@ -281,6 +286,7 @@ void hash_print(struct duet_task *task)
 
 		/* Count bucket nodes */
 		b = duet_env.itm_hash_table + loop;
+		local_irq_save(flags);
 		hlist_bl_lock(b);
 		hlist_bl_for_each_entry(itnode, n, b, node) {
 			nodes++;
@@ -288,6 +294,7 @@ void hash_print(struct duet_task *task)
 				tnodes++;
 		}
 		hlist_bl_unlock(b);
+		local_irq_restore(flags);
 
 		end = loop;
 	}
