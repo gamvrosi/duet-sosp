@@ -77,7 +77,7 @@ int duet_online(void);
 int duet_check(__u8 taskid, __u64 start, __u32 len);
 int duet_mark(__u8 taskid, __u64 start, __u32 len);
 int duet_unmark(__u8 taskid, __u64 start, __u32 len);
-int duet_fetch(__u8 taskid, __u16 req, struct duet_item *items, __u16 *ret);
+int duet_fetch(__u8 taskid, __u16 req, struct duet_item *items);
 
 /* Framework debugging functions */
 int duet_print_bitmap(__u8 taskid);

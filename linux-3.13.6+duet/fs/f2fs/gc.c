@@ -373,9 +373,8 @@ static int blkaddr_lookup_remove(struct f2fs_sb_info *sbi,
  */
 void fetch_and_handle_duet_events(struct f2fs_sb_info *sbi)
 {
-	u16 iret;
 	struct duet_item itm;
-	int err, ret;
+	int ret, iret;
 
 	if (!duet_online() || !sbi->duet_task_id)
 		return;
@@ -385,8 +384,8 @@ void fetch_and_handle_duet_events(struct f2fs_sb_info *sbi)
 
 	/* Get new events */
 	while (1) {
-		err = duet_fetch(sbi->duet_task_id, 1, &itm, &iret);
-		if (err) {
+		iret = duet_fetch(sbi->duet_task_id, 1, &itm);
+		if (iret < 0) {
 			f2fs_duet_debug(KERN_ERR "f2fs: duet-gc: "
 					"duet_fetch failed.\n");
 			return;

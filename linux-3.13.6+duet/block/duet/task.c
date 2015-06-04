@@ -300,7 +300,7 @@ void duet_task_dispose(struct duet_task *task)
 	bittree_destroy(&task->bittree);
 
 	/* Dispose of hash table entries, bucket bitmap */
-	while (hash_fetch(task, &itm) == 1);
+	while (!hash_fetch(task, &itm));
 	kfree(task->bucket_bmap);
 
 	if (task->p_dentry)
@@ -361,10 +361,10 @@ int duet_deregister(__u8 taskid)
 	mutex_lock(&duet_env.task_list_mutex);
 	list_for_each_entry_rcu(cur, &duet_env.tasks, task_list) {
 		if (cur->id == taskid) {
-//#ifdef CONFIG_DUET_STATS
+#ifdef CONFIG_DUET_STATS
 			hash_print(cur);
 			bittree_print(cur);
-//#endif /* CONFIG_DUET_STATS */
+#endif /* CONFIG_DUET_STATS */
 			list_del_rcu(&cur->task_list);
 			mutex_unlock(&duet_env.task_list_mutex);
 
