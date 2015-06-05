@@ -268,7 +268,7 @@ int itree_update(struct inode_tree *itree, __u8 taskid,
 		inmem_pages = inode->i_mapping->nrpages;
 		get_ratio(inmem_ratio, inmem_pages, total_pages);
 
-		duet_dbg(KERN_DEBUG "itree: ino=%lu total=%lu, inmem=%lu, ratio=%u\n",
+		duet_dbg(KERN_DEBUG "itree: ino=%lu total=%lu, inmem=%lu, ratio=%lu\n",
 				itm.ino, total_pages, inmem_pages, inmem_ratio);
 
 		if (last_ino != itm.ino || (last_ino == itm.ino &&
