@@ -55,7 +55,7 @@ again:
 		goto done;
 
 	duet_dbg(KERN_INFO "duet_fetch: sending (ino%lu, idx%lu, %x)\n",
-		items[*itret].ino, items[*itret].idx, items[*itret].state);
+		items[itret].ino, items[itret].idx, items[itret].state);
 
 	itret++;
 	if (itret < itreq)
