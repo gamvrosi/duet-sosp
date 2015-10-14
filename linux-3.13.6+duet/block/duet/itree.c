@@ -225,7 +225,7 @@ static int update_itree_one(struct inode_tree *itree, unsigned long ino,
 int itree_update(struct inode_tree *itree, __u8 taskid,
 	itree_get_inode_t *itree_get_inode, void *ctx)
 {
-	int itret;
+	__u16 itret = 1;
 	struct inode *inode;
 	struct duet_item itm;
 	unsigned long inmem_pages, total_pages, inmem_ratio;
@@ -233,7 +233,7 @@ int itree_update(struct inode_tree *itree, __u8 taskid,
 	__u8 last_inmem = 0;
 
 	while (1) {
-		if ((itret = duet_fetch(taskid, 1, &itm)) < 0) {
+		if (duet_fetch(taskid, &itm, &itret)) {
 			printk(KERN_ERR "itree: duet_fetch failed\n");
 			return 1;
 		}

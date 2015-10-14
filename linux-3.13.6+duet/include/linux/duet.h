@@ -75,11 +75,11 @@ struct inode_tree {
 int duet_register(char *path, __u8 evtmask, __u32 bitrange, const char *name,
 		  __u8 *taskid);
 int duet_deregister(__u8 taskid);
-int duet_online(void);
+int duet_fetch(__u8 taskid, struct duet_item *items, __u16 *count);
 int duet_check(__u8 taskid, __u64 start, __u32 len);
 int duet_mark(__u8 taskid, __u64 start, __u32 len);
 int duet_unmark(__u8 taskid, __u64 start, __u32 len);
-int duet_fetch(__u8 taskid, __u16 req, struct duet_item *items);
+int duet_online(void);
 
 /* Framework debugging functions */
 int duet_print_bitmap(__u8 taskid);

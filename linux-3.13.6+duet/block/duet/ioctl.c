@@ -195,8 +195,7 @@ static int duet_ioctl_fetch(void __user *arg)
 	if (fa->num > MAX_ITEMS)
 		fa->num = MAX_ITEMS;
 
-	fa->num = duet_fetch(fa->tid, fa->num, fa->itm);
-	if (fa->num < 0) {
+	if (duet_fetch(fa->tid, fa->itm, &fa->num)) {
 		printk(KERN_ERR "duet: failed to fetch for user\n");
 		goto err;
 	}

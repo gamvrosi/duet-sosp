@@ -374,7 +374,8 @@ static int blkaddr_lookup_remove(struct f2fs_sb_info *sbi,
 void fetch_and_handle_duet_events(struct f2fs_sb_info *sbi)
 {
 	struct duet_item itm;
-	int ret, iret;
+	int ret;
+	__u16 iret = 1;
 
 	if (!duet_online() || !sbi->duet_task_id)
 		return;
@@ -384,15 +385,14 @@ void fetch_and_handle_duet_events(struct f2fs_sb_info *sbi)
 
 	/* Get new events */
 	while (1) {
-		iret = duet_fetch(sbi->duet_task_id, 1, &itm);
-		if (iret < 0) {
+		if (duet_fetch(sbi->duet_task_id, &itm, &iret)) {
 			f2fs_duet_debug(KERN_ERR "f2fs: duet-gc: "
 					"duet_fetch failed.\n");
 			return;
 		}
 
 		/* No events? */
-		if (iret == 0)
+		if (!iret)
 			break;
 
 		/* GC not interested in meta pages */

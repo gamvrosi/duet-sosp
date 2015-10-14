@@ -40,9 +40,9 @@
  * been marked; this is possible because an insertion could have happened
  * between the last fetch and the last mark.
  */
-int duet_fetch(__u8 taskid, __u16 itreq, struct duet_item *items)
+int duet_fetch(__u8 taskid, struct duet_item *items, __u16 *count)
 {
-	int itret = 0;
+	int idx = 0;
 	struct duet_task *task = duet_find_task(taskid);
 	if (!task) {
 		printk(KERN_ERR "duet_fetch: invalid taskid (%d)\n", taskid);
@@ -51,14 +51,14 @@ int duet_fetch(__u8 taskid, __u16 itreq, struct duet_item *items)
 
 	/* We'll either run out of items, or grab itreq items. */
 again:
-	if (hash_fetch(task, &items[itret]))
+	if (hash_fetch(task, &items[idx]))
 		goto done;
 
 	duet_dbg(KERN_INFO "duet_fetch: sending (ino%lu, idx%lu, %x)\n",
-		items[itret].ino, items[itret].idx, items[itret].state);
+		items[idx].ino, items[idx].idx, items[idx].state);
 
-	itret++;
-	if (itret < itreq)
+	idx++;
+	if (idx < *count)
 		goto again;
 
 done:
@@ -66,7 +66,8 @@ done:
 	if (atomic_dec_and_test(&task->refcount))
 		wake_up(&task->cleaner_queue);
 
-	return itret;
+	*count = idx;
+	return 0;
 }
 EXPORT_SYMBOL_GPL(duet_fetch);
 

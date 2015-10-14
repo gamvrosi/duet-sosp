@@ -662,7 +662,8 @@ out:
  */
 static int process_duet_events(struct scrub_ctx *sctx)
 {
-	int ret = 256, mret = 0, stop = 0, itret;
+	int ret = 256, mret = 0, stop = 0;
+	__u16 itret = 1;
 	u64 pstart, mapped_length;
 	u64 len = PAGE_CACHE_SIZE;
 	u64 dstart = sctx->scrub_dev->bd_part->start_sect << 9;
@@ -674,7 +675,7 @@ static int process_duet_events(struct scrub_ctx *sctx)
 	struct btrfs_device *pdev;
 
 	while (ret) {
-		if ((itret = duet_fetch(sctx->taskid, 1, &itm)) < 0) {
+		if (duet_fetch(sctx->taskid, &itm, &itret)) {
 			printk(KERN_ERR "duet-scrub: duet_fetch failed\n");
 			return 0;
 		}

@@ -3724,7 +3724,8 @@ static int process_inode(u64 ino, u64 offt, u64 root, void *ctx)
  */
 static int process_duet_events(struct send_ctx *sctx)
 {
-	int ret = 256, mret, itret;
+	int ret = 256, mret;
+	__u16 itret = 1;
 	u64 lofft;
 	char *addr;
 	struct duet_item itm;
@@ -3735,7 +3736,7 @@ static int process_duet_events(struct send_ctx *sctx)
 
 	while (ret) {
 		/* Fetch one item */
-		if ((itret = duet_fetch(sctx->taskid, 1, &itm)) < 0) {
+		if (duet_fetch(sctx->taskid, &itm, &itret)) {
 			printk(KERN_ERR "duet-send: duet_fetch failed\n");
 			break;
 		}
