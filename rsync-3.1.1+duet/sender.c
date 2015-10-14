@@ -52,8 +52,7 @@ extern struct file_list *cur_flist, *first_flist, *dir_flist;
 #ifdef HAVE_DUET
 extern struct file_list *cur_o3_flist, *first_o3_flist;
 extern int out_of_order, current_files, pending_o3_files, duet_fd;
-extern int file_total, file_old_total;
-extern __u8 tid;
+extern int file_total, file_old_total, tid;
 extern struct inode_tree itree;
 #endif /* HAVE_DUET */
 BOOL extra_flist_sending_enabled;
@@ -277,7 +276,7 @@ start_another:
 					buf, inmem, pending_o3_files, file_total,
 					file_old_total);
 
-			if (duet_mark(tid, duet_fd, ino, 1))
+			if (duet_set_done(duet_fd, tid, ino, 1))
 				rprintf(FERROR, "duet: failed to mark %s (ino %lld)\n",
 					buf, ino);
 

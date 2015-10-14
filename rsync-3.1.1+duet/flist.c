@@ -77,8 +77,7 @@ extern struct stats stats;
 extern char *filesfrom_host;
 extern char *usermap, *groupmap;
 #ifdef HAVE_DUET
-extern int out_of_order, duet_fd;
-extern __u8 tid;
+extern int out_of_order, duet_fd, tid;
 #endif /* HAVE_DUET */
 
 extern char curr_dir[MAXPATHLEN];
@@ -1515,13 +1514,13 @@ static struct file_struct *send_file_name(int f, struct file_list *flist,
 		src_ino = sbuf.st_ino;
 
 		if (S_ISREG(sbuf.st_mode) && out_of_order &&
-		    duet_check(tid, duet_fd, src_ino, 1) == 1)
+		    duet_check_done(duet_fd, tid, src_ino, 1) == 1)
 			return NULL;
 	} else {
 		src_ino = stp->st_ino;
 
 		if (S_ISREG(stp->st_mode) && out_of_order &&
-		    duet_check(tid, duet_fd, src_ino, 1) == 1)
+		    duet_check_done(duet_fd, tid, src_ino, 1) == 1)
 			return NULL;
 	}
 

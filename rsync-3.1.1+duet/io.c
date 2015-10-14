@@ -68,8 +68,7 @@ extern int filesfrom_convert;
 extern iconv_t ic_send, ic_recv;
 #endif
 #ifdef HAVE_DUET
-extern int out_of_order, duet_fd;
-extern __u8 tid;
+extern int out_of_order, duet_fd, tid;
 extern struct inode_tree itree;
 #endif /* HAVE_DUET */
 

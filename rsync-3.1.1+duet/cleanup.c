@@ -24,7 +24,7 @@
 #ifdef HAVE_DUET
 #include "duet/duet.h"
 
-extern __u8 tid;
+extern int tid;
 extern struct inode_tree itree;
 extern int out_of_order, duet_fd;
 extern int am_sender;
@@ -279,10 +279,10 @@ NORETURN void _exit_cleanup(int code, const char *file, int line)
 	if (INFO_GTE(DUET, 1))
 		rprintf(FINFO, "deregistering with DUET\n");
 
-	if (INFO_GTE(DUET, 2) && duet_debug_printbit(tid, duet_fd))
+	if (INFO_GTE(DUET, 2) && duet_debug_printbit(duet_fd, tid))
 		rprintf(FERROR, "failed to print BitTree\n");
 
-	if (duet_deregister(tid, duet_fd))
+	if (duet_deregister(duet_fd, tid))
 		rprintf(FERROR, "failed to deregister with Duet\n");
 
 	close_duet_dev(duet_fd);

@@ -108,8 +108,7 @@ mode_t orig_umask = 0;
 int batch_gen_fd = -1;
 int sender_keeps_checksum = 0;
 #ifdef HAVE_DUET
-__u8 tid;
-int duet_fd;
+int tid, duet_fd;
 struct inode_tree itree;
 #endif /* HAVE_DUET */
 
@@ -1670,7 +1669,7 @@ int main(int argc,char *argv[])
 		exit_cleanup(RERR_DUET);
 	}
 
-	if (duet_register(&tid, duet_fd, "rsync", 1, DUET_PAGE_EXISTS, argv[0])) {
+	if (duet_register(duet_fd, argv[0], DUET_PAGE_EXISTS, 1, "rsync", &tid)) {
 		rprintf(FERROR, "failed to register with Duet\n");
 		exit_cleanup(RERR_DUET);
 	}

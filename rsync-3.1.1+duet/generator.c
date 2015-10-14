@@ -101,8 +101,7 @@ extern char *basis_dir[MAX_BASIS_DIRS+1];
 extern struct file_list *cur_flist, *first_flist, *dir_flist;
 #ifdef HAVE_DUET
 extern struct file_list *cur_o3_flist, *first_o3_flist;
-extern int out_of_order, duet_fd;
-extern __u8 tid;
+extern int out_of_order, duet_fd, tid;
 #endif /* HAVE_DUET */
 extern filter_rule_list filter_list, daemon_filter_list;
 
@@ -1225,7 +1224,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
 		if (INFO_GTE(DUET, 3))
 			rprintf(FINFO, "duet: Checking ino %lu\n", file->src_ino);
 
-		if (!(file->flags & FLAG_O3) && duet_check(tid, duet_fd, file->src_ino, 1) == 1) {
+		if (!(file->flags & FLAG_O3) && duet_check_done(duet_fd, tid, file->src_ino, 1) == 1) {
 			int iflags = ITEM_SKIPPED;
 
 			if (INFO_GTE(DUET, 1))
@@ -1240,7 +1239,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
 			return;
 		}
 
-		if (duet_mark(tid, duet_fd, file->src_ino, 1))
+		if (duet_set_done(duet_fd, tid, file->src_ino, 1))
 			rprintf(FERROR, "duet: failed to mark ino %ld\n",
 				file->src_ino);
 

@@ -50,7 +50,6 @@
 #define DUET_PAGE_FLUSHED	(1 << 3)
 #define DUET_PAGE_MODIFIED	(1 << 4)
 #define DUET_PAGE_EXISTS	(1 << 5)
-#define DUET_USE_IMAP		(1 << 7)
 
 /*
  * Item struct returned for processing. For both state- and event- based duet,
@@ -84,14 +83,14 @@ int itree_fetch(struct inode_tree *itree, __u8 taskid, int duet_fd, char *path,
 void itree_teardown(struct inode_tree *itree);
 
 int open_duet_dev(void);
-void close_duet_dev(int fd);
-int duet_register(__u8 *tid, int duet_fd, const char *name, __u32 bitrange,
-	__u8 evtmask, const char *path);
-int duet_deregister(int taskid, int duet_fd);
-int duet_fetch(int taskid, int duet_fd, int itmreq, struct duet_item *items,
-	int *num);
-int duet_getpath(int taskid, int duet_fd, unsigned long ino, char *path);
-int duet_mark(int taskid, int duet_fd, __u64 idx, __u32 num);
-int duet_unmark(int taskid, int duet_fd, __u64 idx, __u32 num);
-int duet_check(int taskid, int duet_fd, __u64 idx, __u32 num);
-int duet_debug_printbit(int taskid, int duet_fd);
+void close_duet_dev(int duet_fd);
+
+int duet_register(int duet_fd, const char *path, __u8 evtmask, __u32 bitrange,
+	const char *name, int *tid);
+int duet_deregister(int duet_fd, int tid);
+int duet_fetch(int duet_fd, int tid, struct duet_item *items, int *count);
+int duet_check_done(int duet_fd, int tid, __u64 idx, __u32 count);
+int duet_set_done(int duet_fd, int tid, __u64 idx, __u32 count);
+int duet_unset_done(int duet_fd, int tid, __u64 idx, __u32 count);
+int duet_get_path(int duet_fd, int tid, unsigned long ino, char *path);
+int duet_debug_printbit(int duet_fd, int tid);

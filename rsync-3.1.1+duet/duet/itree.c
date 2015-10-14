@@ -183,11 +183,13 @@ static int update_itree_one(struct inode_tree *itree, long long ino,
 int itree_update(struct inode_tree *itree, __u8 taskid, int duet_fd)
 {
 	int i, itret, ret=0, last_was_processed = 0;
-	long long count, last_ino = 0;
+	long long count;
+	unsigned long last_ino = 0;
 	struct duet_item *buf = itree->buf;
 
 again:
-	if (duet_fetch(taskid, duet_fd, MAX_ITEMS, buf, &itret)) {
+	itret = MAX_ITEMS;
+	if (duet_fetch(duet_fd, taskid, buf, &itret)) {
 		fprintf(stderr, "itree: duet_fetch failed\n");
 		ret = 1;
 		goto out;
@@ -214,7 +216,7 @@ again:
 				ret = 1;
 				goto out;
 			}
-			last_was_processed = 0; //duet_check(taskid, duet_fd, buf[i].ino, 1);
+			last_was_processed = 0; //duet_check(duet_fd, taskid, buf[i].ino, 1);
 			last_ino = buf[i].ino;
 			count = 0;
 		}
@@ -267,20 +269,20 @@ again:
 	itree_dbg("itree: fetch picked inode %lu\n", *ino);
 
 	/* Check if we've processed it before */
-	if (duet_check(taskid, duet_fd, *ino, 1) == 1)
+	if (duet_check_done(duet_fd, taskid, *ino, 1) == 1)
 		goto again;
 
 	itree_dbg("itree: fetching inode %lu\n", *ino);
 
 	/* Get the path for this inode */
-	if (duet_getpath(taskid, duet_fd, *ino, path)) {
+	if (duet_get_path(duet_fd, taskid, *ino, path)) {
 		//fprintf(stderr, "itree: inode path not found\n");
 		goto again;
 	}
 
 	/* If this isn't a child, mark to avoid, and retry */
 	if (path[0] == '\0') {
-		//duet_mark(taskid, ino, 1);
+		//duet_set_done(duet_fd, taskid, ino, 1);
 		//itree_dbg("itree: marking ino %lu for task %u to avoid\n",
 		//	ino, taskid);
 		goto again;

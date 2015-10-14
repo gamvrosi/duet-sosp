@@ -25,10 +25,10 @@
 
 int main(int argc, char *argv[])
 {
-	int c, freq, duration, duet_fd = 0, itret;
+	int tid, c, freq, duration, duet_fd = 0, itret;
 	long total_items = 0;
 	long total_fetches = 0;
-	__u8 tid, evtmask;
+	__u8 evtmask;
 	struct duet_item buf[MAX_ITEMS];
 	struct timespec slp = {0, 0};
 	int o3 = 0, evtbased = 0;
@@ -81,7 +81,7 @@ int main(int argc, char *argv[])
 		evtmask = DUET_PAGE_EXISTS;
 
 	/* Register with Duet framework */
-	if (o3 && (duet_register(&tid, duet_fd, "dummy", 1, evtmask, "/"))) {
+	if (o3 && (duet_register(duet_fd, "/", evtmask, 1, "dummy", &tid))) {
 		fprintf(stderr, "failed to register with Duet\n");
 		exit(1);
 	}
@@ -90,7 +90,8 @@ int main(int argc, char *argv[])
 	/* If fetching frequency was specified, we'll be using it right now */
 	if (freq > 0) {
 		while (duration > 0) {
-			duet_fetch(tid, duet_fd, MAX_ITEMS, buf, &itret);
+			itret = MAX_ITEMS;
+			duet_fetch(duet_fd, tid, buf, &itret);
 			//fprintf(stdout, "Fetch received %d items.\n", itret);
 			total_items += itret;
 			total_fetches++;
@@ -111,7 +112,7 @@ int main(int argc, char *argv[])
 	}
 
 	/* Deregister with the Duet framework */
-	if (o3 && duet_deregister(tid, duet_fd))
+	if (o3 && duet_deregister(duet_fd, tid))
 		fprintf(stderr, "failed to deregister with Duet\n");
 
 	if (o3) {
