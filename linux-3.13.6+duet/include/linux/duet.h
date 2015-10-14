@@ -46,7 +46,9 @@
 #define DUET_PAGE_MODIFIED	(1 << 4)
 #define DUET_PAGE_EXISTS	(1 << 5)
 #define DUET_USE_IMAP		(1 << 6)
-#define DUET_MASK_VALID		(1 << 7)
+
+#define DUET_MASK_VALID		(1 << 7) /* Used only for page state */
+#define DUET_TASK_KERNEL	(1 << 7) /* Used only during registration */
 
 /*
  * Item struct returned for processing. We return 6 bits. For state-based duet,
@@ -70,8 +72,8 @@ struct inode_tree {
 };
 
 /* Framework interface functions */
-int duet_register(__u8 *taskid, const char *name, __u8 evtmask, __u32 bitrange,
-		  struct super_block *f_sb, struct dentry *p_dentry);
+int duet_register(char *path, __u8 evtmask, __u32 bitrange, const char *name,
+		  __u8 *taskid);
 int duet_deregister(__u8 taskid);
 int duet_online(void);
 int duet_check(__u8 taskid, __u64 start, __u32 len);

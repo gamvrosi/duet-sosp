@@ -17,6 +17,9 @@
  */
 
 #include <linux/pagemap.h>
+#include <linux/syscalls.h>
+#include <linux/file.h>
+#include <linux/uaccess.h>
 #include "common.h"
 
 /*
@@ -309,22 +312,67 @@ void duet_task_dispose(struct duet_task *task)
 	kfree(task);
 }
 
-int duet_register(__u8 *taskid, const char *name, __u8 evtmask, __u32 bitrange,
-	struct super_block *f_sb, struct dentry *p_dentry)
+/* Registers a user-level task. Must also prep path. */
+int __register_utask(char *path, __u8 evtmask, __u32 bitrange, const char *name,
+	__u8 *taskid)
 {
-	int ret;
+	int ret, fd;
 	struct list_head *last;
 	struct duet_task *cur, *task = NULL;
+	struct file *file;
+	mm_segment_t old_fs;
+	struct dentry *dentry = NULL;
+	struct super_block *sb;
 
-	if (strnlen(name, MAX_NAME) == MAX_NAME) {
-		printk(KERN_ERR "duet: error -- task name too long\n");
-		return -EINVAL;
+	/* First, open the path we were given */
+	old_fs = get_fs();
+	set_fs(KERNEL_DS);
+
+	fd = sys_open(path, O_RDONLY, 0644);
+	if (fd < 0) {
+		printk(KERN_ERR "duet_register: failed to open %s\n", path);
+		ret = -EINVAL;
+		goto reg_done;
 	}
 
-	ret = duet_task_init(&task, name, evtmask, bitrange, f_sb, p_dentry);
+	file = fget(fd);
+	if (!file) {
+		printk(KERN_ERR "duet_register: failed to get %s\n", path);
+		ret = -EINVAL;
+		goto reg_close;
+	}
+
+	if (!file->f_inode) {
+		printk(KERN_ERR "duet_register: no inode for %s\n", path);
+		ret = -EINVAL;
+		goto reg_put;
+	}
+
+	if (!S_ISDIR(file->f_inode->i_mode)) {
+		printk(KERN_ERR "duet_register: %s is not a dir\n", path);
+		ret = -EINVAL;
+		goto reg_put;
+	}
+
+	if (!(dentry = d_find_alias(file->f_inode))) {
+		printk(KERN_ERR "duet_register: no dentry for %s\n", path);
+		ret = -EINVAL;
+		goto reg_put;
+	}
+
+	sb = file->f_inode->i_sb;
+
+	if (strnlen(name, MAX_NAME) == MAX_NAME) {
+		printk(KERN_ERR "duet_register: task name too long\n");
+		ret = -EINVAL;
+		goto reg_put;
+	}
+
+	ret = duet_task_init(&task, name, evtmask, bitrange, sb, dentry);
 	if (ret) {
-		printk(KERN_ERR "duet: failed to initialize task\n");
-		return ret;
+		printk(KERN_ERR "duet_register: failed to initialize task\n");
+		ret = -EINVAL;
+		goto reg_put;
 	}
 
 	/*
@@ -347,9 +395,80 @@ int duet_register(__u8 *taskid, const char *name, __u8 evtmask, __u32 bitrange,
 	/* Now that the task is receiving events, scan the page cache and
 	 * populate its ItemTree. */
 	scan_page_cache(task);
-
 	*taskid = task->id;
-	return 0;
+
+	printk(KERN_INFO "duet: registered %s (ino %lu, sb %p)\n",
+		path, file->f_inode->i_ino, sb);
+
+reg_put:
+	fput(file);
+reg_close:
+	sys_close(fd);
+reg_done:
+	set_fs(old_fs);
+	return ret;
+}
+
+/* Registers a kernel task. No path prep required */
+int __register_ktask(char *path, __u8 evtmask, __u32 bitrange, const char *name,
+	__u8 *taskid)
+{
+	int ret;
+	struct list_head *last;
+	struct duet_task *cur, *task = NULL;
+	struct super_block *sb;
+
+	sb = (struct super_block *)path;
+
+	if (strnlen(name, MAX_NAME) == MAX_NAME) {
+		printk(KERN_ERR "duet_register: task name too long\n");
+		return -EINVAL;
+	}
+
+	ret = duet_task_init(&task, name, evtmask, bitrange, sb, NULL);
+	if (ret) {
+		printk(KERN_ERR "duet_register: failed to initialize task\n");
+		return -EINVAL;
+	}
+
+	/*
+	 * Find a free task id for the new task. Tasks are sorted by id, so that
+	 * we can find the smallest free id in one traversal (look for a gap).
+	 */
+	mutex_lock(&duet_env.task_list_mutex);
+	last = &duet_env.tasks;
+	list_for_each_entry_rcu(cur, &duet_env.tasks, task_list) {
+		if (cur->id == task->id)
+			(task->id)++;
+		else if (cur->id > task->id)
+			break;
+
+		last = &cur->task_list;
+	}
+	list_add_rcu(&task->task_list, last);
+	mutex_unlock(&duet_env.task_list_mutex);
+
+	/* Now that the task is receiving events, scan the page cache and
+	 * populate its ItemTree. */
+	scan_page_cache(task);
+	*taskid = task->id;
+
+	printk(KERN_INFO "duet: registered kernel task (sb %p)\n", sb);
+
+	return ret;
+}
+
+int duet_register(char *path, __u8 evtmask, __u32 bitrange, const char *name,
+	__u8 *taskid)
+{
+	int ret;
+
+	if (evtmask & DUET_TASK_KERNEL)
+		ret = __register_ktask(path, evtmask, bitrange, name, taskid);
+	else
+		ret = __register_utask(path, evtmask, bitrange, name, taskid);
+
+	return ret;
 }
 EXPORT_SYMBOL_GPL(duet_register);
 

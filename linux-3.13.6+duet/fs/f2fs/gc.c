@@ -429,9 +429,9 @@ int register_with_duet(struct f2fs_sb_info *sbi)
 		return -ENODEV;
 	}
 
-	err = duet_register(&sbi->duet_task_id, "f2fs-gc",
-				DUET_PAGE_EXISTS | DUET_PAGE_FLUSHED,
-				sbi->blocksize, sbi->sb, 0);
+	err = duet_register((char *)sbi->sb,
+			DUET_TASK_KERNEL | DUET_PAGE_EXISTS | DUET_PAGE_FLUSHED,
+			sbi->blocksize, "f2fs-gc", &sbi->duet_task_id);
 	if (err) {
 		printk(KERN_ERR "f2fs: duet-gc: "
 			"failed to register with the duet framework.\n");
