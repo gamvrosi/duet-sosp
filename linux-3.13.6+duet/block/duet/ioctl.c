@@ -262,16 +262,16 @@ static int duet_ioctl_cmd(void __user *arg)
 		ca->ret = duet_deregister(ca->tid);
 		break;
 
-	case DUET_MARK:
-		ca->ret = duet_mark(ca->tid, ca->itmidx, ca->itmnum);
+	case DUET_SET_DONE:
+		ca->ret = duet_set_done(ca->tid, ca->itmidx, ca->itmnum);
 		break;
 
-	case DUET_UNMARK:
-		ca->ret = duet_unmark(ca->tid, ca->itmidx, ca->itmnum);
+	case DUET_UNSET_DONE:
+		ca->ret = duet_unset_done(ca->tid, ca->itmidx, ca->itmnum);
 		break;
 
-	case DUET_CHECK:
-		ca->ret = duet_check(ca->tid, ca->itmidx, ca->itmnum);
+	case DUET_CHECK_DONE:
+		ca->ret = duet_check_done(ca->tid, ca->itmidx, ca->itmnum);
 		break;
 
 	case DUET_PRINTBIT:

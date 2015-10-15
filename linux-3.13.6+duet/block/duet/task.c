@@ -155,8 +155,8 @@ int duet_print_events(__u8 taskid)
 }
 EXPORT_SYMBOL_GPL(duet_print_events);
 
-/* Checks whether items in the [start, start+len) range are done */
-int duet_check(__u8 taskid, __u64 start, __u32 len)
+/* Checks whether items in the [idx, idx+count) range are done */
+int duet_check_done(__u8 taskid, __u64 idx, __u32 count)
 {
 	int ret = 0;
 	struct duet_task *task;
@@ -168,7 +168,7 @@ int duet_check(__u8 taskid, __u64 start, __u32 len)
 	if (!task)
 		return -ENOENT;
 
-	ret = bittree_check(&task->bittree, start, len);
+	ret = bittree_check(&task->bittree, idx, count);
 
 	/* decref and wake up cleaner if needed */
 	if (atomic_dec_and_test(&task->refcount))
@@ -176,10 +176,10 @@ int duet_check(__u8 taskid, __u64 start, __u32 len)
 
 	return ret;
 }
-EXPORT_SYMBOL_GPL(duet_check);
+EXPORT_SYMBOL_GPL(duet_check_done);
 
-/* Unmarks items in the [start, start+len) range, i.e. not done */
-int duet_unmark(__u8 taskid, __u64 start, __u32 len)
+/* Unmarks items in the [idx, idx+count) range, i.e. not done */
+int duet_unset_done(__u8 taskid, __u64 idx, __u32 count)
 {
 	int ret = 0;
 	struct duet_task *task;
@@ -191,7 +191,7 @@ int duet_unmark(__u8 taskid, __u64 start, __u32 len)
 	if (!task)
 		return -ENOENT;
 
-	ret = bittree_unmark(&task->bittree, start, len);
+	ret = bittree_unmark(&task->bittree, idx, count);
 
 	/* decref and wake up cleaner if needed */
 	if (atomic_dec_and_test(&task->refcount))
@@ -199,10 +199,10 @@ int duet_unmark(__u8 taskid, __u64 start, __u32 len)
 
 	return ret;
 }
-EXPORT_SYMBOL_GPL(duet_unmark);
+EXPORT_SYMBOL_GPL(duet_unset_done);
 
-/* Mark items in the [start, start+len) range, i.e. done */
-int duet_mark(__u8 taskid, __u64 start, __u32 len)
+/* Mark items in the [idx, idx+count) range, i.e. done */
+int duet_set_done(__u8 taskid, __u64 idx, __u32 count)
 {
 	int ret = 0;
 	struct duet_task *task;
@@ -214,7 +214,7 @@ int duet_mark(__u8 taskid, __u64 start, __u32 len)
 	if (!task)
 		return -ENOENT;
 
-	ret = bittree_mark(&task->bittree, start, len);
+	ret = bittree_mark(&task->bittree, idx, count);
 
 	/* decref and wake up cleaner if needed */
 	if (atomic_dec_and_test(&task->refcount))
@@ -222,7 +222,7 @@ int duet_mark(__u8 taskid, __u64 start, __u32 len)
 
 	return ret;
 }
-EXPORT_SYMBOL_GPL(duet_mark);
+EXPORT_SYMBOL_GPL(duet_set_done);
 
 /* Properly allocate and initialize a task struct */
 static int duet_task_init(struct duet_task **task, const char *name,

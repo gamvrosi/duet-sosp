@@ -149,7 +149,7 @@ again:
 		goto iput_out;
 	}
 
-	if (duet_mark(dctx->taskid, inode->i_ino, 1)) {
+	if (duet_set_done(dctx->taskid, inode->i_ino, 1)) {
 		printk(KERN_ERR "duet-defrag: failed to mark inode %lu\n",
 			inode->i_ino);
 		ret = 0;
@@ -263,7 +263,7 @@ static int defrag_subvol(struct defrag_ctx *dctx)
 #ifdef CONFIG_BTRFS_DUET_DEFRAG
 		/* Check if we've already processed this inode */
 		if (duet_online() && dctx->taskid &&
-		    duet_check(dctx->taskid, found_key.objectid, 1) == 1) {
+		    duet_check_done(dctx->taskid, found_key.objectid, 1) == 1) {
 			defrag_dbg(KERN_INFO "btrfs defrag: skipping inode "
 					"%llu\n", dctx->defrag_progress);
 			goto next;
@@ -287,7 +287,7 @@ static int defrag_subvol(struct defrag_ctx *dctx)
 #ifdef CONFIG_BTRFS_DUET_DEFRAG
 		/* Mark the inode as done */
 		if (duet_online() && dctx->taskid &&
-		    duet_mark(dctx->taskid, found_key.objectid, 1)) {
+		    duet_set_done(dctx->taskid, found_key.objectid, 1)) {
 			printk(KERN_ERR "duet: failed to mark inode %llu\n",
 				found_key.objectid);
 			iput(inode);

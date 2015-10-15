@@ -163,7 +163,7 @@ int duet_check_done(int duet_fd, int tid, __u64 idx, __u32 count)
 	}
 
 	memset(&args, 0, sizeof(args));
-	args.cmd_flags = DUET_CHECK;
+	args.cmd_flags = DUET_CHECK_DONE;
 	args.tid = tid;
 	args.itmidx = idx;
 	args.itmnum = count;
@@ -190,7 +190,7 @@ int duet_set_done(int duet_fd, int tid, __u64 idx, __u32 count)
 	}
 
 	memset(&args, 0, sizeof(args));
-	args.cmd_flags = DUET_MARK;
+	args.cmd_flags = DUET_SET_DONE;
 	args.tid = tid;
 	args.itmidx = idx;
 	args.itmnum = count;
@@ -216,7 +216,7 @@ int duet_unset_done(int duet_fd, int tid, __u64 idx, __u32 count)
 	}
 
 	memset(&args, 0, sizeof(args));
-	args.cmd_flags = DUET_UNMARK;
+	args.cmd_flags = DUET_UNSET_DONE;
 	args.tid = tid;
 	args.itmidx = idx;
 	args.itmnum = count;

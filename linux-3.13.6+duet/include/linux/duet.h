@@ -76,9 +76,9 @@ int duet_register(char *path, __u8 evtmask, __u32 bitrange, const char *name,
 		  __u8 *taskid);
 int duet_deregister(__u8 taskid);
 int duet_fetch(__u8 taskid, struct duet_item *items, __u16 *count);
-int duet_check(__u8 taskid, __u64 start, __u32 len);
-int duet_mark(__u8 taskid, __u64 start, __u32 len);
-int duet_unmark(__u8 taskid, __u64 start, __u32 len);
+int duet_check_done(__u8 taskid, __u64 idx, __u32 count);
+int duet_set_done(__u8 taskid, __u64 idx, __u32 count);
+int duet_unset_done(__u8 taskid, __u64 idx, __u32 count);
 int duet_online(void);
 
 /* Framework debugging functions */

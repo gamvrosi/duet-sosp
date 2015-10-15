@@ -3764,7 +3764,7 @@ static int process_duet_events(struct send_ctx *sctx)
 		lofft = em->block_start + (itm.idx << PAGE_CACHE_SHIFT) -
 			em->start;
 		free_extent_map(em);
-		if (duet_check(sctx->taskid, lofft, PAGE_CACHE_SIZE) == 1) {
+		if (duet_check_done(sctx->taskid, lofft, PAGE_CACHE_SIZE) == 1) {
 			send_dbg(KERN_INFO "duet-send: lrange [%llu, %llu] "
 				"found marked\n", lofft, lofft+PAGE_CACHE_SIZE);
 			goto idone;
@@ -3795,10 +3795,9 @@ static int process_duet_events(struct send_ctx *sctx)
 		page_cache_release(page);
 
 		/* Mark sent range to ensure we won't send it again. */
-		if (duet_mark(sctx->taskid, lofft, PAGE_CACHE_SIZE) == -1) {
+		if (duet_set_done(sctx->taskid, lofft, PAGE_CACHE_SIZE) == -1)
 			send_dbg(KERN_INFO "duet-send: failed to mark lrange "
 				"[%llu, %llu]\n", lofft, lofft+PAGE_CACHE_SIZE);
-		}
 
 		/*
 		 * Now iterate through all inodes that refer to this extent,
@@ -3867,7 +3866,7 @@ unset_next:
 		goto idone;
 
 	lofft = em->block_start + (idx << PAGE_CACHE_SHIFT) - em->start;
-	while (len && duet_check(sctx->taskid, lofft, PAGE_CACHE_SIZE) == 1) {
+	while (len && duet_check_done(sctx->taskid, lofft, PAGE_CACHE_SIZE) == 1) {
 		idx++;
 		if (len < (idx << PAGE_CACHE_SHIFT) - offset)
 			goto edone;
@@ -3897,7 +3896,7 @@ set_next:
 		goto idone;
 
 	lofft = em->block_start + (idx << PAGE_CACHE_SHIFT) - em->start;
-	while (rlen && duet_check(sctx->taskid, lofft, PAGE_CACHE_SIZE) != 1) {
+	while (rlen && duet_check_done(sctx->taskid, lofft, PAGE_CACHE_SIZE) != 1) {
 		idx++;
 		if (rlen < PAGE_CACHE_SIZE) {
 			len += rlen;

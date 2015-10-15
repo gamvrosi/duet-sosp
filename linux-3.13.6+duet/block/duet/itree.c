@@ -247,7 +247,7 @@ int itree_update(struct inode_tree *itree, __u8 taskid,
 		 * and skip over processed inodes.
 		 */
 		if (!(itm.state & (DUET_PAGE_ADDED | DUET_PAGE_REMOVED)) ||
-		    duet_check(taskid, itm.ino, 1) == 1)
+		    duet_check_done(taskid, itm.ino, 1) == 1)
 			continue;
 
 		/* Get the inode. Should return 1 if the inode is no longer
@@ -325,7 +325,7 @@ again:
 	duet_dbg(KERN_ERR "itree: fetch picked inode %lu\n", ino);
 
 	/* Check if we've processed it before */
-	if (duet_check(taskid, ino, 1) == 1)
+	if (duet_check_done(taskid, ino, 1) == 1)
 		goto again;
 
 	printk(KERN_ERR "itree: fetching inode %lu\n", ino);

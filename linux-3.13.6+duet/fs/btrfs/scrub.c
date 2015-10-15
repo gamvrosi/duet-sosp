@@ -725,7 +725,7 @@ static int process_duet_events(struct scrub_ctx *sctx)
 			scrub_dbg(KERN_INFO "duet-scrub: marking [%llu, %llu] --"
 				" dstart = %llu\n",
 				dstart+pstart, dstart+pstart+len, dstart);
-			if (duet_mark(sctx->taskid, dstart+pstart, len) == -1)
+			if (duet_set_done(sctx->taskid, dstart+pstart, len) == -1)
 				printk(KERN_ERR "duet-scrub: failed to mark"
 					" [%llu, %llu] range for task #%d\n",
 					dstart + pstart, dstart + pstart +
@@ -734,7 +734,7 @@ static int process_duet_events(struct scrub_ctx *sctx)
 			scrub_dbg(KERN_INFO "duet-scrub: clearing [%llu, %llu] --"
 				" dstart = %llu\n",
 				dstart+pstart, dstart+pstart+len, dstart);
-			if (duet_unmark(sctx->taskid, dstart+pstart, len) == -1)
+			if (duet_unset_done(sctx->taskid, dstart+pstart, len) == -1)
 				printk(KERN_ERR "duet-scrub: failed to unmark"
 					" [%llu, %llu] range for task #%d\n",
 					dstart + pstart, dstart + pstart +
@@ -3114,7 +3114,7 @@ static int scrub_extent(struct scrub_ctx *sctx, u64 logical, u64 len,
 		scrub_dbg(KERN_INFO "duet-scrub: checking [%llu, %llu] --"
 			" dstart = %llu\n",
 			dstart+physical, dstart+physical+l, dstart);
-		if (!sctx->is_dev_replace && (duet_check(sctx->taskid,
+		if (!sctx->is_dev_replace && (duet_check_done(sctx->taskid,
 		    dstart + physical, l) == 1)) {
 			scrub_dbg(KERN_INFO "duet-scrub: found!\n");
 			goto behind_scrub_pages;
@@ -3324,7 +3324,7 @@ vanilla_reada:
 			ret = 0;
 			while (logical < logic_end) {
 				/* Check if this stripe should be skipped */
-				if (!duet_check(sctx->taskid, dstart + physical,
+				if (!duet_check_done(sctx->taskid, dstart + physical,
 				    p_increment)) {
 					ret = 1;
 					break;
@@ -3340,7 +3340,7 @@ vanilla_reada:
 
 			while (logical <= logic_end) {
 				/* Check if this stripe should _not_ be skipped */
-				if (!duet_check(sctx->taskid, dstart + physical,
+				if (!duet_check_done(sctx->taskid, dstart + physical,
 				    p_increment)) {
 					break;
 				} else {
@@ -3613,7 +3613,7 @@ again:
 				dstart +extent_physical,
 				dstart +extent_physical + extent_len,
 				dstart);
-			if (!is_dev_replace && (duet_check(sctx->taskid,
+			if (!is_dev_replace && (duet_check_done(sctx->taskid,
 			    dstart + extent_physical, extent_len) == 1)) {
 				scrub_dbg(KERN_INFO "duet-scrub: found!\n");
 				tot_skipped++;

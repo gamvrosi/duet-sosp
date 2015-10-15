@@ -299,7 +299,7 @@ static int cmd_task_mark(int fd, int argc, char **argv)
 	struct duet_ioctl_cmd_args args;
 
 	memset(&args, 0, sizeof(args));
-	args.cmd_flags = DUET_MARK;
+	args.cmd_flags = DUET_SET_DONE;
 
 	optind = 1;
 	while ((c = getopt(argc, argv, "i:o:l:")) != -1) {
@@ -354,7 +354,7 @@ static int cmd_task_unmark(int fd, int argc, char **argv)
 	struct duet_ioctl_cmd_args args;
 
 	memset(&args, 0, sizeof(args));
-	args.cmd_flags = DUET_UNMARK;
+	args.cmd_flags = DUET_UNSET_DONE;
 
 	optind = 1;
 	while ((c = getopt(argc, argv, "i:o:l:")) != -1) {
@@ -409,7 +409,7 @@ static int cmd_task_check(int fd, int argc, char **argv)
 	struct duet_ioctl_cmd_args args;
 
 	memset(&args, 0, sizeof(args));
-	args.cmd_flags = DUET_CHECK;
+	args.cmd_flags = DUET_CHECK_DONE;
 
 	optind = 1;
 	while ((c = getopt(argc, argv, "i:o:l:")) != -1) {

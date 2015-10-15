@@ -32,9 +32,9 @@
 #define DUET_STOP		2
 #define DUET_REGISTER		3
 #define DUET_DEREGISTER		4
-#define DUET_MARK		5
-#define DUET_UNMARK		6
-#define DUET_CHECK		7
+#define DUET_SET_DONE		5
+#define DUET_UNSET_DONE		6
+#define DUET_CHECK_DONE		7
 #define DUET_PRINTBIT		8
 #define DUET_PRINTITEM		9
 #define DUET_GETPATH		10
