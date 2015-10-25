@@ -926,7 +926,7 @@ struct scrub_ctx *scrub_setup_ctx(struct btrfs_device *dev, u64 deadline,
 
 	/* Register the task with the Duet framework */
 	if (duet_online() && duet_register((char *)fs_info->sb,
-	    DUET_TASK_KERNEL | DUET_PAGE_ADDED | DUET_PAGE_DIRTY,
+	    DUET_REG_SBLOCK | DUET_PAGE_ADDED | DUET_PAGE_DIRTY,
 	    fs_info->sb->s_blocksize, "btrfs-scrub", &sctx->taskid)) {
 		printk(KERN_ERR "scrub: failed to register with duet\n");
 		return ERR_PTR(-EFAULT);

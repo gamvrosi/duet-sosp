@@ -140,7 +140,7 @@ static int cmd_debug_getpath(int fd, int argc, char **argv)
 	struct duet_ioctl_cmd_args args;
 
 	memset(&args, 0, sizeof(args));
-	args.cmd_flags = DUET_GETPATH;
+	args.cmd_flags = DUET_GET_PATH;
 
 	if (argc != 3)
 		usage(cmd_debug_getpath_usage);

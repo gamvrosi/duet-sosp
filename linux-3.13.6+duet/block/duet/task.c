@@ -75,14 +75,14 @@ again:
 				continue;
 
 			/* If we haven't seen this inode before, process it. */
-			if (bittree_check(&inodetree, inode->i_ino, 1) != 1) {
+			if (bittree_check(&inodetree, inode->i_ino, 1, NULL) != 1) {
 				spin_lock(&inode->i_lock);
 				__iget(inode);
 				spin_unlock(&inode->i_lock);
 
 				spin_unlock(duet_inode_hash_lock);
 				process_inode(task, inode);
-				bittree_mark(&inodetree, inode->i_ino, 1);
+				bittree_set_done(&inodetree, inode->i_ino, 1);
 				iput(inode);
 				goto again;
 			}
@@ -168,7 +168,7 @@ int duet_check_done(__u8 taskid, __u64 idx, __u32 count)
 	if (!task)
 		return -ENOENT;
 
-	ret = bittree_check(&task->bittree, idx, count);
+	ret = bittree_check(&task->bittree, idx, count, task);
 
 	/* decref and wake up cleaner if needed */
 	if (atomic_dec_and_test(&task->refcount))
@@ -191,7 +191,7 @@ int duet_unset_done(__u8 taskid, __u64 idx, __u32 count)
 	if (!task)
 		return -ENOENT;
 
-	ret = bittree_unmark(&task->bittree, idx, count);
+	ret = bittree_unset_done(&task->bittree, idx, count);
 
 	/* decref and wake up cleaner if needed */
 	if (atomic_dec_and_test(&task->refcount))
@@ -214,7 +214,7 @@ int duet_set_done(__u8 taskid, __u64 idx, __u32 count)
 	if (!task)
 		return -ENOENT;
 
-	ret = bittree_mark(&task->bittree, idx, count);
+	ret = bittree_set_done(&task->bittree, idx, count);
 
 	/* decref and wake up cleaner if needed */
 	if (atomic_dec_and_test(&task->refcount))
@@ -247,10 +247,9 @@ static int duet_task_init(struct duet_task **task, const char *name,
 	init_waitqueue_head(&(*task)->cleaner_queue);
 
 	/* Initialize bitmap tree */
-	if (bitrange)
-		bittree_init(&(*task)->bittree, bitrange);
-	else
-		bittree_init(&(*task)->bittree, 4096);
+	if (!bitrange)
+		bitrange = 4096;
+	bittree_init(&(*task)->bittree, bitrange);
 
 	/* Initialize hash table bitmap */
 	spin_lock_init(&(*task)->bbmap_lock);
@@ -262,6 +261,10 @@ static int duet_task_init(struct duet_task **task, const char *name,
 		kfree(*task);
 		return -ENOMEM;
 	}
+
+	/* Is this a file or a block task? */
+	(*task)->is_file = ((evtmask & DUET_FILE_TASK) ? 1 : 0);
+	(*task)->bittree.is_file = (*task)->is_file;
 
 	/* Do some sanity checking on event mask. */
 	if (evtmask & DUET_PAGE_EXISTS) {
@@ -280,7 +283,7 @@ static int duet_task_init(struct duet_task **task, const char *name,
 		evtmask |= (DUET_PAGE_DIRTY | DUET_PAGE_FLUSHED);
 	}
 
-	(*task)->evtmask = evtmask;
+	(*task)->evtmask = evtmask & (~DUET_FILE_TASK);
 	(*task)->f_sb = f_sb;
 	(*task)->p_dentry = p_dentry;
 
@@ -463,7 +466,7 @@ int duet_register(char *path, __u8 evtmask, __u32 bitrange, const char *name,
 {
 	int ret;
 
-	if (evtmask & DUET_TASK_KERNEL)
+	if (evtmask & DUET_REG_SBLOCK)
 		ret = __register_ktask(path, evtmask, bitrange, name, taskid);
 	else
 		ret = __register_utask(path, evtmask, bitrange, name, taskid);

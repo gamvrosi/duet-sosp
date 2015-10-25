@@ -430,7 +430,7 @@ int register_with_duet(struct f2fs_sb_info *sbi)
 	}
 
 	err = duet_register((char *)sbi->sb,
-			DUET_TASK_KERNEL | DUET_PAGE_EXISTS | DUET_PAGE_FLUSHED,
+			DUET_REG_SBLOCK | DUET_PAGE_EXISTS | DUET_PAGE_FLUSHED,
 			sbi->blocksize, "f2fs-gc", &sbi->duet_task_id);
 	if (err) {
 		printk(KERN_ERR "f2fs: duet-gc: "

@@ -21,7 +21,7 @@
 #include <linux/ioctl.h>
 #include "common.h"
 
-//#define MAX_TASKS	16
+//#define MAX_TASKS	15
 #define MAX_ITEMS	512
 #define MAX_NAME	128
 #define MAX_PATH	1024
@@ -37,7 +37,7 @@
 #define DUET_CHECK_DONE		7
 #define DUET_PRINTBIT		8
 #define DUET_PRINTITEM		9
-#define DUET_GETPATH		10
+#define DUET_GET_PATH		10
 
 /* We return up to MAX_ITEMS at a time (9b each). */
 struct duet_ioctl_fetch_args {

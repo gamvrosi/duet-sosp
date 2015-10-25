@@ -38,10 +38,21 @@ enum {
 	DUET_STATUS_CLEAN,
 };
 
+/*
+ * Red-black bitmap tree node.
+ * Represents the range starting from idx. For block tasks, only the done
+ * bitmap is used. For file tasks, the relv (relevant) is also used, and the
+ * following semantics apply:
+ * - !RELV && !DONE: The item has not been encountered yet
+ * - !RELV &&  DONE: The item is not relevant to the task
+ * -  RELV && !DONE: The item is relevant, but not processed
+ * -  RELV &&  DONE: The item is relevant, and has already been processed
+ */
 struct bmap_rbnode {
 	__u64		idx;
 	struct rb_node	node;
-	unsigned long	*bmap;
+	unsigned long	*relv;
+	unsigned long	*done;
 };
 
 struct item_hnode {
@@ -52,6 +63,7 @@ struct item_hnode {
 };
 
 struct duet_bittree {
+	__u8			is_file;	/* Task type, as in duet_task */
 	__u32			range;
 	spinlock_t		lock;
 	struct rb_root		root;
@@ -63,6 +75,7 @@ struct duet_bittree {
 
 struct duet_task {
 	__u8			id;
+	__u8			is_file;	/* Task type: set if file task */
 	char			name[MAX_NAME];
 	struct list_head	task_list;
 	wait_queue_head_t	cleaner_queue;
@@ -110,8 +123,8 @@ extern duet_hook_t *duet_hook_cache_fp;
 extern unsigned int *duet_i_hash_shift;
 extern struct hlist_head **duet_inode_hashtable;
 extern spinlock_t *duet_inode_hash_lock;
-extern char *d_get_path(struct inode *cnode, struct dentry *p_dentry,
-			char *buf, int len);
+extern int d_find_path(struct inode *cnode, struct dentry *p_dentry,
+			int getpath, char *buf, int len, char **p);
 
 /* hash.c */
 int hash_init(void);
@@ -128,11 +141,17 @@ void duet_task_dispose(struct duet_task *task);
 int duet_bootstrap(void);
 int duet_shutdown(void);
 long duet_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
+int duet_find_path(struct duet_task *task, unsigned long inum, int getpath,
+	char *path);
 
 /* bittree.c */
-inline int bittree_check(struct duet_bittree *bittree, __u64 start, __u32 len);
-inline int bittree_mark(struct duet_bittree *bittree, __u64 start, __u32 len);
-inline int bittree_unmark(struct duet_bittree *bittree, __u64 start, __u32 len);
+int bittree_check(struct duet_bittree *bt, __u64 idx, __u32 len,
+	struct duet_task *task);
+inline int bittree_set_done(struct duet_bittree *bt, __u64 idx, __u32 len);
+inline int bittree_unset_done(struct duet_bittree *bt, __u64 idx, __u32 len);
+/*inline int bittree_set_relevance(struct duet_bittree *bt, __u64 idx, __u32 len,
+	int is_relevant);*/
+
 int bittree_print(struct duet_task *task);
 void bittree_init(struct duet_bittree *bittree, __u32 range);
 void bittree_destroy(struct duet_bittree *bittree);

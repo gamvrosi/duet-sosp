@@ -39,16 +39,17 @@
  * returning DIRTY or FLUSHED events if the state of the page changes since the
  * last fetch.
  */
-#define DUET_PAGE_ADDED		(1 << 0)
-#define DUET_PAGE_REMOVED	(1 << 1)
-#define DUET_PAGE_DIRTY		(1 << 2)
-#define DUET_PAGE_FLUSHED	(1 << 3)
-#define DUET_PAGE_MODIFIED	(1 << 4)
-#define DUET_PAGE_EXISTS	(1 << 5)
-#define DUET_USE_IMAP		(1 << 6)
+#define DUET_PAGE_ADDED		0x01
+#define DUET_PAGE_REMOVED	0x02
+#define DUET_PAGE_DIRTY		0x04
+#define DUET_PAGE_FLUSHED	0x08
+#define DUET_PAGE_MODIFIED	0x10
+#define DUET_PAGE_EXISTS	0x20
 
-#define DUET_MASK_VALID		(1 << 7) /* Used only for page state */
-#define DUET_TASK_KERNEL	(1 << 7) /* Used only during registration */
+#define DUET_MASK_VALID		0x40 /* Used only for page state */
+#define DUET_REG_SBLOCK		0x40 /* Used only during registration */
+
+#define DUET_FILE_TASK		0x80
 
 /*
  * Item struct returned for processing. We return 6 bits. For state-based duet,

@@ -243,7 +243,7 @@ int duet_get_path(int duet_fd, int tid, unsigned long ino, char *path)
 	}
 
 	memset(&args, 0, sizeof(args));
-	args.cmd_flags = DUET_GETPATH;
+	args.cmd_flags = DUET_GET_PATH;
 	args.tid = tid;
 	args.c_ino = ino;
 

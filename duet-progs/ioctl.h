@@ -21,8 +21,8 @@
 #include <asm/types.h>
 #include <sys/ioctl.h>
 
-#define MAX_TASKS	32
-#define MAX_ITEMS	256
+#define MAX_TASKS	15
+#define MAX_ITEMS	512
 #define MAX_NAME	128
 #define MAX_PATH	1024
 #define DUET_IOC_MAGIC	0xDE
@@ -37,7 +37,7 @@
 #define DUET_CHECK_DONE		7
 #define DUET_PRINTBIT		8
 #define DUET_PRINTITEM		9
-#define DUET_GETPATH		10
+#define DUET_GET_PATH		10
 
 /* Item struct returned for processing */
 struct duet_item {

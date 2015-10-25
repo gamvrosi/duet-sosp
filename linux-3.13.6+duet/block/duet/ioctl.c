@@ -131,49 +131,57 @@ static int find_get_inode(struct super_block *sb, unsigned long c_ino,
 	return 1;
 }
 
-static int duet_getpath(__u8 tid, unsigned long c_ino, char *cpath)
+int duet_find_path(struct duet_task *task, unsigned long inum, int getpath,
+	char *path)
 {
 	int len, ret = 0;
-	struct duet_task *task = duet_find_task(tid);
-	struct inode *c_inode;
+	struct inode *ino;
 	char *p;
 
-	if (!task) {
-		printk(KERN_ERR "duet_getpath: invalid taskid (%d)\n", tid);
-		return 1;	
-	}
-
-	if (!task->p_dentry) {
-		printk(KERN_ERR "duet_getpath: task has no parent dentry\n");
+	if (!task || !task->p_dentry) {
+		printk(KERN_ERR "duet_find_path: invalid task registration\n");
 		return 1;
 	}
 
 	/* First, we need to find struct inode for child and parent */
-	if (find_get_inode(task->f_sb, c_ino, &c_inode)) {
-		printk(KERN_ERR "duet_getpath: failed to find child inode\n");
-		ret = 1;
-		goto done;
+	if (find_get_inode(task->f_sb, inum, &ino)) {
+		printk(KERN_ERR "duet_find_path: failed to find child inode\n");
+		return 1;
 	}
 
 	/* Now get the path */
 	len = MAX_PATH;
-	p = d_get_path(c_inode, task->p_dentry, task->pathbuf, len);
-	if (IS_ERR(p)) {
-		printk(KERN_INFO "duet_getpath: parent dentry not found\n");
-		ret = 1;
-		cpath[0] = '\0';
-	} else if (!p) {
-		duet_dbg(KERN_INFO "duet_getpath: no connecting path found\n");
-		ret = 0;
-		cpath[0] = '\0';
-	} else {
-		duet_dbg(KERN_INFO "duet_getpath: got %s\n", p);
+	ret = d_find_path(ino, task->p_dentry, getpath, task->pathbuf, len, &p);
+	if (ret == 1) {
+		printk(KERN_INFO "duet_find_path: parent dentry not found\n");
+		if (getpath)
+			path[0] = '\0';
+	} else if (ret == -1) {
+		duet_dbg(KERN_INFO "duet_find_path: no common ancestor\n");
+		if (getpath)
+			path[0] = '\0';
+	} else if (getpath) {
+		duet_dbg(KERN_INFO "duet_find_path: got %s\n", p);
 		p++;
-		memcpy(cpath, p, len - (p - task->pathbuf) + 1);
+		memcpy(path, p, len - (p - task->pathbuf) + 1);
 	}
 
-	iput(c_inode);
-done:
+	iput(ino);
+	return ret;
+}
+
+static int duet_get_path(__u8 tid, unsigned long c_ino, char *cpath)
+{
+	int ret = 0;
+	struct duet_task *task = duet_find_task(tid);
+
+	if (!task) {
+		printk(KERN_ERR "duet_get_path: invalid taskid (%d)\n", tid);
+		return 1;	
+	}
+
+	ret = duet_find_path(task, c_ino, 1, cpath);
+
 	/* decref and wake up cleaner if needed */
 	if (atomic_dec_and_test(&task->refcount))
 		wake_up(&task->cleaner_queue);
@@ -254,8 +262,8 @@ static int duet_ioctl_cmd(void __user *arg)
 		break;
 
 	case DUET_REGISTER:
-		ca->ret = duet_register(ca->path, ca->evtmask | DUET_USE_IMAP,
-					ca->bitrange, ca->name, &ca->tid);
+		ca->ret = duet_register(ca->path, ca->evtmask, ca->bitrange,
+					ca->name, &ca->tid);
 		break;
 
 	case DUET_DEREGISTER:
@@ -282,8 +290,8 @@ static int duet_ioctl_cmd(void __user *arg)
 		ca->ret = duet_print_events(ca->tid);
 		break;
 
-	case DUET_GETPATH:
-		ca->ret = duet_getpath(ca->tid, ca->c_ino, ca->cpath);
+	case DUET_GET_PATH:
+		ca->ret = duet_get_path(ca->tid, ca->c_ino, ca->cpath);
 		break;
 
 	default:

@@ -105,9 +105,9 @@ void duet_hook(__u8 evtcode, void *data)
 			continue;
 		}
 
-		/* Use the inode bitmap to filter this event out, if needed */
-		if ((cur->evtmask & DUET_USE_IMAP) &&
-		   (bittree_check(&cur->bittree, inode->i_ino, 1) == 1))
+		/* For file tasks, use the inode bitmap to filter out event */
+		if (cur->evtmask & DUET_FILE_TASK &&
+		    bittree_check(&cur->bittree, inode->i_ino, 1, cur) == 1)
 			continue;
 
 		/* Update the hash table */

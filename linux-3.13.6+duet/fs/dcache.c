@@ -3456,10 +3456,10 @@ void __init vfs_caches_init(unsigned long mempages)
  * parent pointer references will keep the dentry chain alive as long as no
  * rename operation is performed.
  */
-static int __d_get_path(struct dentry *tgt, struct dentry *par,
+static int __d_get_path(struct dentry *tgt, struct dentry *par, int getpath,
 			char **buffer, int *buflen)
 {
-	struct dentry *dentry;
+	struct dentry *dentry, *parent;
 	int error = 0;
 	unsigned seq, m_seq = 0;
 	char *bptr;
@@ -3477,8 +3477,6 @@ restart:
 	dentry = tgt;
 	read_seqbegin_or_lock(&rename_lock, &seq);
 	while (dentry != par) {
-		struct dentry *parent;
-
 		if (IS_ROOT(dentry)) {
 			/*
 			 * Filesystems needing to implement special "root names"
@@ -3490,19 +3488,21 @@ restart:
 				     (int) dentry->d_name.len,
 				     dentry->d_name.name);
 			}
-			if (!error)
-				error = 1;
+			error = 1;
 			break;
 		}
 
 		parent = dentry->d_parent;
 		prefetch(parent);
-		error = prepend_name(&bptr, &blen, &dentry->d_name);
-		if (error)
-			break;
+		if (getpath) {
+			error = prepend_name(&bptr, &blen, &dentry->d_name);
+			if (error)
+				break;
+		}
 
 		dentry = parent;
 	}
+
 	if (!(seq & 1))
 		rcu_read_unlock();
 	if (need_seqretry(&rename_lock, seq)) {
@@ -3519,47 +3519,57 @@ restart:
 	}
 	done_seqretry(&mount_lock, m_seq);
 
-	if (error >= 0 && bptr == *buffer) {
-		if (--blen < 0)
-			error = -ENAMETOOLONG;
-		else
-			*--bptr = '/';
+	if (getpath) {
+		if (error >= 0 && bptr == *buffer) {
+			if (--blen < 0)
+				error = -ENAMETOOLONG;
+			else
+				*--bptr = '/';
+		}
+		*buffer = bptr;
+		*buflen = blen;
 	}
-	*buffer = bptr;
-	*buflen = blen;
+
 	return error;
 }
 
 /*
+ * Tries to find a path from cnode to p_dentry. If getpath is not zero, we also
+ * return the full path to it in buf. p points to start of path within buf.
+ *
  * We assume that:
  * 1) The p_dentry points to the parent dir. No hard links, no hard feelings.
- * 2) You already hold a refcount on both c_inode and p_inode, so we go lockless
+ * 2) You already hold a refcount on c_inode and p_inode, so we won't bother
+ *
+ * Return values: success (0), not found (1), error (<0)
  */
-char *d_get_path(struct inode *cnode, struct dentry *p_dentry, char *buf, int len)
+int d_find_path(struct inode *cnode, struct dentry *p_dentry, int getpath,
+	char *buf, int len, char **p)
 {
-	char *res = NULL;
 	int tlen, ret = 1;
 	struct dentry *alias, *c_dentry = NULL;
 
 	if (!hlist_empty(&cnode->i_dentry)) {
 		hlist_for_each_entry(alias, &cnode->i_dentry, d_alias) {
- 			if (!(IS_ROOT(alias) && (alias->d_flags & DCACHE_DISCONNECTED))) {
+ 			if (!(IS_ROOT(alias) &&
+			    (alias->d_flags & DCACHE_DISCONNECTED))) {
 				c_dentry = alias;
-				res = buf + len;
-				tlen = len;
-				prepend(&res, &tlen, "\0", 1);
+
+				if (getpath) {
+					*p = buf + len;
+					tlen = len;
+					prepend(p, &tlen, "\0", 1);
+				}
+
 				ret = __d_get_path(c_dentry, p_dentry,
-						&res, &tlen);
+						getpath, p, &tlen);
 				if (!ret)
 					break;
 			}
 		}
 	}
 
-	if (ret)
-		res = NULL;
-
-	return res;
+	return ret;
 }
-EXPORT_SYMBOL(d_get_path);
+EXPORT_SYMBOL(d_find_path);
 #endif /* CONFIG_DUET */
