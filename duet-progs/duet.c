@@ -20,10 +20,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
 #include "commands.h"
 #include "version.h"
-#include "utils.h"
 
 static const char * const duet_cmd_group_usage[] = {
 	"duet [--help] [--version] <group> [<group>...] <command> [<args>]",
@@ -166,26 +164,6 @@ int check_argc_exact(int nargs, int expected)
 	return nargs != expected;
 }
 
-/*int check_argc_min(int nargs, int expected)
-{
-	if (nargs < expected) {
-		fprintf(stderr, "%s: too few arguments\n", argv0_buf);
-		return 1;
-	}
-
-	return 0;
-}
-
-int check_argc_max(int nargs, int expected)
-{
-	if (nargs > expected) {
-		fprintf(stderr, "%s: too many arguments\n", argv0_buf);
-		return 1;
-	}
-
-	return 0;
-}*/
-
 static const struct cmd_group duet_cmd_group;
 
 static const char * const cmd_help_usage[] = {
@@ -258,7 +236,7 @@ int main(int argc, char **argv)
 	const struct cmd_struct *cmd;
 
 	/* Open the duet device */
-	fd = open_dev();
+	fd = open_duet_dev();
 	if (fd == -1) {
 		fprintf(stderr, "Error: failed to open duet device\n");
 		return -1;
@@ -283,6 +261,6 @@ int main(int argc, char **argv)
 	fixup_argv0(argv, cmd->token);
 	ret = cmd->fn(fd, argc, argv);
 
-	close_dev(fd);
+	close_duet_dev(fd);
 	exit(ret);
 }

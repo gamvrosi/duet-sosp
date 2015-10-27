@@ -20,15 +20,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <errno.h>
-#include "ioctl.h"
 #include "commands.h"
-
-#define DUET_PAGE_ADDED		(1 << 0)
-#define DUET_PAGE_REMOVED	(1 << 1)
-#define DUET_PAGE_DIRTY		(1 << 2)
-#define DUET_PAGE_FLUSHED	(1 << 3)
-#define DUET_PAGE_MODIFIED	(1 << 4)
-#define DUET_PAGE_EXISTS	(1 << 5)
 
 static const char * const task_cmd_group_usage[] = {
 	"duet task <command> [options]",
@@ -115,17 +107,15 @@ static const char * const cmd_task_check_usage[] = {
 
 static int cmd_task_fetch(int fd, int argc, char **argv)
 {
-	int i, c, ret=0;
-	struct duet_ioctl_fetch_args args;
-
-	memset(&args, 0, sizeof(args));
+	int c, count = DUET_MAX_ITEMS, tid = 0, ret = 0;
+	struct duet_item items[DUET_MAX_ITEMS];
 
 	optind = 1;
 	while ((c = getopt(argc, argv, "i:")) != -1) {
 		switch (c) {
 		case 'i':
 			errno = 0;
-			args.tid = (int)strtol(optarg, NULL, 10);
+			tid = (int)strtol(optarg, NULL, 10);
 			if (errno) {
 				perror("strtol: invalid ID");
 				usage(cmd_task_fetch_usage);
@@ -137,16 +127,16 @@ static int cmd_task_fetch(int fd, int argc, char **argv)
 		}
 	}
 
-	if (!args.tid || argc != optind)
+	if (!tid || argc != optind)
 		usage(cmd_task_fetch_usage);
 
-	ret = ioctl(fd, DUET_IOC_FETCH, &args);
+	ret = duet_fetch(fd, tid, items, &count);
 	if (ret < 0) {
 		perror("tasks list ioctl error");
 		usage(cmd_task_fetch_usage);
 	}
 
-	if (args.num == 0) {
+	if (count == 0) {
 		fprintf(stdout, "Received no items.\n");
 		return ret;
 	}
@@ -154,10 +144,9 @@ static int cmd_task_fetch(int fd, int argc, char **argv)
 	/* Print out the list we received */
 	fprintf(stdout, "Inode number\tOffset      \tState   \n"
 			"------------\t------------\t--------\n");
-	for (i=0; i<args.num; i++) {
+	for (c=0; c<count; c++) {
 		fprintf(stdout, "%12lu\t%12lu\t%8x\n",
-			args.itm[i].ino, args.itm[i].idx << 12,
-			args.itm[i].state);
+			items[c].ino, items[c].idx << 12, items[c].state);
 	}
 
 	return ret;
@@ -165,27 +154,12 @@ static int cmd_task_fetch(int fd, int argc, char **argv)
 
 static int cmd_task_list(int fd, int argc, char **argv)
 {
-	int i, ret=0;
-	struct duet_ioctl_list_args args;
+	int ret = 0;
 
-	memset(&args, 0, sizeof(args));
-
-	ret = ioctl(fd, DUET_IOC_TLIST, &args);
+	ret = duet_task_list(fd);
 	if (ret < 0) {
 		perror("tasks list ioctl error");
 		usage(cmd_task_list_usage);
-	}
-
-	/* Print out the list we received */
-	fprintf(stdout, "ID\tTask Name\tBit range\tEvt. mask\n"
-			"--\t---------\t---------\t---------\n");
-	for (i=0; i<MAX_TASKS; i++) {
-		if (!args.tid[i])
-			break;
-
-		fprintf(stdout, "%2d\t%9s\t%9u\t%9u\n",
-			args.tid[i], args.tnames[i], args.bitrange[i],
-			args.evtmask[i]);
 	}
 
 	return ret;
@@ -193,27 +167,26 @@ static int cmd_task_list(int fd, int argc, char **argv)
 
 static int cmd_task_reg(int fd, int argc, char **argv)
 {
-	int c, len=0, ret=0;
-	struct duet_ioctl_cmd_args args;
-
-	memset(&args, 0, sizeof(args));
-	args.cmd_flags = DUET_REGISTER;
+	int c, tid, len=0, ret=0;
+	char path[DUET_MAX_PATH], name[DUET_MAX_NAME];
+	__u8 evtmask = 0;
+	__u32 bitrange = 0;
 
 	optind = 1;
 	while ((c = getopt(argc, argv, "n:b:m:p:")) != -1) {
 		switch (c) {
 		case 'n':
-			len = strnlen(optarg, MAX_NAME);
-			if (len == MAX_NAME || !len) {
+			len = strnlen(optarg, DUET_MAX_NAME);
+			if (len == DUET_MAX_NAME || !len) {
 				fprintf(stderr, "Invalid name (%d)\n", len);
 				usage(cmd_task_reg_usage);
 			}
 
-			memcpy(args.name, optarg, MAX_NAME);
+			memcpy(name, optarg, DUET_MAX_NAME);
 			break;
 		case 'b':
 			errno = 0;
-			args.bitrange = (__u32)strtoll(optarg, NULL, 10);
+			bitrange = (__u32)strtoll(optarg, NULL, 10);
 			if (errno) {
 				perror("strtoll: invalid block size");
 				usage(cmd_task_reg_usage);
@@ -221,7 +194,7 @@ static int cmd_task_reg(int fd, int argc, char **argv)
 			break;
 		case 'm':
 			errno = 0;
-			args.evtmask = (__u8)strtol(optarg, NULL, 10);
+			evtmask = (__u8)strtol(optarg, NULL, 10);
 			if (errno) {
 				perror("strtol: invalid evtmask");
 				usage(cmd_task_reg_usage);
@@ -229,10 +202,9 @@ static int cmd_task_reg(int fd, int argc, char **argv)
 			break;
 		case 'p':
 			errno = 0;
-			memcpy(args.path, optarg, MAX_PATH);
-			if (errno) {
+			memcpy(path, optarg, DUET_MAX_PATH);
+			if (errno)
 				perror("memcpy: invalid path");
-			}
 			break;
 		default:
 			fprintf(stderr, "Unknown option %c\n", (char)c);
@@ -240,34 +212,29 @@ static int cmd_task_reg(int fd, int argc, char **argv)
 		}
 	}
 
-	if (!args.name[0] || argc != optind)
+	if (!name[0] || argc != optind)
 		usage(cmd_task_reg_usage);
 
-	ret = ioctl(fd, DUET_IOC_CMD, &args);
+	ret = duet_register(fd, path, evtmask, bitrange, name, &tid);
 	if (ret < 0) {
 		perror("tasks register ioctl error");
 		usage(cmd_task_reg_usage);
 	}
 
-	fprintf(stdout, "Task '%s' registered successfully under ID %d.\n",
-		args.name, args.tid);
+	fprintf(stdout, "Success registering task '%s' (ID %d)\n", name, tid);
 	return ret;
 }
 
 static int cmd_task_dereg(int fd, int argc, char **argv)
 {
-	int c, ret=0;
-	struct duet_ioctl_cmd_args args;
-
-	memset(&args, 0, sizeof(args));
-	args.cmd_flags = DUET_DEREGISTER;
+	int c, tid = 0, ret = 0;
 
 	optind = 1;
 	while ((c = getopt(argc, argv, "i:")) != -1) {
 		switch (c) {
 		case 'i':
 			errno = 0;
-			args.tid = (int)strtol(optarg, NULL, 10);
+			tid = (int)strtol(optarg, NULL, 10);
 			if (errno) {
 				perror("strtol: invalid ID");
 				usage(cmd_task_dereg_usage);
@@ -279,34 +246,31 @@ static int cmd_task_dereg(int fd, int argc, char **argv)
 		}
 	}
 
-	if (!args.tid || argc != optind)
+	if (!tid || argc != optind)
 		usage(cmd_task_dereg_usage);
 
-	ret = ioctl(fd, DUET_IOC_CMD, &args);
+	ret = duet_deregister(fd, tid);
 	if (ret < 0) {
 		perror("tasks deregister ioctl error");
 		usage(cmd_task_dereg_usage);
 	}
 
-	fprintf(stdout, "Task with ID %d deregistered successfully.\n",
-		args.tid);
+	fprintf(stdout, "Success deregistering Task with ID %d\n", tid);
 	return ret;
 }
 
 static int cmd_task_mark(int fd, int argc, char **argv)
 {
-	int c, ret=0;
-	struct duet_ioctl_cmd_args args;
-
-	memset(&args, 0, sizeof(args));
-	args.cmd_flags = DUET_SET_DONE;
+	int c, tid = 0, ret = 0;
+	__u64 idx = 0;
+	__u32 count = 0;
 
 	optind = 1;
 	while ((c = getopt(argc, argv, "i:o:l:")) != -1) {
 		switch (c) {
 		case 'i':
 			errno = 0;
-			args.tid = (__u8)strtol(optarg, NULL, 10);
+			tid = (__u8)strtol(optarg, NULL, 10);
 			if (errno) {
 				perror("strtol: invalid ID");
 				usage(cmd_task_mark_usage);
@@ -314,7 +278,7 @@ static int cmd_task_mark(int fd, int argc, char **argv)
 			break;
 		case 'o':
 			errno = 0;
-			args.itmidx = (__u64)strtoll(optarg, NULL, 10);
+			idx = (__u64)strtoll(optarg, NULL, 10);
 			if (errno) {
 				perror("strtoll: invalid offset");
 				usage(cmd_task_mark_usage);
@@ -322,7 +286,7 @@ static int cmd_task_mark(int fd, int argc, char **argv)
 			break;
 		case 'l':
 			errno = 0;
-			args.itmnum = (__u32)strtoll(optarg, NULL, 10);
+			count = (__u32)strtoll(optarg, NULL, 10);
 			if (errno) {
 				perror("strtol: invalid length");
 				usage(cmd_task_mark_usage);
@@ -334,34 +298,32 @@ static int cmd_task_mark(int fd, int argc, char **argv)
 		}
 	}
 
-	if (!args.tid || !args.itmnum || argc != optind)
+	if (!tid || !count || argc != optind)
 		usage(cmd_task_mark_usage);
 
-	ret = ioctl(fd, DUET_IOC_CMD, &args);
+	ret = duet_set_done(fd, tid, idx, count);
 	if (ret < 0) {
 		perror("debug addblk ioctl error");
 		usage(cmd_task_mark_usage);
 	}
 
-	fprintf(stdout, "Successfully added blocks [%llu, %llu] to task #%d.\n",
-		args.itmidx, args.itmidx + args.itmnum, args.tid);
+	fprintf(stdout, "Success adding blocks [%llu, %llu] to task #%d.\n",
+		idx, idx + count, tid);
 	return ret;
 }
 
 static int cmd_task_unmark(int fd, int argc, char **argv)
 {
-	int c, ret=0;
-	struct duet_ioctl_cmd_args args;
-
-	memset(&args, 0, sizeof(args));
-	args.cmd_flags = DUET_UNSET_DONE;
+	int c, tid = 0, ret = 0;
+	__u64 idx = 0;
+	__u32 count = 0;
 
 	optind = 1;
 	while ((c = getopt(argc, argv, "i:o:l:")) != -1) {
 		switch (c) {
 		case 'i':
 			errno = 0;
-			args.tid = (__u8)strtol(optarg, NULL, 10);
+			tid = (__u8)strtol(optarg, NULL, 10);
 			if (errno) {
 				perror("strtol: invalid ID");
 				usage(cmd_task_unmark_usage);
@@ -369,7 +331,7 @@ static int cmd_task_unmark(int fd, int argc, char **argv)
 			break;
 		case 'o':
 			errno = 0;
-			args.itmidx = (__u64)strtoll(optarg, NULL, 10);
+			idx = (__u64)strtoll(optarg, NULL, 10);
 			if (errno) {
 				perror("strtoll: invalid offset");
 				usage(cmd_task_unmark_usage);
@@ -377,7 +339,7 @@ static int cmd_task_unmark(int fd, int argc, char **argv)
 			break;
 		case 'l':
 			errno = 0;
-			args.itmnum = (__u32)strtoll(optarg, NULL, 10);
+			count = (__u32)strtoll(optarg, NULL, 10);
 			if (errno) {
 				perror("strtol: invalid length");
 				usage(cmd_task_unmark_usage);
@@ -389,34 +351,32 @@ static int cmd_task_unmark(int fd, int argc, char **argv)
 		}
 	}
 
-	if (!args.tid || !args.itmnum || argc != optind)
+	if (!tid || !count || argc != optind)
 		usage(cmd_task_unmark_usage);
 
-	ret = ioctl(fd, DUET_IOC_CMD, &args);
+	ret = duet_unset_done(fd, tid, idx, count);
 	if (ret < 0) {
 		perror("debug rmblk ioctl error");
 		usage(cmd_task_unmark_usage);
 	}
 
-	fprintf(stdout, "Successfully removed blocks [%llu, %llu] to task #%d.\n",
-		args.itmidx, args.itmidx + args.itmnum, args.tid);
+	fprintf(stdout, "Success removing blocks [%llu, %llu] to task #%d.\n",
+		idx, idx + count, tid);
 	return ret;
 }
 
 static int cmd_task_check(int fd, int argc, char **argv)
 {
-	int c, ret=0;
-	struct duet_ioctl_cmd_args args;
-
-	memset(&args, 0, sizeof(args));
-	args.cmd_flags = DUET_CHECK_DONE;
+	int c, tid = 0, ret = 0;
+	__u64 idx = 0;
+	__u32 count = 0;
 
 	optind = 1;
 	while ((c = getopt(argc, argv, "i:o:l:")) != -1) {
 		switch (c) {
 		case 'i':
 			errno = 0;
-			args.tid = (__u8)strtol(optarg, NULL, 10);
+			tid = (__u8)strtol(optarg, NULL, 10);
 			if (errno) {
 				perror("strtol: invalid ID");
 				usage(cmd_task_check_usage);
@@ -424,7 +384,7 @@ static int cmd_task_check(int fd, int argc, char **argv)
 			break;
 		case 'o':
 			errno = 0;
-			args.itmidx = (__u64)strtoll(optarg, NULL, 10);
+			idx = (__u64)strtoll(optarg, NULL, 10);
 			if (errno) {
 				perror("strtoll: invalid offset");
 				usage(cmd_task_check_usage);
@@ -432,7 +392,7 @@ static int cmd_task_check(int fd, int argc, char **argv)
 			break;
 		case 'l':
 			errno = 0;
-			args.itmnum = (__u32)strtoll(optarg, NULL, 10);
+			count = (__u32)strtoll(optarg, NULL, 10);
 			if (errno) {
 				perror("strtol: invalid length");
 				usage(cmd_task_check_usage);
@@ -444,19 +404,18 @@ static int cmd_task_check(int fd, int argc, char **argv)
 		}
 	}
 
-	if (!args.tid || !args.itmnum || argc != optind)
+	if (!tid || !count || argc != optind)
 		usage(cmd_task_check_usage);
 
-	ret = ioctl(fd, DUET_IOC_CMD, &args);
+	ret = duet_check_done(fd, tid, idx, count);
 	if (ret < 0) {
 		perror("debug chkblk ioctl error");
 		usage(cmd_task_check_usage);
 	}
 
 	fprintf(stdout, "Blocks [%llu, %llu] in task #%d were %sset.\n",
-		args.itmidx, args.itmidx + args.itmnum, args.tid,
-		args.ret ? "" : "not ");
-	return ret;
+		idx, idx + count, tid, ret ? "" : "not ");
+	return 0;
 }
 
 const struct cmd_group task_cmd_group = {

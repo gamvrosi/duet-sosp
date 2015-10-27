@@ -20,67 +20,61 @@
 
 #include <asm/types.h>
 #include <sys/ioctl.h>
+#include "duet.h"
 
-#define MAX_TASKS	15
-#define MAX_ITEMS	512
-#define MAX_NAME	128
-#define MAX_PATH	1024
+/* NB: some definitions have been moved to duet.h */
+#define DUET_MAX_TASKS	15
 #define DUET_IOC_MAGIC	0xDE
 
 /* ioctl codes */
-#define DUET_START		1
-#define DUET_STOP		2
-#define DUET_REGISTER		3
-#define DUET_DEREGISTER		4
-#define DUET_SET_DONE		5
-#define DUET_UNSET_DONE		6
-#define DUET_CHECK_DONE		7
-#define DUET_PRINTBIT		8
-#define DUET_PRINTITEM		9
-#define DUET_GET_PATH		10
-
-/* Item struct returned for processing */
-struct duet_item {
-	unsigned long	ino;
-	unsigned long	idx;
-	__u8		state;
+enum duet_ioctl_codes {
+	DUET_START = 1,
+	DUET_STOP,
+	DUET_REGISTER,
+	DUET_DEREGISTER,
+	DUET_SET_DONE,
+	DUET_UNSET_DONE,
+	DUET_CHECK_DONE,
+	DUET_PRINTBIT,
+	DUET_PRINTITEM,
+	DUET_GET_PATH,
 };
 
 /* We return up to MAX_ITEMS at a time (9b each). */
 struct duet_ioctl_fetch_args {
-	__u8 			tid;		/* in */
-	__u16 			num;		/* in/out */
-	struct duet_item	itm[MAX_ITEMS];	/* out */
+	__u8 			tid;			/* in */
+	__u16 			num;			/* in/out */
+	struct duet_item	itm[DUET_MAX_ITEMS];	/* out */
 };
 
 struct duet_ioctl_list_args {
-	__u8 	tid[MAX_TASKS];			/* out */
-	char 	tnames[MAX_TASKS][MAX_NAME];	/* out */
-	__u32 	bitrange[MAX_TASKS];		/* out */
-	__u8	evtmask[MAX_TASKS];		/* out */
+	__u8 	tid[DUET_MAX_TASKS];			/* out */
+	char 	tnames[DUET_MAX_TASKS][DUET_MAX_NAME];	/* out */
+	__u32 	bitrange[DUET_MAX_TASKS];		/* out */
+	__u8	evtmask[DUET_MAX_TASKS];		/* out */
 };
 
 struct duet_ioctl_cmd_args {
-	__u8 	cmd_flags;			/* in */
-	__u8 	tid;				/* in/out */
-	__u8 	ret;				/* out */
+	__u8 	cmd_flags;				/* in */
+	__u8 	tid;					/* in/out */
+	__u8 	ret;					/* out */
 	union {
 		/* Registration args */
 		struct {
-			__u8 	evtmask;	/* in */
-			__u32 	bitrange;	/* in */
-			char 	name[MAX_NAME];	/* in */
-			char	path[MAX_PATH];	/* in */
+			__u8 	evtmask;		/* in */
+			__u32 	bitrange;		/* in */
+			char 	name[DUET_MAX_NAME];	/* in */
+			char	path[DUET_MAX_PATH];	/* in */
 		};
 		/* (Un)marking and checking args */
 		struct {
-			__u32 	itmnum;		/* in */
-			__u64 	itmidx;		/* in */
+			__u32 	itmnum;			/* in */
+			__u64 	itmidx;			/* in */
 		};
 		/* ino -> path args */
 		struct {
-			unsigned long c_ino;	/* in */
-			char cpath[MAX_PATH];	/* out */
+			unsigned long c_ino;		/* in */
+			char cpath[DUET_MAX_PATH];	/* out */
 		};
 	};	
 };

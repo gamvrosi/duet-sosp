@@ -2,10 +2,10 @@
 #
 # report a useful version for releases
 #
-# Copyright 2014, George Amvrosiadis <gamvrosi@gmail.com>
+# Copyright 2014-2015, George Amvrosiadis <gamvrosi@gmail.com>
 # Released under the GNU GPLv2
  
-v="v0.01"
+v="v1.0"
 
 which git &> /dev/null
 if [ $? == 0 -a -d .git ]; then

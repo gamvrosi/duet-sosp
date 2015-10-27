@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 George Amvrosiadis.  All rights reserved.
+ * Copyright (C) 2014-2015 George Amvrosiadis.  All rights reserved.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public
@@ -15,6 +15,7 @@
  * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
  * Boston, MA 021110-1307, USA.
  */
+#include "duet.h"
 
 #define ARGV0_BUF_SIZE	64
 
@@ -63,13 +64,10 @@ struct cmd_group {
 /* duet.c */
 int prefixcmp(const char *str, const char *prefix);
 int check_argc_exact(int nargs, int expected);
-//int check_argc_min(int nargs, int expected);
-//int check_argc_max(int nargs, int expected);
 int handle_command_group(const struct cmd_group *grp, int fd, int argc,
 			 char **argv);
 
 /* help.c */
-//extern const char * const generic_cmd_help_usage[];
 void usage(const char * const *usagestr) __attribute__((noreturn));
 void usage_command(const struct cmd_struct *cmd, int full, int err);
 void usage_command_group(const struct cmd_group *grp, int all, int err);

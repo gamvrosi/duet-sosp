@@ -28,16 +28,18 @@
 #define DUET_IOC_MAGIC	0xDE
 
 /* ioctl codes */
-#define DUET_START		1
-#define DUET_STOP		2
-#define DUET_REGISTER		3
-#define DUET_DEREGISTER		4
-#define DUET_SET_DONE		5
-#define DUET_UNSET_DONE		6
-#define DUET_CHECK_DONE		7
-#define DUET_PRINTBIT		8
-#define DUET_PRINTITEM		9
-#define DUET_GET_PATH		10
+enum duet_ioctl_codes {
+	DUET_START = 1,
+	DUET_STOP,
+	DUET_REGISTER,
+	DUET_DEREGISTER,
+	DUET_SET_DONE,
+	DUET_UNSET_DONE,
+	DUET_CHECK_DONE,
+	DUET_PRINTBIT,
+	DUET_PRINTITEM,
+	DUET_GET_PATH,
+};
 
 /* We return up to MAX_ITEMS at a time (9b each). */
 struct duet_ioctl_fetch_args {

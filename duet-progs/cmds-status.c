@@ -21,7 +21,6 @@
 #include <stdio.h>
 #include "ioctl.h"
 #include "commands.h"
-#include "utils.h"
 
 static const char * const status_cmd_group_usage[] = {
 	"duet status <command>",

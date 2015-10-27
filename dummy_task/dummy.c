@@ -21,7 +21,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <time.h>
-#include "duet.h"
+#include <duet/duet.h>
 
 int main(int argc, char *argv[])
 {
@@ -29,7 +29,7 @@ int main(int argc, char *argv[])
 	long total_items = 0;
 	long total_fetches = 0;
 	__u8 evtmask;
-	struct duet_item buf[MAX_ITEMS];
+	struct duet_item buf[DUET_MAX_ITEMS];
 	struct timespec slp = {0, 0};
 	int o3 = 0, evtbased = 0;
 
@@ -44,7 +44,7 @@ int main(int argc, char *argv[])
 			fprintf(stdout, "tv_sec = %lu, tv_nsec = %lu\n", slp.tv_sec, slp.tv_nsec);
 			break;
 		case 'd':
-			/* This is the duration of the experiment, in mseconds */
+			/* This is the duration of the experiment, in seconds */
 			duration = atoi(optarg);
 			break;
 		case 'e':
@@ -66,8 +66,11 @@ int main(int argc, char *argv[])
 	//if (freq == -1)
 	//	fprintf(stdout, "No fetch frequency? No fetching.\n");
 
-	printf("Running dummy for %d seconds. Fetching every %d seconds.\n",
+	printf("Running dummy for %d sec. Fetching every %d ms.\n",
 		duration, freq);
+
+	/* Convert duration to mseconds */
+	duration *= 1000;
 
 	/* Open Duet device */
 	if (o3 && ((duet_fd = open_duet_dev()) == -1)) {
@@ -90,7 +93,7 @@ int main(int argc, char *argv[])
 	/* If fetching frequency was specified, we'll be using it right now */
 	if (freq > 0) {
 		while (duration > 0) {
-			itret = MAX_ITEMS;
+			itret = DUET_MAX_ITEMS;
 			duet_fetch(duet_fd, tid, buf, &itret);
 			//fprintf(stdout, "Fetch received %d items.\n", itret);
 			total_items += itret;
