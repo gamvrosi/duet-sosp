@@ -27,6 +27,8 @@ if [[ ! `grep "DISTRIB_ID=Ubuntu" /etc/lsb-release` ]]; then
 	exit 1
 fi
 
+KERNEL_VERSION_APPEND="+duet-$(git rev-parse --short HEAD)"
+
 while getopts ":dci" opt; do
 	case $opt in
 	d)
@@ -52,7 +54,7 @@ while getopts ":dci" opt; do
 
 		# (re)compile the kernel
 		cd "${BASEDIR}/linux-3.13.6+duet"
-		time fakeroot make-kpkg --initrd --append-to-version=+duet \
+		time fakeroot make-kpkg --initrd --append-to-version="${KERNEL_VERSION_APPEND}" \
 			kernel_image kernel_headers || die
 
 		# ...and (re)compile the btrfs tools
@@ -80,12 +82,13 @@ while getopts ":dci" opt; do
 		;;
 	i)
 		# Install the kernel
-		sudo dpkg -i "${BASEDIR}/linux-headers-3.13.6+duet_3.13.6+duet-10.00.Custom_amd64.deb"
-		sudo dpkg -i "${BASEDIR}/linux-image-3.13.6+duet_3.13.6+duet-10.00.Custom_amd64.deb"
+		KPKG_SUFFIX="3.13.6${KERNEL_VERSION_APPEND}_3.13.6${KERNEL_VERSION_APPEND}-10.00.Custom_amd64.deb"
+		sudo dpkg -i "${BASEDIR}/linux-headers-${KPKG_SUFFIX}" || die
+		sudo dpkg -i "${BASEDIR}/linux-image-${KPKG_SUFFIX}" || die
 
 		# Install the btrfs tools (in /usr/local/bin)
 		cd "${BASEDIR}/btrfs-progs-3.12+duet"
-		sudo make install
+		sudo make install || die
 
 		# Install the duet tools (in /usr/local/bin)
 		cd "${BASEDIR}/duet-progs"
