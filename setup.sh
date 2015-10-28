@@ -1,5 +1,15 @@
 #!/bin/bash
 
+usage() {
+    echo "Usage: $0 [OPTION]..."
+    cat <<EOF
+
+  -d   Install dependencies
+  -c   Compile Duet version of the kernel, duet-progs, f2fs-tools and rsync
+  -i   Install compiled packages and programs
+EOF
+}
+
 # Check that we're running on Ubuntu. We're picky like that.
 if [[ ! `grep "DISTRIB_ID=Ubuntu" /etc/lsb-release` ]]; then
 	echo "Duet is currently only supported on Ubuntu. Sorry." >&2
@@ -56,6 +66,7 @@ while getopts ":dci" opt; do
 		make
 
 		cd ..
+		exit 0
 		;;
 	i)
 		# Install the kernel
@@ -77,9 +88,15 @@ while getopts ":dci" opt; do
 		# Do not install rsync; it will replace the stock rsync
 
 		cd ..
+		exit 0
 		;;
 	\?)
 		echo "Invalid option: -$OPTARG" >&2
+        usage
+        exit 1
 		;;
 	esac
 done
+
+usage
+exit 1
