@@ -16,6 +16,11 @@ usage() {
 EOF
 }
 
+die() {
+    echo "Aborting setup..."
+    exit 1
+}
+
 # Check that we're running on Ubuntu. We're picky like that.
 if [[ ! `grep "DISTRIB_ID=Ubuntu" /etc/lsb-release` ]]; then
 	echo "Duet is currently only supported on Ubuntu. Sorry." >&2
@@ -48,28 +53,28 @@ while getopts ":dci" opt; do
 		# (re)compile the kernel
 		cd "${BASEDIR}/linux-3.13.6+duet"
 		time fakeroot make-kpkg --initrd --append-to-version=+duet \
-			kernel_image kernel_headers
+			kernel_image kernel_headers || die
 
 		# ...and (re)compile the btrfs tools
 		cd "${BASEDIR}/btrfs-progs-3.12+duet"
 		#make clean
-		make
+		make || die
 
 		# ...and (re)compile the duet tools
 		cd "${BASEDIR}/duet-progs"
 		#make clean
-		make
+		make || die
 
 		# ...and (re)compile the f2fs tools
 		cd "${BASEDIR}/f2fs-tools"
 		#make clean
-		make
+		make || die
  
 		# ...and (re)compile rsync
 		cd "${BASEDIR}/rsync-3.1.1+duet"
 		#make clean
 		#make reconfigure
-		make
+		make || die
 
 		exit 0
 		;;
@@ -84,11 +89,11 @@ while getopts ":dci" opt; do
 
 		# Install the duet tools (in /usr/local/bin)
 		cd "${BASEDIR}/duet-progs"
-		sudo make install
+		sudo make install || die
 
 		# Install the f2fs tools (in /usr/local/bin)
 		cd "${BASEDIR}/f2fs-tools"
-		sudo make install
+		sudo make install || die
 
 		# Do not install rsync; it will replace the stock rsync
 
