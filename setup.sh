@@ -35,7 +35,7 @@ while getopts ":dci" opt; do
 	c)
 		# Prep the environment for future recompiles
 		export CLEAN_SOURCE=no
-		export CONCURRENCY_LEVEL=33
+		export CONCURRENCY_LEVEL="$(expr `nproc` + 1)"
 		echo CLEAN_SOURCE=$CLEAN_SOURCE
 		echo CONCURRENCY_LEVEL=$CONCURRENCY_LEVEL
 
