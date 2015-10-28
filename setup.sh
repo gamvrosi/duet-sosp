@@ -55,7 +55,7 @@ while getopts ":dci" opt; do
 		# (re)compile the kernel
 		cd "${BASEDIR}/linux-3.13.6+duet"
 		time fakeroot make-kpkg --initrd --append-to-version="${KERNEL_VERSION_APPEND}" \
-			kernel_image kernel_headers || die
+			kernel_image kernel_headers kernel_debug || die
 
 		# ...and (re)compile the btrfs tools
 		cd "${BASEDIR}/btrfs-progs-3.12+duet"
