@@ -1,5 +1,11 @@
 #!/bin/bash
 
+# Find location of this setup.sh
+STARTDIR="$(pwd)"
+cd "$(dirname "$0")"
+BASEDIR="$(pwd)"
+cd "${STARTDIR}"
+
 usage() {
     echo "Usage: $0 [OPTION]..."
     cat <<EOF
@@ -40,49 +46,48 @@ while getopts ":dci" opt; do
 		echo CONCURRENCY_LEVEL=$CONCURRENCY_LEVEL
 
 		# (re)compile the kernel
-		cd linux-3.13.6+duet
+		cd "${BASEDIR}/linux-3.13.6+duet"
 		time fakeroot make-kpkg --initrd --append-to-version=+duet \
 			kernel_image kernel_headers
 
 		# ...and (re)compile the btrfs tools
-		cd ../btrfs-progs-3.12+duet
+		cd "${BASEDIR}/btrfs-progs-3.12+duet"
 		#make clean
 		make
 
 		# ...and (re)compile the duet tools
-		cd ../duet-progs
+		cd "${BASEDIR}/duet-progs"
 		#make clean
 		make
 
 		# ...and (re)compile the f2fs tools
-		cd ../f2fs-tools
+		cd "${BASEDIR}/f2fs-tools"
 		#make clean
 		make
  
 		# ...and (re)compile rsync
-		cd ../rsync-3.1.1+duet
+		cd "${BASEDIR}/rsync-3.1.1+duet"
 		#make clean
 		#make reconfigure
 		make
 
-		cd ..
 		exit 0
 		;;
 	i)
 		# Install the kernel
-		sudo dpkg -i linux-headers-3.13.6+duet_3.13.6+duet-10.00.Custom_amd64.deb
-		sudo dpkg -i linux-image-3.13.6+duet_3.13.6+duet-10.00.Custom_amd64.deb
+		sudo dpkg -i "${BASEDIR}/linux-headers-3.13.6+duet_3.13.6+duet-10.00.Custom_amd64.deb"
+		sudo dpkg -i "${BASEDIR}/linux-image-3.13.6+duet_3.13.6+duet-10.00.Custom_amd64.deb"
 
 		# Install the btrfs tools (in /usr/local/bin)
-		cd btrfs-progs-3.12+duet
+		cd "${BASEDIR}/btrfs-progs-3.12+duet"
 		sudo make install
 
 		# Install the duet tools (in /usr/local/bin)
-		cd ../duet-progs
+		cd "${BASEDIR}/duet-progs"
 		sudo make install
 
 		# Install the f2fs tools (in /usr/local/bin)
-		cd ../f2fs-tools
+		cd "${BASEDIR}/f2fs-tools"
 		sudo make install
 
 		# Do not install rsync; it will replace the stock rsync
