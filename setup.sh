@@ -29,7 +29,7 @@ fi
 
 KERNEL_VERSION_APPEND="+duet-$(git rev-parse --short HEAD)"
 
-while getopts ":dci" opt; do
+while getopts ":dcig" opt; do
 	case $opt in
 	d)
 		echo "Installing dependencies..."
@@ -45,7 +45,9 @@ while getopts ":dci" opt; do
 		echo "Done processing dependencies. Exiting."
 		exit 0
 		;;
-	c)
+	[cg])
+		KDBG=`test $opt == 'g' && echo kernel_debug`
+
 		# Prep the environment for future recompiles
 		export CLEAN_SOURCE=no
 		export CONCURRENCY_LEVEL="$(expr `nproc` + 1)"
@@ -55,7 +57,7 @@ while getopts ":dci" opt; do
 		# (re)compile the kernel
 		cd "${BASEDIR}/linux-3.13.6+duet"
 		time fakeroot make-kpkg --initrd --append-to-version="${KERNEL_VERSION_APPEND}" \
-			kernel_image kernel_headers kernel_debug || die
+			kernel_image kernel_headers $KDBG || die
 
 		# ...and (re)compile the btrfs tools
 		cd "${BASEDIR}/btrfs-progs-3.12+duet"
