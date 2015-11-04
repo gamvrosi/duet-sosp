@@ -14,57 +14,97 @@
  * License along with this program; if not, write to the
  * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
  * Boston, MA 021110-1307, USA.
- *
- * Dummy task registering/fetching from Duet for CPU overhead measurements
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <string.h>
 #include <time.h>
 #include <duet/duet.h>
 
+void usage(int err)
+{
+	fprintf(stderr,
+		"\n"
+		"dummy is a program meant to demonstrate how to use the Duet\n"
+		"framework. For development purposes, it can also be used during\n"
+		"testing.\n"
+		"\n"
+		"Usage: dummy [OPTION]...\n"
+		"\n"
+		"Program Options\n"
+		" -f <freq>     event fetching frequency in msec (def: 10ms)\n"
+		" -d <dur>      program execution time in sec\n"
+		" -o            use Duet (if not set, Duet Options are ignored)\n"
+		" -h            print this usage information\n"
+		"\n"
+		"Duet Options\n"
+		" -e            register for event-based Duet (def: state-based)\n"
+		" -p <path>     directory to register with Duet (def: '/')\n"
+		" -g            get file path for every event received\n"
+		"\n");
+
+		exit(err);
+}
+
 int main(int argc, char *argv[])
 {
-	int tid, c, freq, duration, duet_fd = 0, itret;
+	int freq = 10, duration = -1, o3 = 0, evtbased = 0, getpath = 0;
+	char path[DUET_MAX_PATH] = "/";
+	int tid, c, duet_fd = 0, itret = 0;
 	long total_items = 0;
 	long total_fetches = 0;
 	__u8 evtmask;
 	struct duet_item buf[DUET_MAX_ITEMS];
 	struct timespec slp = {0, 0};
-	int o3 = 0, evtbased = 0;
 
-	freq = duration = -1;
-	while ((c = getopt(argc, argv, "f:d:eo")) != -1)
+	while ((c = getopt(argc, argv, "f:d:ohep:g")) != -1) {
 		switch (c) {
-		case 'f':
-			/* This is frequency of fetching, in mseconds */
+		case 'f': /* Fetching frequency, in mseconds */
 			freq = atoi(optarg);
+			if (freq < 0) {
+				fprintf(stderr, "Error: invalid fetching frequency specified\n");
+				usage(1);
+			}
 			slp.tv_nsec = (freq * 1000000) % 1000000000;
 			slp.tv_sec = (freq * 1000000) / 1000000000;
-			fprintf(stdout, "tv_sec = %lu, tv_nsec = %lu\n", slp.tv_sec, slp.tv_nsec);
 			break;
-		case 'd':
-			/* This is the duration of the experiment, in seconds */
+		case 'd': /* Program execution duration, in seconds */
 			duration = atoi(optarg);
+			if (duration < 0) {
+				fprintf(stderr, "Error: invalid execution duration specified\n");
+				usage(1);
+			}
 			break;
-		case 'e':
+		case 'o': /* Use Duet */
+			o3 = 1;
+			break;
+		case 'h': /* Display usage info */
+			usage(0);
+			break;
+		case 'e': /* Register for event-based Duet */
 			evtbased = 1;
 			break;
-		case 'o':
-			o3 = 1;
+		case 'p': /* Specify directory to register with Duet */
+			if (strnlen(optarg, DUET_MAX_ITEMS + 1) > DUET_MAX_ITEMS) {
+				fprintf(stderr, "Error: specified path too long\n");
+				usage(1);
+			}
+			strncpy(path, optarg, DUET_MAX_ITEMS);
+			break;
+		case 'g': /* Get file path for every event */
+			getpath = 1;
 			break;
 		default:
 			fprintf(stderr, "Unknown argument!\n");
-			exit(1);
+			usage(1);
 		}
-
-	if (duration == -1) {
-		fprintf(stderr, "Did not supply duration. I quit.\n");
-		exit(1);
 	}
 
-	//if (freq == -1)
-	//	fprintf(stdout, "No fetch frequency? No fetching.\n");
+	if (duration == -1) {
+		fprintf(stderr, "Error: did not supply duration\n");
+		exit(1);
+	}
 
 	printf("Running dummy for %d sec. Fetching every %d ms.\n",
 		duration, freq);
@@ -74,7 +114,7 @@ int main(int argc, char *argv[])
 
 	/* Open Duet device */
 	if (o3 && ((duet_fd = open_duet_dev()) == -1)) {
-		fprintf(stderr, "failed to open Duet device\n");
+		fprintf(stderr, "Error: failed to open Duet device\n");
 		exit(1);
 	}
 
@@ -84,39 +124,62 @@ int main(int argc, char *argv[])
 		evtmask = DUET_PAGE_EXISTS;
 
 	/* Register with Duet framework */
-	if (o3 && (duet_register(duet_fd, "/", evtmask, 1, "dummy", &tid))) {
-		fprintf(stderr, "failed to register with Duet\n");
+	if (o3 && (duet_register(duet_fd, path, evtmask, 1, "dummy", &tid))) {
+		fprintf(stderr, "Error: failed to register with Duet\n");
 		exit(1);
 	}
 
-	itret = 0;
-	/* If fetching frequency was specified, we'll be using it right now */
 	if (freq > 0) {
+		/* Use specified fetching frequency */
 		while (duration > 0) {
-			itret = DUET_MAX_ITEMS;
-			duet_fetch(duet_fd, tid, buf, &itret);
-			//fprintf(stdout, "Fetch received %d items.\n", itret);
-			total_items += itret;
-			total_fetches++;
+			if (o3) {
+				itret = DUET_MAX_ITEMS;
+				if (duet_fetch(duet_fd, tid, buf, &itret)) {
+					fprintf(stderr, "Error: Duet fetch failed\n");
+					exit(1);
+				}
+				//fprintf(stdout, "Fetch received %d items.\n", itret);
+
+				if (getpath) {
+					for (c = 0; c < itret; c++) {
+						if (duet_get_path(duet_fd, tid, buf[c].ino, path)) {
+							fprintf(stderr, "Error: Duet get_path failed\n");
+							exit(1);
+						}
+
+						fprintf(stdout, "Got %s\n", path);
+					}
+				}
+
+				total_items += itret;
+				total_fetches++;
+			}
+
 			if (nanosleep(&slp, NULL) < 0) {
-				fprintf(stderr, "nanosleep failed\n");
+				fprintf(stderr, "Error: nanosleep failed\n");
 				exit(1);
 			}
+
 			duration -= freq;
 		}
 	} else {
-		freq = 10;
+		/* Fetching frequency not specified. Opt for default 10ms */
 		slp.tv_nsec = (freq * 1000000) % 1000000000;
 		slp.tv_sec = (freq * 1000000) / 1000000000;
+
 		while (duration > 0) {
-			nanosleep(&slp, NULL);
+			if (nanosleep(&slp, NULL) < 0) {
+				fprintf(stderr, "Error: nanosleep failed\n");
+				exit(1);
+			}
+
 			duration -= freq;
 		}
 	}
 
 	/* Deregister with the Duet framework */
 	if (o3 && duet_deregister(duet_fd, tid))
-		fprintf(stderr, "failed to deregister with Duet\n");
+		fprintf(stderr, "Error: failed to deregister with Duet\n");
 
 	if (o3) {
 		close_duet_dev(duet_fd);

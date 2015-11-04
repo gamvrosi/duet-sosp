@@ -139,6 +139,7 @@ install: $(libs) $(progs) $(INSTALLDIRS)
 	cp -a $(lib_links) $(DESTDIR)$(libdir)
 	$(INSTALL) -m755 -d $(DESTDIR)$(incdir)
 	$(INSTALL) -m644 $(headers) $(DESTDIR)$(incdir)
+	ldconfig
 
 $(INSTALLDIRS):
 	@echo "Making install in $(patsubst install-%,%,$@)"
