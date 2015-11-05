@@ -153,7 +153,7 @@ inline int bittree_unset_done(struct duet_bittree *bt, __u64 idx, __u32 len);
 	int is_relevant);*/
 
 int bittree_print(struct duet_task *task);
-void bittree_init(struct duet_bittree *bittree, __u32 range);
+void bittree_init(struct duet_bittree *bittree, __u32 range, __u8 is_file);
 void bittree_destroy(struct duet_bittree *bittree);
 
 #endif /* _COMMON_H */

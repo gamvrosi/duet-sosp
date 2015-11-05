@@ -530,9 +530,10 @@ int bittree_print(struct duet_task *task)
 	return 0;
 }
 
-void bittree_init(struct duet_bittree *bittree, __u32 range)
+void bittree_init(struct duet_bittree *bittree, __u32 range, __u8 is_file)
 {
 	bittree->range = range;
+	bittree->is_file = is_file;
 	spin_lock_init(&bittree->lock);
 	bittree->root = RB_ROOT;
 #ifdef CONFIG_DUET_STATS

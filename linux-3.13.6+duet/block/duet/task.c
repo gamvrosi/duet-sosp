@@ -61,7 +61,7 @@ static int scan_page_cache(struct duet_task *task)
 	struct inode *inode = NULL;
 	struct duet_bittree inodetree;
 
-	bittree_init(&inodetree, 1);
+	bittree_init(&inodetree, 1, 0);
 	printk(KERN_INFO "duet: page cache scan started\n");
 	loop = 0;
 again:
@@ -246,10 +246,13 @@ static int duet_task_init(struct duet_task **task, const char *name,
 	INIT_LIST_HEAD(&(*task)->task_list);
 	init_waitqueue_head(&(*task)->cleaner_queue);
 
+	/* Is this a file or a block task? */
+	(*task)->is_file = ((evtmask & DUET_FILE_TASK) ? 1 : 0);
+
 	/* Initialize bitmap tree */
 	if (!bitrange)
 		bitrange = 4096;
-	bittree_init(&(*task)->bittree, bitrange);
+	bittree_init(&(*task)->bittree, bitrange, (*task)->is_file);
 
 	/* Initialize hash table bitmap */
 	spin_lock_init(&(*task)->bbmap_lock);
@@ -261,10 +264,6 @@ static int duet_task_init(struct duet_task **task, const char *name,
 		kfree(*task);
 		return -ENOMEM;
 	}
-
-	/* Is this a file or a block task? */
-	(*task)->is_file = ((evtmask & DUET_FILE_TASK) ? 1 : 0);
-	(*task)->bittree.is_file = (*task)->is_file;
 
 	/* Do some sanity checking on event mask. */
 	if (evtmask & DUET_PAGE_EXISTS) {

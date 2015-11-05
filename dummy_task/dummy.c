@@ -62,12 +62,10 @@ int main(int argc, char *argv[])
 		switch (c) {
 		case 'f': /* Fetching frequency, in mseconds */
 			freq = atoi(optarg);
-			if (freq < 0) {
+			if (freq <= 0) {
 				fprintf(stderr, "Error: invalid fetching frequency specified\n");
 				usage(1);
 			}
-			slp.tv_nsec = (freq * 1000000) % 1000000000;
-			slp.tv_sec = (freq * 1000000) / 1000000000;
 			break;
 		case 'd': /* Program execution duration, in seconds */
 			duration = atoi(optarg);
@@ -109,8 +107,10 @@ int main(int argc, char *argv[])
 	printf("Running dummy for %d sec. Fetching every %d ms.\n",
 		duration, freq);
 
-	/* Convert duration to mseconds */
+	/* Convert duration to mseconds and set nanosleep time */
 	duration *= 1000;
+	slp.tv_nsec = (freq * (long) 1E6) % (long) 1E9;
+	slp.tv_sec = (freq * (long) 1E6) / (long) 1E9;
 
 	/* Open Duet device */
 	if (o3 && ((duet_fd = open_duet_dev()) == -1)) {
@@ -129,52 +129,38 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	if (freq > 0) {
-		/* Use specified fetching frequency */
-		while (duration > 0) {
-			if (o3) {
-				itret = DUET_MAX_ITEMS;
-				if (duet_fetch(duet_fd, tid, buf, &itret)) {
-					fprintf(stderr, "Error: Duet fetch failed\n");
-					exit(1);
-				}
-				//fprintf(stdout, "Fetch received %d items.\n", itret);
+	/* Use specified fetching frequency */
+	while (duration > 0) {
+		if (o3) {
+			itret = DUET_MAX_ITEMS;
+			if (duet_fetch(duet_fd, tid, buf, &itret)) {
+				fprintf(stderr, "Error: Duet fetch failed\n");
+				exit(1);
+			}
+			//fprintf(stdout, "Fetch received %d items.\n", itret);
 
-				if (getpath) {
-					for (c = 0; c < itret; c++) {
-						if (duet_get_path(duet_fd, tid, buf[c].ino, path)) {
-							fprintf(stderr, "Error: Duet get_path failed\n");
-							exit(1);
-						}
-
-						fprintf(stdout, "Got %s\n", path);
+			if (getpath) {
+				for (c = 0; c < itret; c++) {
+					if (duet_get_path(duet_fd, tid, buf[c].ino, path)) {
+						fprintf(stderr, "Error: Duet get_path failed\n");
+						exit(1);
 					}
+
+					fprintf(stdout, "Got %s\n", path);
 				}
-
-				total_items += itret;
-				total_fetches++;
 			}
 
-			if (nanosleep(&slp, NULL) < 0) {
-				fprintf(stderr, "Error: nanosleep failed\n");
-				exit(1);
-			}
-
-			duration -= freq;
+			total_items += itret;
+			total_fetches++;
 		}
-	} else {
-		/* Fetching frequency not specified. Opt for default 10ms */
-		slp.tv_nsec = (freq * 1000000) % 1000000000;
-		slp.tv_sec = (freq * 1000000) / 1000000000;
 
-		while (duration > 0) {
-			if (nanosleep(&slp, NULL) < 0) {
-				fprintf(stderr, "Error: nanosleep failed\n");
-				exit(1);
-			}
-
-			duration -= freq;
+		if (nanosleep(&slp, NULL) < 0) {
+			fprintf(stderr, "Error: nanosleep failed\n");
+			exit(1);
 		}
+		fprintf(stdout, "nanoslept, duration left %d\n", duration);
+
+		duration -= freq;
 	}
 
 	/* Deregister with the Duet framework */

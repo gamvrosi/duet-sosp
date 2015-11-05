@@ -54,6 +54,7 @@
 #define DUET_PAGE_FLUSHED	0x08
 #define DUET_PAGE_MODIFIED	0x10
 #define DUET_PAGE_EXISTS	0x20
+#define DUET_FILE_TASK		0x80
 
 /*
  * Item struct returned for processing. For both state- and event- based duet,
