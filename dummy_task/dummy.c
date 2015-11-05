@@ -119,9 +119,9 @@ int main(int argc, char *argv[])
 	}
 
 	if (evtbased)
-		evtmask = DUET_PAGE_ADDED;
+		evtmask = DUET_PAGE_ADDED | DUET_FILE_TASK;
 	else
-		evtmask = DUET_PAGE_EXISTS;
+		evtmask = DUET_PAGE_EXISTS | DUET_FILE_TASK;
 
 	/* Register with Duet framework */
 	if (o3 && (duet_register(duet_fd, path, evtmask, 1, "dummy", &tid))) {

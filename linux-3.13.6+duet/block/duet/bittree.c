@@ -259,11 +259,15 @@ static int __update_tree(struct duet_bittree *bt, __u64 idx, __u32 len,
 		if (flags & BMAP_READ) {
 			res = 0;
 
+			if (!found)
+				goto not_found;
+
 			if (bt->is_file) {
 				ret = duet_bmap_read(bnode->relv, bnode->idx,
 					bt->range, idx);
 				if (ret == -1)
 					goto done;
+
 				res = ret << 1;
 			}
 
@@ -271,6 +275,7 @@ static int __update_tree(struct duet_bittree *bt, __u64 idx, __u32 len,
 						idx);
 			if (ret == -1)
 				goto done;
+not_found:
 			ret &= res;
 			goto done;
 		}

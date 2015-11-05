@@ -7,18 +7,18 @@ BASEDIR="$(pwd)"
 cd "${STARTDIR}"
 
 usage() {
-    echo "Usage: $0 [OPTION]..."
-    cat <<EOF
+	echo "Usage: $0 [OPTION]...
 
-  -d   Install dependencies
-  -c   Compile Duet version of the kernel, duet-progs, f2fs-tools and rsync
-  -i   Install compiled packages and programs
-EOF
+	-d	Install dependencies
+	-c	Compile Duet version of the kernel, duet-progs, f2fs-tools and rsync
+	-i	Install compiled packages and programs
+	-u	Uninstall all Duet kernels
+"
 }
 
 die() {
-    echo "Aborting setup..."
-    exit 1
+	echo "Aborting setup..."
+	exit 1
 }
 
 # Check that we're running on Ubuntu. We're picky like that.
@@ -103,6 +103,12 @@ while getopts ":dcig" opt; do
 		# Do not install rsync; it will replace the stock rsync
 
 		cd ..
+		exit 0
+		;;
+	u)
+		# Get packages
+		DPKGS="`dpkg --get-selections | grep -E 'linux-.*+duet' | cut -f1 | tr '\n' ' '`"
+		sudo dpkg -P $DPKGS || die
 		exit 0
 		;;
 	\?)
