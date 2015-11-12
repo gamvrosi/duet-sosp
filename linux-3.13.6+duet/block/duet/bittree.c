@@ -440,8 +440,8 @@ done:
  * For file tasks, check if we have seen this inode before. If not, check if it
  * is relevant. Then, check whether it's done.
  */
-int bittree_check(struct duet_bittree *bt, __u64 idx, __u32 len,
-	struct duet_task *task)
+static int do_bittree_check(struct duet_bittree *bt, __u64 idx, __u32 len,
+	struct duet_task *task, struct inode *inode)
 {
 	int ret, flags, relv;
 
@@ -455,7 +455,14 @@ int bittree_check(struct duet_bittree *bt, __u64 idx, __u32 len,
 
 		if (!flags) {
 			/* We have not seen this inode before */
-			relv = duet_find_path(task, idx, 0, NULL);
+			if (inode) {
+				relv = do_find_path(task, inode, 0, NULL);
+			} else if (task) {
+				relv = duet_find_path(task, idx, 0, NULL);
+			} else {
+				printk(KERN_ERR "duet: check failed -- no task/inode given\n");
+				return -1;
+			}
 
 			if (!relv) { /* Mark as relevant */
 				ret = __update_tree(bt, idx, len, BMAP_RELV_SET);
@@ -478,6 +485,19 @@ int bittree_check(struct duet_bittree *bt, __u64 idx, __u32 len,
 	}
 
 	return ret;
+}
+
+/* Use this check function if you have a pointer to the inode you refer to */
+int bittree_check_inode(struct duet_bittree *bt, struct duet_task *task,
+	struct inode *inode)
+{
+	return do_bittree_check(bt, inode->i_ino, 1, task, inode);
+}
+
+int bittree_check(struct duet_bittree *bt, __u64 idx, __u32 len,
+	struct duet_task *task)
+{
+	return do_bittree_check(bt, idx, len, task, NULL);
 }
 
 inline int bittree_set_done(struct duet_bittree *bt, __u64 idx, __u32 len)

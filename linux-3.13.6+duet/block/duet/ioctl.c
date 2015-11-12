@@ -131,12 +131,46 @@ static int find_get_inode(struct super_block *sb, unsigned long c_ino,
 	return 1;
 }
 
-int duet_find_path(struct duet_task *task, unsigned long inum, int getpath,
+int do_find_path(struct duet_task *task, struct inode *inode, int getpath,
 	char *path)
 {
 	int len, ret = 0;
-	struct inode *ino;
 	char *p;
+
+	if (!task || !task->p_dentry) {
+		printk(KERN_ERR "do_find_path%s: invalid task registration\n",
+			(getpath ? "" : " (null)"));
+		return 1;
+	}
+
+	/* Now get the path */
+	len = MAX_PATH;
+	ret = d_find_path(inode, task->p_dentry, getpath, task->pathbuf, len, &p);
+	if (ret == 1) {
+		duet_dbg(KERN_INFO "do_find_path%s: parent dentry not found\n",
+				(getpath ? "" : " (null)"));
+		if (getpath)
+			path[0] = '\0';
+	} else if (ret == -1) {
+		duet_dbg(KERN_INFO "do_find_path%s: no common ancestor\n",
+				(getpath ? "" : " (null)"));
+		if (getpath)
+			path[0] = '\0';
+	} else if (getpath) {
+		duet_dbg(KERN_INFO "do_find_path%s: got %s\n",
+				(getpath ? "" : " (null)"), p);
+		p++;
+		memcpy(path, p, len - (p - task->pathbuf) + 1);
+	}
+
+	return ret;
+}
+
+int duet_find_path(struct duet_task *task, unsigned long inum, int getpath,
+	char *path)
+{
+	int ret = 0;
+	struct inode *ino;
 
 	if (!task || !task->p_dentry) {
 		printk(KERN_ERR "duet_find_path%s: invalid task registration\n",
@@ -151,25 +185,7 @@ int duet_find_path(struct duet_task *task, unsigned long inum, int getpath,
 		return 1;
 	}
 
-	/* Now get the path */
-	len = MAX_PATH;
-	ret = d_find_path(ino, task->p_dentry, getpath, task->pathbuf, len, &p);
-	if (ret == 1) {
-		duet_dbg(KERN_INFO "duet_find_path%s: parent dentry not found\n",
-				(getpath ? "" : " (null)"));
-		if (getpath)
-			path[0] = '\0';
-	} else if (ret == -1) {
-		duet_dbg(KERN_INFO "duet_find_path%s: no common ancestor\n",
-				(getpath ? "" : " (null)"));
-		if (getpath)
-			path[0] = '\0';
-	} else if (getpath) {
-		duet_dbg(KERN_INFO "duet_find_path%s: got %s\n",
-				(getpath ? "" : " (null)"), p);
-		p++;
-		memcpy(path, p, len - (p - task->pathbuf) + 1);
-	}
+	ret = do_find_path(task, ino, getpath, path);
 
 	iput(ino);
 	return ret;

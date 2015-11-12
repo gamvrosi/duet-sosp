@@ -141,10 +141,14 @@ void duet_task_dispose(struct duet_task *task);
 int duet_bootstrap(void);
 int duet_shutdown(void);
 long duet_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
+int do_find_path(struct duet_task *task, struct inode *inode, int getpath,
+	char *path);
 int duet_find_path(struct duet_task *task, unsigned long inum, int getpath,
 	char *path);
 
 /* bittree.c */
+int bittree_check_inode(struct duet_bittree *bt, struct duet_task *task,
+	struct inode *inode);
 int bittree_check(struct duet_bittree *bt, __u64 idx, __u32 len,
 	struct duet_task *task);
 inline int bittree_set_done(struct duet_bittree *bt, __u64 idx, __u32 len);

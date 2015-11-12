@@ -305,7 +305,7 @@ void hash_print(struct duet_task *task)
 
 #ifdef CONFIG_DUET_STATS
 	printk(KERN_INFO "duet: %lu (%lu/%lu) lookups per request on average\n",
-		duet_env.itm_stat_lkp / duet_env.itm_stat_num,
+		duet_env.itm_stat_num ? (duet_env.itm_stat_lkp / duet_env.itm_stat_num) : 0,
 		duet_env.itm_stat_lkp, duet_env.itm_stat_num);
 #endif /* CONFIG_DUET_STATS */
 }
