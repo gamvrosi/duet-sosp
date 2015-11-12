@@ -107,7 +107,7 @@ void duet_hook(__u8 evtcode, void *data)
 
 		/* For file tasks, use the inode bitmap to filter out event */
 		if (cur->is_file && (bittree_check(&cur->bittree, inode->i_ino,
-															1, cur) == 1))
+						1, cur) == 1))
 			continue;
 
 		/* Update the hash table */

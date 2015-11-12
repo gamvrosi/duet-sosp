@@ -51,7 +51,7 @@ int main(int argc, char *argv[])
 {
 	int freq = 10, duration = -1, o3 = 0, evtbased = 0, getpath = 0;
 	char path[DUET_MAX_PATH] = "/";
-	int tid, c, duet_fd = 0, itret = 0;
+	int ret = 0, tid, c, duet_fd = 0, itret = 0, tmp;
 	long total_items = 0;
 	long total_fetches = 0;
 	__u8 evtmask;
@@ -101,7 +101,7 @@ int main(int argc, char *argv[])
 
 	if (duration == -1) {
 		fprintf(stderr, "Error: did not supply duration\n");
-		exit(1);
+		return 1;
 	}
 
 	printf("Running dummy for %d sec. Fetching every %d ms.\n",
@@ -115,7 +115,7 @@ int main(int argc, char *argv[])
 	/* Open Duet device */
 	if (o3 && ((duet_fd = open_duet_dev()) == -1)) {
 		fprintf(stderr, "Error: failed to open Duet device\n");
-		exit(1);
+		return 1;
 	}
 
 	if (evtbased)
@@ -126,7 +126,8 @@ int main(int argc, char *argv[])
 	/* Register with Duet framework */
 	if (o3 && (duet_register(duet_fd, path, evtmask, 1, "dummy", &tid))) {
 		fprintf(stderr, "Error: failed to register with Duet\n");
-		exit(1);
+		ret = 1;
+		goto done_close;
 	}
 
 	/* Use specified fetching frequency */
@@ -135,18 +136,24 @@ int main(int argc, char *argv[])
 			itret = DUET_MAX_ITEMS;
 			if (duet_fetch(duet_fd, tid, buf, &itret)) {
 				fprintf(stderr, "Error: Duet fetch failed\n");
-				exit(1);
+				ret = 1;
+				goto done_dereg;
 			}
 			//fprintf(stdout, "Fetch received %d items.\n", itret);
 
 			if (getpath) {
 				for (c = 0; c < itret; c++) {
-					if (duet_get_path(duet_fd, tid, buf[c].ino, path)) {
+					tmp = duet_get_path(duet_fd, tid, buf[c].ino, path);
+					if (tmp < 0) {
 						fprintf(stderr, "Error: Duet get_path failed\n");
-						exit(1);
+						ret = 1;
+						goto done_dereg;
 					}
 
-					fprintf(stdout, "Got %s\n", path);
+					if (!tmp)
+						fprintf(stdout, "Getpath code %d. Got %s\n", tmp, path);
+					else
+						fprintf(stdout, "Getpath code %d.\n", tmp);
 				}
 			}
 
@@ -156,7 +163,8 @@ int main(int argc, char *argv[])
 
 		if (nanosleep(&slp, NULL) < 0) {
 			fprintf(stderr, "Error: nanosleep failed\n");
-			exit(1);
+			ret = 1;
+			goto done_dereg;
 		}
 		fprintf(stdout, "nanoslept, duration left %d\n", duration);
 
@@ -164,14 +172,16 @@ int main(int argc, char *argv[])
 	}
 
 	/* Deregister with the Duet framework */
+done_dereg:
 	if (o3 && duet_deregister(duet_fd, tid))
 		fprintf(stderr, "Error: failed to deregister with Duet\n");
 
+done_close:
 	if (o3) {
 		close_duet_dev(duet_fd);
 		fprintf(stdout, "Fetched %ld events, or %lf events/ms\n",
 			total_items, ((double) total_items)/total_fetches);
 	}
 
-	return 0;
+	return ret;
 }

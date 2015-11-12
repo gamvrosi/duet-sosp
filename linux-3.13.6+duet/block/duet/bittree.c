@@ -257,26 +257,30 @@ static int __update_tree(struct duet_bittree *bt, __u64 idx, __u32 len,
 
 		/* If we're just reading bitmap values, return them now */
 		if (flags & BMAP_READ) {
-			res = 0;
+			ret = 0;
 
 			if (!found)
-				goto not_found;
+				goto done;
 
 			if (bt->is_file) {
-				ret = duet_bmap_read(bnode->relv, bnode->idx,
+				res = duet_bmap_read(bnode->relv, bnode->idx,
 					bt->range, idx);
-				if (ret == -1)
+				if (res == -1) {
+					ret = -1;
 					goto done;
+				}
 
-				res = ret << 1;
+				ret |= res << 1;
 			}
 
-			ret = duet_bmap_read(bnode->done, bnode->idx, bt->range,
+			res = duet_bmap_read(bnode->done, bnode->idx, bt->range,
 						idx);
-			if (ret == -1)
+			if (res == -1) {
+				ret = -1;
 				goto done;
-not_found:
-			ret &= res;
+			}
+
+			ret |= res;
 			goto done;
 		}
 
@@ -456,11 +460,11 @@ int bittree_check(struct duet_bittree *bt, __u64 idx, __u32 len,
 			if (!relv) { /* Mark as relevant */
 				ret = __update_tree(bt, idx, len, BMAP_RELV_SET);
 				if (ret != -1)
-					ret = 1;
+					ret = 0;
 			} else if (relv == 1) { /* Mark as irrelevant */
 				ret = __update_tree(bt, idx, len, BMAP_DONE_SET);
 				if (ret != -1)
-					ret = 0;
+					ret = 1;
 			} else {
 				printk(KERN_ERR "duet: couldn't determine inode relevance\n");
 				return -1;

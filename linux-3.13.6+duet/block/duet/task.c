@@ -36,6 +36,11 @@ static int process_inode(struct duet_task *task, struct inode *inode)
 	void **slot;
 	__u8 state;
 
+	/* For file tasks, use the inode bitmap to decide whether to skip inode */
+	if (task->is_file && (bittree_check(&task->bittree, inode->i_ino,
+			1, task) == 1))
+		return 0;
+
 	/* Go through all pages of this inode */
 	rcu_read_lock();
 	radix_tree_for_each_slot(slot, &inode->i_mapping->page_tree, &iter, 0) {

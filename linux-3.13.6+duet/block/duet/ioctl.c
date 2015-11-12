@@ -139,13 +139,15 @@ int duet_find_path(struct duet_task *task, unsigned long inum, int getpath,
 	char *p;
 
 	if (!task || !task->p_dentry) {
-		printk(KERN_ERR "duet_find_path: invalid task registration\n");
+		printk(KERN_ERR "duet_find_path%s: invalid task registration\n",
+			(getpath ? "" : " (null)"));
 		return 1;
 	}
 
 	/* First, we need to find struct inode for child and parent */
 	if (find_get_inode(task->f_sb, inum, &ino)) {
-		printk(KERN_ERR "duet_find_path: failed to find child inode\n");
+		printk(KERN_ERR "duet_find_path%s: failed to find child inode\n",
+			(getpath ? "" : " (null)"));
 		return 1;
 	}
 
@@ -153,15 +155,18 @@ int duet_find_path(struct duet_task *task, unsigned long inum, int getpath,
 	len = MAX_PATH;
 	ret = d_find_path(ino, task->p_dentry, getpath, task->pathbuf, len, &p);
 	if (ret == 1) {
-		printk(KERN_INFO "duet_find_path: parent dentry not found\n");
+		duet_dbg(KERN_INFO "duet_find_path%s: parent dentry not found\n",
+				(getpath ? "" : " (null)"));
 		if (getpath)
 			path[0] = '\0';
 	} else if (ret == -1) {
-		duet_dbg(KERN_INFO "duet_find_path: no common ancestor\n");
+		duet_dbg(KERN_INFO "duet_find_path%s: no common ancestor\n",
+				(getpath ? "" : " (null)"));
 		if (getpath)
 			path[0] = '\0';
 	} else if (getpath) {
-		duet_dbg(KERN_INFO "duet_find_path: got %s\n", p);
+		duet_dbg(KERN_INFO "duet_find_path%s: got %s\n",
+				(getpath ? "" : " (null)"), p);
 		p++;
 		memcpy(path, p, len - (p - task->pathbuf) + 1);
 	}
