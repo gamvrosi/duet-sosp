@@ -12,7 +12,7 @@ usage() {
 	-d	Install dependencies
 	-c	Compile Duet version of the kernel, duet-progs, f2fs-tools and rsync
 	-i	Install compiled packages and programs
-	-u	Uninstall all Duet kernels, excl. the latest one
+	-u	Uninstall all but latest Duet kernel, and delete their deb packages
 "
 }
 
@@ -106,10 +106,16 @@ while getopts ":dcigu" opt; do
 		exit 0
 		;;
 	u)
-		# Get packages for all but latest Duet kernel
+		# Get installed packages for all but latest Duet kernel
 		DPKGS="`dpkg --get-selections | grep -E 'linux-.*+duet' | \
 			cut -f1 | grep -v $KERNEL_VERSION_APPEND | tr '\n' ' '`"
 		sudo dpkg -P $DPKGS || die
+
+		# Get .deb packages in BASEDIR of all but latest Duet kernel
+		cd "${BASEDIR}"
+		ls | grep -E 'linux-.*.deb' | grep -v $KERNEL_VERSION_APPEND | \
+			tr '\n' ' ' | xargs rm -v || die
+
 		exit 0
 		;;
 	\?)

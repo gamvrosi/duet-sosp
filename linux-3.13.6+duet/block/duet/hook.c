@@ -20,6 +20,9 @@
 #include <linux/mm.h>
 #include "common.h"
 
+duet_hook_t *duet_hook_fp = NULL;
+EXPORT_SYMBOL(duet_hook_fp);
+
 /*
  * The framework implements two models that define how we update the page state
  * when a new event occurs: the state-based, and the event-based model.

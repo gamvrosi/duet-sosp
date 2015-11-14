@@ -119,7 +119,6 @@ struct duet_info {
 };
 
 extern struct duet_info duet_env;
-extern duet_hook_t *duet_hook_cache_fp;
 extern unsigned int *duet_i_hash_shift;
 extern struct hlist_head **duet_inode_hashtable;
 extern spinlock_t *duet_inode_hash_lock;

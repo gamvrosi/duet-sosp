@@ -51,7 +51,7 @@ int duet_bootstrap(void)
 	duet_env.itm_stat_lkp = duet_env.itm_stat_num = 0;
 #endif /* CONFIG_DUET_STATS */
 
-	rcu_assign_pointer(duet_hook_cache_fp, duet_hook);
+	rcu_assign_pointer(duet_hook_fp, duet_hook);
 	synchronize_rcu();
 	return 0;
 }
@@ -66,7 +66,7 @@ int duet_shutdown(void)
 		return 1;
 	}
 
-	rcu_assign_pointer(duet_hook_cache_fp, NULL);
+	rcu_assign_pointer(duet_hook_fp, NULL);
 	synchronize_rcu();
 
 	/* Remove all tasks */

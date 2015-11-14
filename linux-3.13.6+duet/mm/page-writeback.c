@@ -2252,7 +2252,7 @@ int set_page_dirty(struct page *page)
 
 #ifdef CONFIG_DUET
 		rcu_read_lock();
-		dhfp = rcu_dereference(duet_hook_cache_fp);
+		dhfp = rcu_dereference(duet_hook_fp);
 
 		if (dhfp)
 			dhfp(DUET_PAGE_MODIFIED, (void *)page);
@@ -2330,7 +2330,7 @@ int clear_page_dirty_for_io(struct page *page)
 
 #ifdef CONFIG_DUET
 	rcu_read_lock();
-	dhfp = rcu_dereference(duet_hook_cache_fp);
+	dhfp = rcu_dereference(duet_hook_fp);
 
 	if (dhfp)
 		dhfp(DUET_PAGE_FLUSHED, (void *)page);

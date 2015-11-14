@@ -89,6 +89,7 @@ int duet_print_events(__u8 taskid);
 /* Hook functions that trasmit event info to the framework core */
 typedef void (duet_hook_t) (__u8, void *);
 void duet_hook(__u8 evtcode, void *data);
+extern duet_hook_t *duet_hook_fp;
 
 /* InodeTree interface functions */
 typedef int (itree_get_inode_t)(void *, unsigned long, struct inode **);

@@ -33,6 +33,9 @@
 #include <linux/hardirq.h> /* for BUG_ON(!in_atomic()) only */
 #include <linux/memcontrol.h>
 #include <linux/cleancache.h>
+#ifdef CONFIG_DUET
+#include <linux/duet.h>
+#endif /* CONFIG_DUET */
 #include "internal.h"
 
 #define CREATE_TRACE_POINTS
@@ -44,11 +47,6 @@
 #include <linux/buffer_head.h> /* for try_to_free_buffers */
 
 #include <asm/mman.h>
-
-#ifdef CONFIG_DUET
-duet_hook_t *duet_hook_cache_fp = NULL;
-EXPORT_SYMBOL(duet_hook_cache_fp);
-#endif /* CONFIG_DUET */
 
 /*
  * Shared mappings implemented 30.11.1994. It's not fully working yet,
@@ -124,7 +122,7 @@ void __delete_from_page_cache(struct page *page)
 	duet_hook_t *dhfp = NULL;
 
 	rcu_read_lock();
-	dhfp = rcu_dereference(duet_hook_cache_fp);
+	dhfp = rcu_dereference(duet_hook_fp);
 
 	if (dhfp)
 		dhfp(DUET_PAGE_REMOVED, (void *)page);
@@ -509,7 +507,7 @@ int add_to_page_cache_locked(struct page *page, struct address_space *mapping,
 
 #ifdef CONFIG_DUET
 	rcu_read_lock();
-	dhfp = rcu_dereference(duet_hook_cache_fp);
+	dhfp = rcu_dereference(duet_hook_fp);
 
 	if (dhfp)
 		dhfp(DUET_PAGE_ADDED, (void *)page);
