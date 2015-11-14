@@ -7,8 +7,8 @@ AM_CFLAGS = -Wall -D_FILE_OFFSET_BITS=64 -fno-strict-aliasing -fPIC
 CFLAGS = -g -O2 -fno-strict-aliasing
 objects =
 cmds_objects = cmds-status.o cmds-task.o cmds-debug.o
-libduet_objects = duet-api.o
-libduet_headers = duet.h
+libduet_objects = duet-api.o itree.o rbtree.o
+libduet_headers = duet.h itree.h rbtree.h
 
 INSTALL = install
 prefix ?= /usr/local

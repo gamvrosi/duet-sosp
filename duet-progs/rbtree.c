@@ -24,7 +24,6 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include "rbtree_augmented.h"
-//#include <linux/export.h>
 
 /*
  * red-black trees properties:  http://en.wikipedia.org/wiki/Rbtree

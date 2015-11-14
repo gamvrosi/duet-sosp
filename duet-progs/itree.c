@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "duet.h"
+#include "itree.h"
 
 //#define ITREE_DEBUG
 
@@ -188,7 +189,7 @@ int itree_update(struct inode_tree *itree, __u8 taskid, int duet_fd)
 	struct duet_item *buf = itree->buf;
 
 again:
-	itret = MAX_ITEMS;
+	itret = DUET_MAX_ITEMS;
 	if (duet_fetch(duet_fd, taskid, buf, &itret)) {
 		fprintf(stderr, "itree: duet_fetch failed\n");
 		ret = 1;
@@ -231,7 +232,7 @@ again:
 	}
 
 	/* There might be more events to fetch */
-	if (itret == MAX_ITEMS)
+	if (itret == DUET_MAX_ITEMS)
 		goto again;
 out:
 	return ret;
