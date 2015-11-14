@@ -21,9 +21,8 @@
  */
 
 #include "rsync.h"
-#ifdef HAVE_DUET
-#include "duet/duet.h"
 
+#ifdef HAVE_DUET
 extern int tid;
 extern struct inode_tree itree;
 extern int out_of_order, duet_fd;

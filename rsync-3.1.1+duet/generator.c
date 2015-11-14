@@ -23,9 +23,6 @@
 #include "rsync.h"
 #include "inums.h"
 #include "ifuncs.h"
-#ifdef HAVE_DUET
-#include "duet/duet.h"
-#endif /* HAVE_DUET */
 
 extern int dry_run;
 extern int do_xfers;

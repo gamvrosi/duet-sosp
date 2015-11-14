@@ -19,6 +19,10 @@
  */
 
 #include "config.h"
+#ifdef HAVE_DUET
+#include <duet/duet.h>
+#include <duet/itree.h>
+#endif /* HAVE_DUET */
 
 #define False 0
 #define True 1

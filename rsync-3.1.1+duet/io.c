@@ -30,9 +30,6 @@
 #include "rsync.h"
 #include "ifuncs.h"
 #include "inums.h"
-#ifdef HAVE_DUET
-#include "duet/duet.h"
-#endif /* HAVE_DUET */
 
 /** If no timeout is specified then use a 60 second select timeout */
 #define SELECT_TIMEOUT 60

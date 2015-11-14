@@ -25,9 +25,6 @@
 #include "rounding.h"
 #include "inums.h"
 #include "io.h"
-#ifdef HAVE_DUET
-#include "duet/duet.h"
-#endif /* HAVE_DUET */
 
 extern int am_root;
 extern int am_server;

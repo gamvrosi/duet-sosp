@@ -21,9 +21,6 @@
 
 #include "rsync.h"
 #include "inums.h"
-#ifdef HAVE_DUET
-#include "duet/duet.h"
-#endif /* HAVE_DUET */
 
 extern int do_xfers;
 extern int am_server;

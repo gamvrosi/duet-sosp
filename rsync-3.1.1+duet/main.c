@@ -26,9 +26,8 @@
 #if defined CONFIG_LOCALE && defined HAVE_LOCALE_H
 #include <locale.h>
 #endif
-#ifdef HAVE_DUET
-#include "duet/duet.h"
 
+#ifdef HAVE_DUET
 extern int out_of_order;
 #endif /* HAVE_DUET */
 extern int dry_run;

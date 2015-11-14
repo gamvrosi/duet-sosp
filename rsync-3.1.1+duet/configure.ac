@@ -57,6 +57,21 @@ if test x"$enable_profile" = x"yes"; then
 	CFLAGS="$CFLAGS -pg"
 fi
 
+# The following test will try to find -lduet.
+# If we fail, we won't be compiling Duet functionality in rsync
+AC_CHECK_FUNCS(duet_register)
+if test x"$ac_cv_func_duet_register" = x"no"; then
+	case "$LIBS" in
+	*-lduet*) ;;
+	*) AC_CHECK_LIB(duet, duet_register) ;;
+	esac
+	dnl We can't just call AC_CHECK_FUNCS(duet_register) here, because the value
+	dnl has been cached
+	if test x"$ac_cv_lib_duet_duet_register" = x"yes"; then
+		AC_DEFINE(HAVE_DUET, 1, [Define to 1 if you have the Duet API functions])
+	fi
+fi
+
 
 # Specifically, this turns on panic_action handling.
 AC_ARG_ENABLE(maintainer-mode,
@@ -798,12 +813,6 @@ else
     AC_MSG_RESULT(no)
 fi
 
-AC_MSG_CHECKING([included duet lib])
-AC_MSG_RESULT($srcdir/duet)
-BUILD_DUET='$(duet_OBJS)'
-CFLAGS="-I$srcdir/duet $CFLAGS"
-AC_DEFINE(HAVE_DUET, 1, [Define to 1 if you want to include duet framework support])
-
 AC_CACHE_CHECK([for unsigned char],rsync_cv_SIGNED_CHAR_OK,[
 AC_TRY_COMPILE([],[signed char *s = ""],
 rsync_cv_SIGNED_CHAR_OK=yes,rsync_cv_SIGNED_CHAR_OK=no)])
@@ -958,7 +967,6 @@ AC_SUBST(OBJ_RESTORE)
 AC_SUBST(CC_SHOBJ_FLAG)
 AC_SUBST(BUILD_POPT)
 AC_SUBST(BUILD_ZLIB)
-AC_SUBST(BUILD_DUET)
 AC_SUBST(MAKE_MAN)
 
 AC_PATH_PROG([STUNNEL], [stunnel], [stunnel], [$PATH$PATH_SEPARATOR/usr/sbin$PATH_SEPARATOR/sbin])
