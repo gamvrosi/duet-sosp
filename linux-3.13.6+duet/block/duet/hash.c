@@ -59,9 +59,9 @@ int hash_init(void)
 
 /* Add one event into the hash table */
 int hash_add(struct duet_task *task, unsigned long ino, unsigned long idx,
-	__u8 evtmask, short in_scan)
+	__u16 evtmask, short in_scan)
 {
-	__u8 curmask = 0;
+	__u16 curmask = 0;
 	short found = 0;
 	unsigned long bnum, flags;
 	struct hlist_bl_head *b;

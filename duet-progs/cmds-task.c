@@ -169,7 +169,7 @@ static int cmd_task_reg(int fd, int argc, char **argv)
 {
 	int c, tid, len=0, ret=0;
 	char path[DUET_MAX_PATH], name[DUET_MAX_NAME];
-	__u8 evtmask = 0;
+	__u32 regmask = 0;
 	__u32 bitrange = 0;
 
 	optind = 1;
@@ -194,7 +194,7 @@ static int cmd_task_reg(int fd, int argc, char **argv)
 			break;
 		case 'm':
 			errno = 0;
-			evtmask = (__u8)strtol(optarg, NULL, 10);
+			regmask = (__u32)strtol(optarg, NULL, 10);
 			if (errno) {
 				perror("strtol: invalid evtmask");
 				usage(cmd_task_reg_usage);
@@ -215,7 +215,7 @@ static int cmd_task_reg(int fd, int argc, char **argv)
 	if (!name[0] || argc != optind)
 		usage(cmd_task_reg_usage);
 
-	ret = duet_register(fd, path, evtmask, bitrange, name, &tid);
+	ret = duet_register(fd, path, regmask, bitrange, name, &tid);
 	if (ret < 0) {
 		perror("tasks register ioctl error");
 		usage(cmd_task_reg_usage);

@@ -61,7 +61,7 @@ void close_duet_dev(int duet_fd)
 	close(duet_fd);
 }
 
-int duet_register(int duet_fd, const char *path, __u8 evtmask, __u32 bitrange,
+int duet_register(int duet_fd, const char *path, __u32 regmask, __u32 bitrange,
 	const char *name, int *tid)
 {
 	int ret = 0;
@@ -77,7 +77,7 @@ int duet_register(int duet_fd, const char *path, __u8 evtmask, __u32 bitrange,
 	args.cmd_flags = DUET_REGISTER;
 	memcpy(args.name, name, DUET_MAX_NAME);
 	args.bitrange = bitrange;
-	args.evtmask = evtmask;
+	args.regmask = regmask;
 	memcpy(args.path, path, DUET_MAX_PATH);
 
 	ret = ioctl(duet_fd, DUET_IOC_CMD, &args);
@@ -296,15 +296,16 @@ int duet_task_list(int duet_fd)
 		perror("duet: task list ioctl failed");
 
 	/* Print out the list we received */
-	fprintf(stdout, "ID\tTask Name\tBit range\tEvt. mask\n"
-			"--\t---------\t---------\t---------\n");
+	fprintf(stdout,
+			"ID\tTask Name\tFile task?\tBit range\tEvt. mask\n"
+			"--\t---------\t----------\t---------\t---------\n");
 	for (i=0; i<DUET_MAX_TASKS; i++) {
 		if (!args.tid[i])
 			break;
 
-		fprintf(stdout, "%2d\t%9s\t%9u\t%9u\n",
-			args.tid[i], args.tnames[i], args.bitrange[i],
-			args.evtmask[i]);
+		fprintf(stdout, "%2d\t%9s\t%10s\t%9u\t%8x\n",
+			args.tid[i], args.tnames[i], args.is_file[i] ? "TRUE" : "FALSE",
+			args.bitrange[i], args.evtmask[i]);
 	}
 
 	return ret;

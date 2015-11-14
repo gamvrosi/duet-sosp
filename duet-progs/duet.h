@@ -38,23 +38,40 @@
 #endif /* DUET_DEBUG */
 
 /*
- * Duet can be either state- or event-based. State-based Duet monitors changes
- * in the page cache, specifically whether a page EXISTS and whether it has
- * been MODIFIED. Event-based Duet monitors events that have happened on a page,
- * which include all events in the lifetime of a cache page: ADDED, REMOVED,
- * DIRTY, FLUSHED.
+ * Duet can be either state- and/or event-based.
+ * Event-based Duet monitors events that have happened on a page, which include
+ * all events in the lifetime of a cache page: ADDED, REMOVED, DIRTY, FLUSHED.
  * Add and remove events are triggered when a page __descriptor__ is inserted or
  * removed from the page cache. Modification events are triggered when the page
  * is dirtied (nb: during writes, pages are added, then dirtied), and flush
  * events are triggered when a page is marked for writeback.
+ * State-based Duet monitors changes in the page cache. Registering for EXISTS
+ * events means that fetch will be returning ADDED or REMOVED events if the
+ * state of the page changes since the last fetch (i.e. the two events cancel
+ * each other out). Registering for MODIFIED events means that fetch will be
+ * returning DIRTY or FLUSHED events if the state of the page changes since the
+ * last fetch.
  */
-#define DUET_PAGE_ADDED		0x01
-#define DUET_PAGE_REMOVED	0x02
-#define DUET_PAGE_DIRTY		0x04
-#define DUET_PAGE_FLUSHED	0x08
-#define DUET_PAGE_MODIFIED	0x10
-#define DUET_PAGE_EXISTS	0x20
-#define DUET_FILE_TASK		0x80
+#define DUET_PAGE_ADDED		0x0001
+#define DUET_PAGE_REMOVED	0x0002
+#define DUET_PAGE_DIRTY		0x0004
+#define DUET_PAGE_FLUSHED	0x0008
+#define DUET_PAGE_MODIFIED	0x0010
+#define DUET_PAGE_EXISTS	0x0020
+
+#define DUET_IN_ACCESS		0x0040
+#define DUET_IN_ATTRIB		0x0080
+#define DUET_IN_WCLOSE		0x0100
+#define DUET_IN_RCLOSE		0x0200
+#define DUET_IN_CREATE		0x0400
+#define DUET_IN_DELETE		0x0800
+#define DUET_IN_MODIFY		0x1000
+#define DUET_IN_MOVED		0x2000
+#define DUET_IN_OPEN		0x4000
+
+/* Used only during registration */
+#define DUET_REG_SBLOCK		0x8000
+#define DUET_FILE_TASK		0x10000	/* we register a 32-bit flag due to this */
 
 /*
  * Item struct returned for processing. For both state- and event- based duet,
@@ -65,13 +82,13 @@
 struct duet_item {
 	unsigned long ino;
 	unsigned long idx;
-	__u8 state;
+	__u16 state;
 };
 
 int open_duet_dev(void);
 void close_duet_dev(int duet_fd);
 
-int duet_register(int duet_fd, const char *path, __u8 evtmask, __u32 bitrange,
+int duet_register(int duet_fd, const char *path, __u32 regmask, __u32 bitrange,
 	const char *name, int *tid);
 int duet_deregister(int duet_fd, int tid);
 int duet_fetch(int duet_fd, int tid, struct duet_item *items, int *count);

@@ -75,7 +75,7 @@ done:
 EXPORT_SYMBOL_GPL(duet_fetch);
 
 /* Handle an event. We're in RCU context so whatever happens, stay awake! */
-void duet_hook(__u8 evtcode, void *data)
+void duet_hook(__u16 evtcode, void *data)
 {
 	struct page *page = (struct page *)data;
 	struct inode *inode;

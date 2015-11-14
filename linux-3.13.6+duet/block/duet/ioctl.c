@@ -283,7 +283,7 @@ static int duet_ioctl_cmd(void __user *arg)
 		break;
 
 	case DUET_REGISTER:
-		ca->ret = duet_register(ca->path, ca->evtmask, ca->bitrange,
+		ca->ret = duet_register(ca->path, ca->regmask, ca->bitrange,
 					ca->name, &ca->tid);
 		break;
 
@@ -352,6 +352,7 @@ static int duet_ioctl_tlist(void __user *arg)
 	list_for_each_entry(cur, &duet_env.tasks, task_list) {
 		la->tid[i] = cur->id;
 		memcpy(la->tnames[i], cur->name, MAX_NAME);
+		la->is_file[i] = cur->is_file;
 		la->bitrange[i] = cur->bittree.range;
 		la->evtmask[i] = cur->evtmask;
 		i++;

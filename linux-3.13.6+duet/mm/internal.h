@@ -14,8 +14,6 @@
 #include <linux/mm.h>
 #ifdef CONFIG_DUET
 #include <linux/duet.h>
-
-extern duet_hook_t *duet_hook_cache_fp;
 #endif /* CONFIG_DUET */
 
 void free_pgtables(struct mmu_gather *tlb, struct vm_area_struct *start_vma,

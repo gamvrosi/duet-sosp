@@ -51,8 +51,9 @@ struct duet_ioctl_fetch_args {
 struct duet_ioctl_list_args {
 	__u8 	tid[MAX_TASKS];			/* out */
 	char 	tnames[MAX_TASKS][MAX_NAME];	/* out */
+	__u8	is_file[MAX_TASKS];		/* out */
 	__u32 	bitrange[MAX_TASKS];		/* out */
-	__u8	evtmask[MAX_TASKS];		/* out */
+	__u16	evtmask[MAX_TASKS];		/* out */
 };
 
 struct duet_ioctl_cmd_args {
@@ -62,7 +63,7 @@ struct duet_ioctl_cmd_args {
 	union {
 		/* Registration args */
 		struct {
-			__u8 	evtmask;	/* in */
+			__u32 	regmask;	/* in */
 			__u32 	bitrange;	/* in */
 			char 	name[MAX_NAME];	/* in */
 			char	path[MAX_PATH];	/* in */

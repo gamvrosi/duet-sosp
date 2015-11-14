@@ -59,7 +59,7 @@ struct item_hnode {
 	struct hlist_bl_node	node;
 	struct duet_item	item;
 	__u8			refcount;
-	__u8			state[MAX_TASKS];
+	__u16			state[MAX_TASKS];
 };
 
 struct duet_bittree {
@@ -80,7 +80,7 @@ struct duet_task {
 	struct list_head	task_list;
 	wait_queue_head_t	cleaner_queue;
 	atomic_t		refcount;
-	__u8			evtmask;	/* Mask of subscribed events */
+	__u16			evtmask;	/* Mask of subscribed events */
 	char			*pathbuf;	/* Buffer for getpath */
 
 	/* Optional heuristics to filter the events received */
@@ -128,7 +128,7 @@ extern int d_find_path(struct inode *cnode, struct dentry *p_dentry,
 /* hash.c */
 int hash_init(void);
 int hash_add(struct duet_task *task, unsigned long ino, unsigned long idx,
-	__u8 evtmask, short in_scan);
+	__u16 evtmask, short in_scan);
 int hash_fetch(struct duet_task *task, struct duet_item *itm);
 void hash_print(struct duet_task *task);
 

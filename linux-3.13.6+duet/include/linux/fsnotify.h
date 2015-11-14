@@ -15,6 +15,9 @@
 #include <linux/audit.h>
 #include <linux/slab.h>
 #include <linux/bug.h>
+#ifdef CONFIG_DUET
+#include <linux/duet.h>
+#endif /* CONFIG_DUET */
 
 /*
  * fsnotify_d_instantiate - instantiate a dentry for inode

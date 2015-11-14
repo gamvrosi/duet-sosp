@@ -33,9 +33,6 @@
 #include <linux/hardirq.h> /* for BUG_ON(!in_atomic()) only */
 #include <linux/memcontrol.h>
 #include <linux/cleancache.h>
-#ifdef CONFIG_DUET
-#include <linux/duet.h>
-#endif /* CONFIG_DUET */
 #include "internal.h"
 
 #define CREATE_TRACE_POINTS

@@ -34,7 +34,7 @@ static int process_inode(struct duet_task *task, struct inode *inode)
 {
 	struct radix_tree_iter iter;
 	void **slot;
-	__u8 state;
+	__u16 state;
 
 	/* For file tasks, use the inode bitmap to decide whether to skip inode */
 	if (task->is_file && (bittree_check_inode(&task->bittree, task, inode) == 1))
@@ -230,7 +230,7 @@ EXPORT_SYMBOL_GPL(duet_set_done);
 
 /* Properly allocate and initialize a task struct */
 static int duet_task_init(struct duet_task **task, const char *name,
-	__u8 evtmask, __u32 bitrange, struct super_block *f_sb,
+	__u32 regmask, __u32 bitrange, struct super_block *f_sb,
 	struct dentry *p_dentry)
 {
 	*task = kzalloc(sizeof(**task), GFP_KERNEL);
@@ -251,7 +251,7 @@ static int duet_task_init(struct duet_task **task, const char *name,
 	init_waitqueue_head(&(*task)->cleaner_queue);
 
 	/* Is this a file or a block task? */
-	(*task)->is_file = ((evtmask & DUET_FILE_TASK) ? 1 : 0);
+	(*task)->is_file = ((regmask & DUET_FILE_TASK) ? 1 : 0);
 
 	/* Initialize bitmap tree */
 	if (!bitrange)
@@ -270,27 +270,27 @@ static int duet_task_init(struct duet_task **task, const char *name,
 	}
 
 	/* Do some sanity checking on event mask. */
-	if (evtmask & DUET_PAGE_EXISTS) {
-		if (evtmask & (DUET_PAGE_ADDED | DUET_PAGE_REMOVED)) {
+	if (regmask & DUET_PAGE_EXISTS) {
+		if (regmask & (DUET_PAGE_ADDED | DUET_PAGE_REMOVED)) {
 			printk(KERN_DEBUG "duet: failed to register EXIST events\n");
 			goto err;
 		}
-		evtmask |= (DUET_PAGE_ADDED | DUET_PAGE_REMOVED);
+		regmask |= (DUET_PAGE_ADDED | DUET_PAGE_REMOVED);
 	}
 
-	if (evtmask & DUET_PAGE_MODIFIED) {
-		if (evtmask & (DUET_PAGE_DIRTY | DUET_PAGE_FLUSHED)) {
+	if (regmask & DUET_PAGE_MODIFIED) {
+		if (regmask & (DUET_PAGE_DIRTY | DUET_PAGE_FLUSHED)) {
 			printk(KERN_DEBUG "duet: failed to register MODIFIED events\n");
 			goto err;
 		}
-		evtmask |= (DUET_PAGE_DIRTY | DUET_PAGE_FLUSHED);
+		regmask |= (DUET_PAGE_DIRTY | DUET_PAGE_FLUSHED);
 	}
 
-	(*task)->evtmask = evtmask & (~DUET_FILE_TASK);
+	(*task)->evtmask = (__u16) (regmask & 0xffff);
 	(*task)->f_sb = f_sb;
 	(*task)->p_dentry = p_dentry;
 
-	printk(KERN_DEBUG "duet: task registered with evtmask %u", evtmask);
+	printk(KERN_DEBUG "duet: task registered with evtmask %x", (*task)->evtmask);
 	return 0;
 err:
 	printk(KERN_ERR "duet: error registering task\n");
@@ -319,8 +319,8 @@ void duet_task_dispose(struct duet_task *task)
 }
 
 /* Registers a user-level task. Must also prep path. */
-int __register_utask(char *path, __u8 evtmask, __u32 bitrange, const char *name,
-	__u8 *taskid)
+int __register_utask(char *path, __u32 regmask, __u32 bitrange,
+	const char *name, __u8 *taskid)
 {
 	int ret, fd;
 	struct list_head *last;
@@ -374,7 +374,7 @@ int __register_utask(char *path, __u8 evtmask, __u32 bitrange, const char *name,
 		goto reg_put;
 	}
 
-	ret = duet_task_init(&task, name, evtmask, bitrange, sb, dentry);
+	ret = duet_task_init(&task, name, regmask, bitrange, sb, dentry);
 	if (ret) {
 		printk(KERN_ERR "duet_register: failed to initialize task\n");
 		ret = -EINVAL;
@@ -416,8 +416,8 @@ reg_done:
 }
 
 /* Registers a kernel task. No path prep required */
-int __register_ktask(char *path, __u8 evtmask, __u32 bitrange, const char *name,
-	__u8 *taskid)
+int __register_ktask(char *path, __u32 regmask, __u32 bitrange,
+	const char *name, __u8 *taskid)
 {
 	int ret;
 	struct list_head *last;
@@ -431,7 +431,7 @@ int __register_ktask(char *path, __u8 evtmask, __u32 bitrange, const char *name,
 		return -EINVAL;
 	}
 
-	ret = duet_task_init(&task, name, evtmask, bitrange, sb, NULL);
+	ret = duet_task_init(&task, name, regmask, bitrange, sb, NULL);
 	if (ret) {
 		printk(KERN_ERR "duet_register: failed to initialize task\n");
 		return -EINVAL;
@@ -464,15 +464,15 @@ int __register_ktask(char *path, __u8 evtmask, __u32 bitrange, const char *name,
 	return ret;
 }
 
-int duet_register(char *path, __u8 evtmask, __u32 bitrange, const char *name,
+int duet_register(char *path, __u32 regmask, __u32 bitrange, const char *name,
 	__u8 *taskid)
 {
 	int ret;
 
-	if (evtmask & DUET_REG_SBLOCK)
-		ret = __register_ktask(path, evtmask, bitrange, name, taskid);
+	if (regmask & DUET_REG_SBLOCK)
+		ret = __register_ktask(path, regmask, bitrange, name, taskid);
 	else
-		ret = __register_utask(path, evtmask, bitrange, name, taskid);
+		ret = __register_utask(path, regmask, bitrange, name, taskid);
 
 	return ret;
 }

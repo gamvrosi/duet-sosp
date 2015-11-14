@@ -39,17 +39,29 @@
  * returning DIRTY or FLUSHED events if the state of the page changes since the
  * last fetch.
  */
-#define DUET_PAGE_ADDED		0x01
-#define DUET_PAGE_REMOVED	0x02
-#define DUET_PAGE_DIRTY		0x04
-#define DUET_PAGE_FLUSHED	0x08
-#define DUET_PAGE_MODIFIED	0x10
-#define DUET_PAGE_EXISTS	0x20
+#define DUET_PAGE_ADDED		0x0001
+#define DUET_PAGE_REMOVED	0x0002
+#define DUET_PAGE_DIRTY		0x0004
+#define DUET_PAGE_FLUSHED	0x0008
+#define DUET_PAGE_MODIFIED	0x0010
+#define DUET_PAGE_EXISTS	0x0020
 
-#define DUET_MASK_VALID		0x40 /* Used only for page state */
-#define DUET_REG_SBLOCK		0x40 /* Used only during registration */
+#define DUET_IN_ACCESS		0x0040
+#define DUET_IN_ATTRIB		0x0080
+#define DUET_IN_WCLOSE		0x0100
+#define DUET_IN_RCLOSE		0x0200
+#define DUET_IN_CREATE		0x0400
+#define DUET_IN_DELETE		0x0800
+#define DUET_IN_MODIFY		0x1000
+#define DUET_IN_MOVED		0x2000
+#define DUET_IN_OPEN		0x4000
 
-#define DUET_FILE_TASK		0x80
+/* Used only for page state */
+#define DUET_MASK_VALID		0x8000
+
+/* Used only during registration */
+#define DUET_REG_SBLOCK		0x8000
+#define DUET_FILE_TASK		0x10000	/* we register a 32-bit flag due to this */
 
 /*
  * Item struct returned for processing. We return 6 bits. For state-based duet,
@@ -60,7 +72,7 @@
 struct duet_item {
 	unsigned long ino;
 	unsigned long idx;
-	__u8 state;
+	__u16 state;
 };
 
 /*
@@ -73,7 +85,7 @@ struct inode_tree {
 };
 
 /* Framework interface functions */
-int duet_register(char *path, __u8 evtmask, __u32 bitrange, const char *name,
+int duet_register(char *path, __u32 regmask, __u32 bitrange, const char *name,
 		  __u8 *taskid);
 int duet_deregister(__u8 taskid);
 int duet_fetch(__u8 taskid, struct duet_item *items, __u16 *count);
@@ -87,8 +99,8 @@ int duet_print_bitmap(__u8 taskid);
 int duet_print_events(__u8 taskid);
 
 /* Hook functions that trasmit event info to the framework core */
-typedef void (duet_hook_t) (__u8, void *);
-void duet_hook(__u8 evtcode, void *data);
+typedef void (duet_hook_t) (__u16, void *);
+void duet_hook(__u16 evtcode, void *data);
 extern duet_hook_t *duet_hook_fp;
 
 /* InodeTree interface functions */

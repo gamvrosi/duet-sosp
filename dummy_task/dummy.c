@@ -54,7 +54,7 @@ int main(int argc, char *argv[])
 	int ret = 0, tid, c, duet_fd = 0, itret = 0, tmp;
 	long total_items = 0;
 	long total_fetches = 0;
-	__u8 evtmask;
+	__u32 regmask;
 	struct duet_item buf[DUET_MAX_ITEMS];
 	struct timespec slp = {0, 0};
 
@@ -119,12 +119,12 @@ int main(int argc, char *argv[])
 	}
 
 	if (evtbased)
-		evtmask = DUET_PAGE_ADDED | DUET_FILE_TASK;
+		regmask = DUET_PAGE_ADDED | DUET_FILE_TASK;
 	else
-		evtmask = DUET_PAGE_EXISTS | DUET_FILE_TASK;
+		regmask = DUET_PAGE_EXISTS | DUET_FILE_TASK;
 
 	/* Register with Duet framework */
-	if (o3 && (duet_register(duet_fd, path, evtmask, 1, "dummy", &tid))) {
+	if (o3 && (duet_register(duet_fd, path, regmask, 1, "dummy", &tid))) {
 		fprintf(stderr, "Error: failed to register with Duet\n");
 		ret = 1;
 		goto done_close;
