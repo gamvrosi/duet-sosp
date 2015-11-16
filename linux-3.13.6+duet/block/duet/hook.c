@@ -77,9 +77,18 @@ EXPORT_SYMBOL_GPL(duet_fetch);
 /* Handle an event. We're in RCU context so whatever happens, stay awake! */
 void duet_hook(__u16 evtcode, void *data)
 {
-	struct page *page = (struct page *)data;
+	struct page *page;
 	struct inode *inode;
 	struct duet_task *cur;
+	unsigned long page_idx = 0;
+
+	/* File events are handled separately */
+	if (evtcode & DUET_IN_EVENTS) {
+		inode = (struct inode *)data;
+		goto handle_inode;
+	}
+
+	page = (struct page *)data;
 
 	/* Duet must be online, and the page must belong to a valid mapping */
 	if (!duet_online() || !page || !page_mapping(page) ||
@@ -87,7 +96,9 @@ void duet_hook(__u16 evtcode, void *data)
 		return;
 
 	inode = page_mapping(page)->host;
+	page_idx = page->index;
 
+handle_inode:
 	/* Verify that the inode does not belong to a special file */
 	if (!S_ISREG(inode->i_mode) && !S_ISDIR(inode->i_mode)) {
 		duet_dbg(KERN_INFO "duet: event not on regular file\n");
@@ -108,13 +119,21 @@ void duet_hook(__u16 evtcode, void *data)
 			continue;
 		}
 
-		/* For file tasks, use the inode bitmap to filter out event */
-		if (cur->is_file && (bittree_check(&cur->bittree, inode->i_ino,
-						1, cur) == 1))
-			continue;
+		/* Handle some file task specific events */
+		if (cur->is_file) {
+			if (evtcode == DUET_IN_DELETE) {
+				/* Reset state for this inode */
+				bittree_clear_bits(&cur->bittree, inode->i_ino, 1);
+				continue;
+			}
+
+			/* Use the inode bitmap to filter out event if applicable */
+			if (bittree_check(&cur->bittree, inode->i_ino, 1, cur) == 1)
+				continue;
+		}
 
 		/* Update the hash table */
-		if (hash_add(cur, inode->i_ino, page->index, evtcode, 0))
+		if (hash_add(cur, inode->i_ino, page_idx, evtcode, 0))
 			printk(KERN_ERR "duet: hash table add failed\n");
 	}
 	rcu_read_unlock();

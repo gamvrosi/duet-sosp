@@ -63,6 +63,11 @@
 #define DUET_REG_SBLOCK		0x8000
 #define DUET_FILE_TASK		0x10000	/* we register a 32-bit flag due to this */
 
+/* Some macros, to make our lives easier */
+#define DUET_IN_EVENTS		(DUET_IN_ACCESS | DUET_IN_ATTRIB | DUET_IN_WCLOSE | \
+							 DUET_IN_RCLOSE | DUET_IN_CREATE | DUET_IN_DELETE | \
+							 DUET_IN_MODIFY | DUET_IN_MOVED | DUET_IN_OPEN)
+
 /*
  * Item struct returned for processing. We return 6 bits. For state-based duet,
  * we mark a page if it EXISTS or is MODIFIED. For event-based duet, we mark a

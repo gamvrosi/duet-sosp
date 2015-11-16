@@ -150,9 +150,10 @@ int bittree_check_inode(struct duet_bittree *bt, struct duet_task *task,
 	struct inode *inode);
 int bittree_check(struct duet_bittree *bt, __u64 idx, __u32 len,
 	struct duet_task *task);
-inline int bittree_set_done(struct duet_bittree *bt, __u64 idx, __u32 len);
-inline int bittree_unset_done(struct duet_bittree *bt, __u64 idx, __u32 len);
-/*inline int bittree_set_relevance(struct duet_bittree *bt, __u64 idx, __u32 len,
+int bittree_set_done(struct duet_bittree *bt, __u64 idx, __u32 len);
+int bittree_unset_done(struct duet_bittree *bt, __u64 idx, __u32 len);
+int bittree_clear_bits(struct duet_bittree *bt, __u64 idx, __u32 len);
+/*int bittree_set_relevance(struct duet_bittree *bt, __u64 idx, __u32 len,
 	int is_relevant);*/
 
 int bittree_print(struct duet_task *task);

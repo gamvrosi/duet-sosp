@@ -95,6 +95,15 @@ static inline void fsnotify_move(struct inode *old_dir, struct inode *new_dir,
 	__u32 old_dir_mask = (FS_EVENT_ON_CHILD | FS_MOVED_FROM);
 	__u32 new_dir_mask = (FS_EVENT_ON_CHILD | FS_MOVED_TO);
 	const unsigned char *new_name = moved->d_name.name;
+#ifdef CONFIG_DUET
+	duet_hook_t *dhfp = NULL;
+
+	rcu_read_lock();
+	dhfp = rcu_dereference(duet_hook_fp);
+	if (dhfp)
+		dhfp(DUET_IN_MOVED, NULL);
+	rcu_read_unlock();
+#endif /* CONFIG_DUET */
 
 	if (old_dir == new_dir)
 		old_dir_mask |= FS_DN_RENAME;
@@ -149,6 +158,15 @@ static inline void fsnotify_nameremove(struct dentry *dentry, int isdir)
  */
 static inline void fsnotify_inoderemove(struct inode *inode)
 {
+#ifdef CONFIG_DUET
+	duet_hook_t *dhfp = NULL;
+
+	rcu_read_lock();
+	dhfp = rcu_dereference(duet_hook_fp);
+	if (dhfp)
+		dhfp(DUET_IN_DELETE, (void *)inode);
+	rcu_read_unlock();
+#endif /* CONFIG_DUET */
 	fsnotify(inode, FS_DELETE_SELF, inode, FSNOTIFY_EVENT_INODE, NULL, 0);
 	__fsnotify_inode_delete(inode);
 }

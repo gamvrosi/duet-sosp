@@ -510,6 +510,11 @@ inline int bittree_unset_done(struct duet_bittree *bt, __u64 idx, __u32 len)
 	return __update_tree(bt, idx, len, BMAP_DONE_RST);
 }
 
+inline int bittree_clear_bits(struct duet_bittree *bt, __u64 idx, __u32 len)
+{
+	return __update_tree(bt, idx, len, BMAP_DONE_RST | BMAP_RELV_RST);
+}
+
 /*inline int bittree_set_relevance(struct duet_bittree *bt, __u64 idx, __u32 len,
 	int is_relevant)
 {
