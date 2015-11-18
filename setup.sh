@@ -80,6 +80,10 @@ while getopts ":dcigu" opt; do
 		#make reconfigure
 		make || die
 
+		# ...and (re)compile the dummy task
+		cd "${BASEDIR}/dummy_task"
+		make || die
+
 		exit 0
 		;;
 	i)

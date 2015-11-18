@@ -282,21 +282,21 @@ static int __update_tree(struct duet_bittree *bt, __u64 idx, __u32 len,
 				goto done;
 
 			if (bt->is_file) {
-				/* First read relevant bit */
-				res = duet_bmap_read(bnode->relv, bnode->idx, bt->range, idx);
-				if (res == -1) {
-					ret = -1;
-					goto done;
-				}
-				ret |= res << 1;
-
-				/* Then read seen bit */
+				/* First read seen bit */
 				res = duet_bmap_read(bnode->seen, bnode->idx, bt->range, idx);
 				if (res == -1) {
 					ret = -1;
 					goto done;
 				}
 				ret |= res << 2;
+
+				/* Then read relevant bit */
+				res = duet_bmap_read(bnode->relv, bnode->idx, bt->range, idx);
+				if (res == -1) {
+					ret = -1;
+					goto done;
+				}
+				ret |= res << 1;
 			}
 
 			/* Read done bit */
@@ -487,7 +487,7 @@ done:
 static int do_bittree_check(struct duet_bittree *bt, __u64 idx, __u32 len,
 	struct duet_task *task, struct inode *inode)
 {
-	int ret, bits, relv;
+	int ret, bits;
 
 	if (bt->is_file) { /* File task */
 
@@ -501,21 +501,21 @@ static int do_bittree_check(struct duet_bittree *bt, __u64 idx, __u32 len,
 		if (!(bits & 0x4)) {
 			/* We have not seen this inode before */
 			if (inode) {
-				relv = do_find_path(task, inode, 0, NULL);
+				ret = do_find_path(task, inode, 0, NULL);
 			} else if (task) {
-				relv = duet_find_path(task, idx, 0, NULL);
+				ret = duet_find_path(task, idx, 0, NULL);
 			} else {
 				printk(KERN_ERR "duet: check failed -- no task/inode given\n");
 				return -1;
 			}
 
-			if (!relv) {
+			if (!ret) {
 				/* Mark as relevant and return not done */
 				ret = __update_tree(bt, idx, 1, BMAP_SEEN_SET | BMAP_RELV_SET);
 				if (ret != -1)
 					ret = 0;
 
-			} else if (relv == 1) {
+			} else if (ret == 1) {
 				/* Mark as irrelevant and return done */
 				ret = __update_tree(bt, idx, 1, BMAP_SEEN_SET);
 				if (ret != -1)
@@ -528,7 +528,7 @@ static int do_bittree_check(struct duet_bittree *bt, __u64 idx, __u32 len,
 
 		} else {
 			/* We know this inode, return 1 if done, or irrelevant */
-			ret = (bits & 0x1) | (((~bits) & 0x2) >> 1);
+			ret = ((bits & 0x1) || !(bits & 0x2)) ? 1 : 0;
 		}
 
 	} else { /* Block task */

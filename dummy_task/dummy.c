@@ -151,9 +151,11 @@ int main(int argc, char *argv[])
 					}
 
 					if (!tmp)
-						fprintf(stdout, "Getpath code %d. Got %s\n", tmp, path);
+						fprintf(stdout, "Getpath code %d (evt %x). Got %s\n",
+								tmp, buf[c].state, path);
 					else
-						fprintf(stdout, "Getpath code %d.\n", tmp);
+						fprintf(stdout, "Getpath code %d (evt %x).\n", tmp,
+								buf[c].state);
 				}
 			}
 
