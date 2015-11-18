@@ -135,7 +135,7 @@ static void __exit duet_exit(void)
 }
 
 MODULE_AUTHOR("George Amvrosiadis <gamvrosi@gmail.com>");
-MODULE_DESCRIPTION("Duet synergy framework module");
+MODULE_DESCRIPTION("Duet framework module");
 MODULE_LICENSE("GPL");
 
 module_init(duet_init);

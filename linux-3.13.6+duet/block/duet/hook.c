@@ -84,8 +84,9 @@ void duet_hook(__u16 evtcode, void *data)
 
 	/* File events are handled separately */
 	if (evtcode & DUET_IN_EVENTS) {
-		inode = (struct inode *)data;
-		goto handle_inode;
+		return;
+//		inode = (struct inode *)data;
+//		goto handle_inode;
 	}
 
 	page = (struct page *)data;

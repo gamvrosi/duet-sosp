@@ -41,16 +41,20 @@ enum {
 /*
  * Red-black bitmap tree node.
  * Represents the range starting from idx. For block tasks, only the done
- * bitmap is used. For file tasks, the relv (relevant) is also used, and the
- * following semantics apply:
- * - !RELV && !DONE: The item has not been encountered yet
- * - !RELV &&  DONE: The item is not relevant to the task
- * -  RELV && !DONE: The item is relevant, but not processed
- * -  RELV &&  DONE: The item is relevant, and has already been processed
+ * bitmap is used. For file tasks, the seen and relv (relevant) bitmaps are
+ * also used. The semantics of different states are listed below, where an
+ * item can be in the unknown state due to a bitmap reset, or because it hasn't
+ * been encountered yet.
+ * - !SEEN && !RELV && !DONE: Item in unknown state
+ * - !SEEN && !RELV &&  DONE: Item processed, but in unknown state
+ * -  SEEN && !RELV && !DONE: Item not relevant to the task
+ * -  SEEN &&  RELV && !DONE: Item is relevant, but not processed
+ * -  SEEN &&  RELV &&  DONE: Item is relevant, and has already been processed
  */
 struct bmap_rbnode {
 	__u64		idx;
 	struct rb_node	node;
+	unsigned long	*seen;
 	unsigned long	*relv;
 	unsigned long	*done;
 };
