@@ -68,6 +68,13 @@
 							 DUET_IN_RCLOSE | DUET_IN_CREATE | DUET_IN_DELETE | \
 							 DUET_IN_MODIFY | DUET_IN_MOVED | DUET_IN_OPEN)
 
+/* Some structures to communicate file events to Duet */
+struct duet_move_data {
+	struct inode *target;
+	struct inode *old_dir;
+	struct inode *new_dir;
+};
+
 /*
  * Item struct returned for processing. We return 6 bits. For state-based duet,
  * we mark a page if it EXISTS or is MODIFIED. For event-based duet, we mark a

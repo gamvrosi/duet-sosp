@@ -77,29 +77,49 @@ EXPORT_SYMBOL_GPL(duet_fetch);
 /* Handle an event. We're in RCU context so whatever happens, stay awake! */
 void duet_hook(__u16 evtcode, void *data)
 {
-	struct page *page;
-	struct inode *inode;
+	struct page *page = NULL;
+	struct inode *inode = NULL;
+	struct duet_move_data *mdata = NULL;
 	struct duet_task *cur;
 	unsigned long page_idx = 0;
+	int p_old, p_new;
 
-	/* File events are handled separately */
-	if (evtcode & DUET_IN_EVENTS) {
+	/* Duet must be online */
+	if (!duet_online())
 		return;
-//		inode = (struct inode *)data;
-//		goto handle_inode;
+
+	/* Populate the necessary data structures according to event type */
+	if (evtcode & DUET_IN_EVENTS) {
+		/* Handle file event */
+		switch (evtcode) {
+			case DUET_IN_DELETE:
+				inode = (struct inode *)data;
+				break;
+			case DUET_IN_MOVED:
+				mdata = (struct duet_move_data *)data;
+				inode = mdata->target;
+				break;
+			default:
+				duet_dbg(KERN_INFO "duet: event code %x not supported\n",
+							evtcode);
+				return;
+		}
+	} else {
+		/* Handle page event */
+		page = (struct page *)data;
+
+		/* Duet must be online, and the page must belong to a valid mapping */
+		if (!page || !page_mapping(page))
+			return;
+
+		inode = page_mapping(page)->host;
+		page_idx = page->index;
 	}
 
-	page = (struct page *)data;
-
-	/* Duet must be online, and the page must belong to a valid mapping */
-	if (!duet_online() || !page || !page_mapping(page) ||
-		!page_mapping(page)->host)
+	/* Check that we're referring to an actual inode */
+	if (!inode)
 		return;
 
-	inode = page_mapping(page)->host;
-	page_idx = page->index;
-
-handle_inode:
 	/* Verify that the inode does not belong to a special file */
 	if (!S_ISREG(inode->i_mode) && !S_ISDIR(inode->i_mode)) {
 		duet_dbg(KERN_INFO "duet: event not on regular file\n");
@@ -122,10 +142,56 @@ handle_inode:
 
 		/* Handle some file task specific events */
 		if (cur->is_file) {
-			if (evtcode == DUET_IN_DELETE) {
-				/* Reset state for this inode */
-				bittree_clear_bits(&cur->bittree, inode->i_ino, 1);
-				continue;
+			switch (evtcode) {
+				case DUET_IN_DELETE:
+					/* Reset state for this inode */
+					bittree_clear_bits(&cur->bittree, inode->i_ino, 1);
+					continue;
+				case DUET_IN_MOVED:
+					/* Case 1: Sanity checking */
+					if (!(mdata->old_dir) || !(mdata->new_dir))
+						continue;
+
+					/* Case 2: Same parent directory */
+					if (mdata->old_dir == mdata->new_dir)
+						continue;
+
+					/* Check whether old and new parents are in task scope */
+					p_old = do_find_path(cur, mdata->old_dir, 0, NULL);
+					p_new = do_find_path(cur, mdata->new_dir, 0, NULL);
+					if (p_old == -1 || p_new == -1) {
+						printk(KERN_ERR "duet: can't determind parent dir relevance\n");
+						continue;
+					}
+
+					/*
+					 * Case 3: Move constrained outside/inside task scope?
+					 * Nothing to do.
+					 */
+
+					/* Case 4: Item was moved outside task scope */
+					if (!p_old && p_new) {
+						if (!S_ISDIR(inode->i_mode)) {
+							/* Item is a file. Unmark relevant bit */
+							bittree_unset_relv(&cur->bittree, inode->i_ino, 1);
+						} else {
+							/* Item is a dir. Clear seen, relevant bitmaps */
+							bittree_clear_bitmap(&cur->bittree,
+														BMAP_SEEN | BMAP_RELV);
+						}
+					}
+
+					/* Case 5: Item was moved inside task scope */
+					if (p_old && !p_new) {
+						if (!S_ISDIR(inode->i_mode)) {
+							/* Item is a file. Mark the relevant bit */
+							bittree_set_relv(&cur->bittree, inode->i_ino, 1);
+						} else {
+							/* Item is a dir. Clear seen bitmap only */
+							bittree_clear_bitmap(&cur->bittree, BMAP_SEEN);
+						}
+					}
+					continue;
 			}
 
 			/* Use the inode bitmap to filter out event if applicable */

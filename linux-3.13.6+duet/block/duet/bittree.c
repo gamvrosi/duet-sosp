@@ -211,6 +211,45 @@ static void bnode_dispose(struct bmap_rbnode *bnode, struct rb_node *rbnode,
 	kfree(bnode);
 }
 
+/* Traverses bitmap nodes, clearing bitmaps dictated by flags */
+static int __clear_tree(struct duet_bittree *bt, __u8 flags)
+{
+	int ret;
+	unsigned long iflags;
+	struct bmap_rbnode *bnode, *tmp;
+
+	local_irq_save(iflags);
+	spin_lock(&bt->lock);
+	duet_dbg(KERN_INFO "duet: Clearing bitmaps:%s%s%s\n",
+		(bt->is_file && (flags & BMAP_SEEN)) ? " Seen" : "",
+		(bt->is_file && (flags & BMAP_RELV)) ? " Relv" : "",
+		(flags & BMAP_DONE) ? " Done" : "");
+
+	rbtree_postorder_for_each_entry_safe(bnode, tmp, &bt->root, node) {
+		/* Clear every bitmap dictated by flags */
+		if (bt->is_file && (flags & BMAP_SEEN))
+			bitmap_zero(bnode->seen, DUET_BITS_PER_NODE);
+		if (bt->is_file && (flags & BMAP_RELV))
+			bitmap_zero(bnode->relv, DUET_BITS_PER_NODE);
+		if (flags & BMAP_DONE)
+			bitmap_zero(bnode->done, DUET_BITS_PER_NODE);
+
+		/* If all bitmaps are empty, delete node */
+		ret = 0;
+		if (bt->is_file)
+			ret = bitmap_empty(bnode->seen, DUET_BITS_PER_NODE) &&
+				  bitmap_empty(bnode->relv, DUET_BITS_PER_NODE);
+		ret = ret && bitmap_empty(bnode->done, DUET_BITS_PER_NODE);
+
+		if (ret)
+			bnode_dispose(bnode, &bnode->node, bt);
+	}
+
+	spin_unlock(&bt->lock);
+	local_irq_restore(iflags);
+	return 0;
+}
+
 /*
  * Traverses bitmap nodes to read/set/unset/check bits on one or all bitmaps.
  * May insert/remove bitmap nodes as needed.
@@ -564,6 +603,18 @@ inline int bittree_unset_done(struct duet_bittree *bt, __u64 idx, __u32 len)
 	return __update_tree(bt, idx, len, BMAP_DONE_RST);
 }
 
+/* Mark relevant bit for given entries */
+inline int bittree_set_relv(struct duet_bittree *bt, __u64 idx, __u32 len)
+{
+	return __update_tree(bt, idx, len, BMAP_RELV_SET);
+}
+
+/* Unmark relevant bit for given entries */
+inline int bittree_unset_relv(struct duet_bittree *bt, __u64 idx, __u32 len)
+{
+	return __update_tree(bt, idx, len, BMAP_RELV_RST);
+}
+
 /* Clear all 3 bits for given entries */
 inline int bittree_clear_bits(struct duet_bittree *bt, __u64 idx, __u32 len)
 {
@@ -572,18 +623,10 @@ inline int bittree_clear_bits(struct duet_bittree *bt, __u64 idx, __u32 len)
 	return __update_tree(bt, idx, len, BMAP_ALL_RST);
 }
 
-/*inline int bittree_set_relevance(struct duet_bittree *bt, __u64 idx, __u32 len,
-	int is_relevant)
+inline int bittree_clear_bitmap(struct duet_bittree *bt, __u8 flags)
 {
-	__u8 flags;
-
-	if (is_relevant)
-		flags = BMAP_RELV_SET | BMAP_DONE_RST;
-	else
-		flags = BMAP_RELV_RST | BMAP_DONE_SET;
-
-	return __update_tree(bt, idx, len, flags);
-}*/
+	return __clear_tree(bt, flags);
+}
 
 int bittree_print(struct duet_task *task)
 {

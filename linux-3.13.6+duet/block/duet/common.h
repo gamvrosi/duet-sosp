@@ -31,6 +31,11 @@
 #define MAX_TASKS		15
 #define DUET_BITS_PER_NODE	(32768 * 8)	/* 32KB bitmaps */
 
+/* Some useful flags for clearing bitmaps */
+#define BMAP_SEEN	0x1
+#define BMAP_RELV	0x2
+#define BMAP_DONE	0x4
+
 enum {
 	DUET_STATUS_OFF = 0,
 	DUET_STATUS_ON,
@@ -156,9 +161,10 @@ int bittree_check(struct duet_bittree *bt, __u64 idx, __u32 len,
 	struct duet_task *task);
 int bittree_set_done(struct duet_bittree *bt, __u64 idx, __u32 len);
 int bittree_unset_done(struct duet_bittree *bt, __u64 idx, __u32 len);
+int bittree_set_relv(struct duet_bittree *bt, __u64 idx, __u32 len);
+int bittree_unset_relv(struct duet_bittree *bt, __u64 idx, __u32 len);
 int bittree_clear_bits(struct duet_bittree *bt, __u64 idx, __u32 len);
-/*int bittree_set_relevance(struct duet_bittree *bt, __u64 idx, __u32 len,
-	int is_relevant);*/
+int bittree_clear_bitmap(struct duet_bittree *bt, __u8 flags);
 
 int bittree_print(struct duet_task *task);
 void bittree_init(struct duet_bittree *bittree, __u32 range, __u8 is_file);

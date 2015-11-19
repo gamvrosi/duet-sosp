@@ -97,11 +97,19 @@ static inline void fsnotify_move(struct inode *old_dir, struct inode *new_dir,
 	const unsigned char *new_name = moved->d_name.name;
 #ifdef CONFIG_DUET
 	duet_hook_t *dhfp = NULL;
+	struct duet_move_data mdata = { .target = (target ? target : source),
+									.old_dir = old_dir,
+									.new_dir = new_dir };
 
+	/*
+	 * We only trigger the hook if the source dentry is not negative.
+	 * If it is, then we should have already unmarked the inode bits
+	 * during deletion.
+	 */
 	rcu_read_lock();
 	dhfp = rcu_dereference(duet_hook_fp);
-	if (dhfp)
-		dhfp(DUET_IN_MOVED, NULL);
+	if (dhfp && mdata.target)
+		dhfp(DUET_IN_MOVED, (void *)&mdata);
 	rcu_read_unlock();
 #endif /* CONFIG_DUET */
 
