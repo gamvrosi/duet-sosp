@@ -603,6 +603,12 @@ inline int bittree_unset_done(struct duet_bittree *bt, __u64 idx, __u32 len)
 	return __update_tree(bt, idx, len, BMAP_DONE_RST);
 }
 
+/* Check done bit for given entries */
+inline int bittree_check_done_bit(struct duet_bittree *bt, __u64 idx, __u32 len)
+{
+	return __update_tree(bt, idx, len, BMAP_DONE_SET | BMAP_CHECK);
+}
+
 /* Mark relevant bit for given entries */
 inline int bittree_set_relv(struct duet_bittree *bt, __u64 idx, __u32 len)
 {

@@ -161,6 +161,7 @@ int bittree_check(struct duet_bittree *bt, __u64 idx, __u32 len,
 	struct duet_task *task);
 int bittree_set_done(struct duet_bittree *bt, __u64 idx, __u32 len);
 int bittree_unset_done(struct duet_bittree *bt, __u64 idx, __u32 len);
+int bittree_check_done_bit(struct duet_bittree *bt, __u64 idx, __u32 len);
 int bittree_set_relv(struct duet_bittree *bt, __u64 idx, __u32 len);
 int bittree_unset_relv(struct duet_bittree *bt, __u64 idx, __u32 len);
 int bittree_clear_bits(struct duet_bittree *bt, __u64 idx, __u32 len);

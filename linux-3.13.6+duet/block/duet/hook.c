@@ -74,6 +74,100 @@ done:
 }
 EXPORT_SYMBOL_GPL(duet_fetch);
 
+static int process_dir_inode(struct duet_task *task, struct inode *inode, int was_removed)
+{
+	struct radix_tree_iter iter;
+	void **slot;
+	__u16 state;
+
+	/* If the file is done, don't bother sending events. We probably didn't
+	 * receive any to begin with */
+	if (bittree_check_done_bit(&task->bittree, inode->i_ino, 1))
+		return 0;
+
+	/* Go through all pages of this inode */
+	rcu_read_lock();
+	radix_tree_for_each_slot(slot, &inode->i_mapping->page_tree, &iter, 0) {
+		struct page *page = radix_tree_deref_slot(slot);
+		if (unlikely(!page))
+			continue;
+
+		state = was_removed ? DUET_PAGE_REMOVED : DUET_PAGE_ADDED;
+		hash_add(task, inode->i_ino, page->index, state, 1);
+	}
+	rcu_read_unlock();
+
+	return 0;
+}
+
+/*
+ * Scan through the page cache for inodes falling under a given directory.
+ * Used when a directory is moved inside/outside the task's scope and we need
+ * to generate Added/Removed (depending on was_removed value) events to keep
+ * task updated.
+ */
+static int scan_cached_dir(struct duet_task *task, struct inode *dir_inode,
+	int was_removed)
+{
+	unsigned int loop;
+	struct hlist_head *head;
+	struct inode *inode = NULL;
+	struct duet_bittree inodetree;
+	struct dentry *tmp, *dir_dentry = NULL;
+
+	bittree_init(&inodetree, 1, 0);
+
+	/* No hard links allowed for dirs, so just grab first dentry */
+	if (!hlist_empty(&dir_inode->i_dentry)) {
+		hlist_for_each_entry(tmp, &dir_inode->i_dentry, d_alias) {
+			if (!(IS_ROOT(tmp) && (tmp->d_flags & DCACHE_DISCONNECTED))) {
+				dir_dentry = tmp;
+				break;
+			}
+		}
+	}
+
+	if (!dir_dentry)
+		printk(KERN_INFO "duet: dir cache scan failed\n");
+	printk(KERN_INFO "duet: dir cache scan started\n");
+
+	loop = 0;
+again:
+	for (; loop < (1U << *duet_i_hash_shift); loop++) {
+		head = *duet_inode_hashtable + loop;
+		spin_lock(duet_inode_hash_lock);
+
+		/* Process this hash bucket */
+		hlist_for_each_entry(inode, head, i_hash) {
+			if (inode->i_sb != task->f_sb)
+				continue;
+
+			/* If we haven't seen this inode before, and it's a descendant of
+			 * the dir we're moving, process it. */
+			if (bittree_check(&inodetree, inode->i_ino, 1, NULL) != 1) {
+				spin_lock(&inode->i_lock);
+				__iget(inode);
+				spin_unlock(&inode->i_lock);
+
+				spin_unlock(duet_inode_hash_lock);
+				/* Check that the inode falls under our dir */
+				if (!d_find_path(inode, dir_dentry, 0, NULL, 0, NULL))
+					process_dir_inode(task, inode, was_removed);
+				bittree_set_done(&inodetree, inode->i_ino, 1);
+				iput(inode);
+				goto again;
+			}
+		}
+
+		spin_unlock(duet_inode_hash_lock);
+	}
+
+	printk(KERN_INFO "duet: dir cache scan finished\n");
+	bittree_destroy(&inodetree);
+
+	return 0;
+}
+
 /* Handle an event. We're in RCU context so whatever happens, stay awake! */
 void duet_hook(__u16 evtcode, void *data)
 {
@@ -174,10 +268,12 @@ void duet_hook(__u16 evtcode, void *data)
 						if (!S_ISDIR(inode->i_mode)) {
 							/* Item is a file. Unmark relevant bit */
 							bittree_unset_relv(&cur->bittree, inode->i_ino, 1);
+							process_dir_inode(cur, inode, 1);
 						} else {
 							/* Item is a dir. Clear seen, relevant bitmaps */
 							bittree_clear_bitmap(&cur->bittree,
 														BMAP_SEEN | BMAP_RELV);
+							scan_cached_dir(cur, inode, 1);
 						}
 					}
 
@@ -186,9 +282,11 @@ void duet_hook(__u16 evtcode, void *data)
 						if (!S_ISDIR(inode->i_mode)) {
 							/* Item is a file. Mark the relevant bit */
 							bittree_set_relv(&cur->bittree, inode->i_ino, 1);
+							process_dir_inode(cur, inode, 0);
 						} else {
 							/* Item is a dir. Clear seen bitmap only */
 							bittree_clear_bitmap(&cur->bittree, BMAP_SEEN);
+							scan_cached_dir(cur, inode, 0);
 						}
 					}
 					continue;
