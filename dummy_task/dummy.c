@@ -20,7 +20,18 @@
 #include <unistd.h>
 #include <string.h>
 #include <time.h>
+#include <signal.h>
 #include <duet/duet.h>
+
+static volatile int got_sigint = 0;
+
+void handle_sigint(int signal)
+{
+	if (signal != SIGINT)
+		return;
+
+	got_sigint = 1;
+}
 
 void usage(int err)
 {
@@ -49,7 +60,8 @@ void usage(int err)
 
 int main(int argc, char *argv[])
 {
-	int freq = 10, duration = -1, o3 = 0, evtbased = 0, getpath = 0;
+	int freq = 10, duration = 0, o3 = 0, evtbased = 0, getpath = 0;
+	int keep_running = 0;
 	char path[DUET_MAX_PATH] = "/";
 	int ret = 0, tid, c, duet_fd = 0, itret = 0, tmp;
 	long total_items = 0;
@@ -57,6 +69,8 @@ int main(int argc, char *argv[])
 	__u32 regmask;
 	struct duet_item buf[DUET_MAX_ITEMS];
 	struct timespec slp = {0, 0};
+
+	signal(SIGINT, handle_sigint);
 
 	while ((c = getopt(argc, argv, "f:d:ohep:g")) != -1) {
 		switch (c) {
@@ -99,9 +113,9 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	if (duration == -1) {
-		fprintf(stderr, "Error: did not supply duration\n");
-		return 1;
+	if (!duration) {
+		fprintf(stdout, "Warning: Dummy task will run until Ctrl-C is pressed.\n");
+		keep_running = 1;
 	}
 
 	printf("Running dummy for %d sec. Fetching every %d ms.\n",
@@ -131,7 +145,7 @@ int main(int argc, char *argv[])
 	}
 
 	/* Use specified fetching frequency */
-	while (duration > 0) {
+	while (duration > 0 || keep_running) {
 		if (o3) {
 			itret = DUET_MAX_ITEMS;
 			if (duet_fetch(duet_fd, tid, buf, &itret)) {
@@ -168,9 +182,14 @@ int main(int argc, char *argv[])
 			ret = 1;
 			goto done_dereg;
 		}
-		fprintf(stdout, "nanoslept, duration left %d\n", duration);
 
-		duration -= freq;
+		if (!keep_running) {
+			fprintf(stdout, "nanoslept, duration left %d\n", duration);
+			duration -= freq;
+		}
+
+		if (keep_running && got_sigint)
+			keep_running = 0;
 	}
 
 	/* Deregister with the Duet framework */
