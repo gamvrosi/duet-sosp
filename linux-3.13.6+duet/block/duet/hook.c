@@ -293,7 +293,7 @@ void duet_hook(__u16 evtcode, void *data)
 			}
 
 			/* Use the inode bitmap to filter out event if applicable */
-			if (bittree_check(&cur->bittree, inode->i_ino, 1, cur) == 1)
+			if (bittree_check_inode(&cur->bittree, cur, inode) == 1)
 				continue;
 		}
 

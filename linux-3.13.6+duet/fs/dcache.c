@@ -3471,8 +3471,10 @@ restart_mnt:
 	seq = 0;
 	rcu_read_lock();
 restart:
-	bptr = *buffer;
-	blen = *buflen;
+	if (getpath) {
+		bptr = *buffer;
+		blen = *buflen;
+	}
 	error = 0;
 	dentry = tgt;
 	read_seqbegin_or_lock(&rename_lock, &seq);
@@ -3506,7 +3508,7 @@ restart:
 	if (!(seq & 1))
 		rcu_read_unlock();
 	if (need_seqretry(&rename_lock, seq)) {
-		seq = 1;
+		seq = 0; //1;
 		goto restart;
 	}
 	done_seqretry(&rename_lock, seq);
@@ -3514,7 +3516,7 @@ restart:
 	if (!(m_seq & 1))
 		rcu_read_unlock();
 	if (need_seqretry(&mount_lock, m_seq)) {
-		m_seq = 1;
+		m_seq = 0; //1;
 		goto restart_mnt;
 	}
 	done_seqretry(&mount_lock, m_seq);

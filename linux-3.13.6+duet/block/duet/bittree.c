@@ -638,7 +638,7 @@ int bittree_print(struct duet_task *task)
 {
 	struct bmap_rbnode *bnode = NULL;
 	struct rb_node *node;
-	unsigned long flags;
+//	unsigned long flags;
 
 	spin_lock(&task->bittree.lock);
 	printk(KERN_INFO "duet: Printing global hash table\n");
@@ -664,13 +664,13 @@ int bittree_print(struct duet_task *task)
 	}
 	spin_unlock(&task->bittree.lock);
 
-	local_irq_save(flags);
-	spin_lock(&task->bbmap_lock);
+//	local_irq_save(flags);
+//	spin_lock(&task->bbmap_lock);
 	printk(KERN_INFO "duet: Task #%d bitmap has %d out of %lu bits set\n",
 		task->id, bitmap_weight(task->bucket_bmap,
 		duet_env.itm_hash_size), duet_env.itm_hash_size);
-	spin_unlock(&task->bbmap_lock);
-	local_irq_restore(flags);
+//	spin_unlock(&task->bbmap_lock);
+//	local_irq_restore(flags);
 
 	return 0;
 }
