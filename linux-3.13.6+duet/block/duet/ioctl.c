@@ -19,6 +19,7 @@
 #include <linux/slab.h>
 #include <linux/fs.h>
 #include <linux/duet.h>
+#include <linux/vmalloc.h>
 #include "ioctl.h"
 
 int duet_online(void)

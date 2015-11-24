@@ -277,9 +277,9 @@ static int __update_tree(struct duet_bittree *bt, __u64 idx, __u32 len,
 	local_irq_save(iflags);
 	spin_lock(&bt->lock);
 	duet_dbg(KERN_INFO "duet: %s idx %llu, len %u [Seen: %s, Relv: %s, Done: %s]\n",
-		idx, len,
 		(flags & BMAP_READ) ? "reading" :
 			((flags & BMAP_CHECK) ? "checking" : "marking"),
+		idx, len,
 		(flags & BMAP_SEEN_SET) ? "set" :
 			((flags & BMAP_SEEN_RST) ? "reset" : "-"),
 		(flags & BMAP_RELV_SET) ? "set" :
@@ -592,44 +592,44 @@ int bittree_check(struct duet_bittree *bt, __u64 idx, __u32 len,
 }
 
 /* Mark done bit for given entries */
-inline int bittree_set_done(struct duet_bittree *bt, __u64 idx, __u32 len)
+int bittree_set_done(struct duet_bittree *bt, __u64 idx, __u32 len)
 {
 	return __update_tree(bt, idx, len, BMAP_DONE_SET);
 }
 
 /* Unmark done bit for given entries */
-inline int bittree_unset_done(struct duet_bittree *bt, __u64 idx, __u32 len)
+int bittree_unset_done(struct duet_bittree *bt, __u64 idx, __u32 len)
 {
 	return __update_tree(bt, idx, len, BMAP_DONE_RST);
 }
 
 /* Check done bit for given entries */
-inline int bittree_check_done_bit(struct duet_bittree *bt, __u64 idx, __u32 len)
+int bittree_check_done_bit(struct duet_bittree *bt, __u64 idx, __u32 len)
 {
 	return __update_tree(bt, idx, len, BMAP_DONE_SET | BMAP_CHECK);
 }
 
 /* Mark relevant bit for given entries */
-inline int bittree_set_relv(struct duet_bittree *bt, __u64 idx, __u32 len)
+int bittree_set_relv(struct duet_bittree *bt, __u64 idx, __u32 len)
 {
 	return __update_tree(bt, idx, len, BMAP_RELV_SET);
 }
 
 /* Unmark relevant bit for given entries */
-inline int bittree_unset_relv(struct duet_bittree *bt, __u64 idx, __u32 len)
+int bittree_unset_relv(struct duet_bittree *bt, __u64 idx, __u32 len)
 {
 	return __update_tree(bt, idx, len, BMAP_RELV_RST);
 }
 
 /* Clear all 3 bits for given entries */
-inline int bittree_clear_bits(struct duet_bittree *bt, __u64 idx, __u32 len)
+int bittree_clear_bits(struct duet_bittree *bt, __u64 idx, __u32 len)
 {
 	BUG_ON(!bt->is_file);
 
 	return __update_tree(bt, idx, len, BMAP_ALL_RST);
 }
 
-inline int bittree_clear_bitmap(struct duet_bittree *bt, __u8 flags)
+int bittree_clear_bitmap(struct duet_bittree *bt, __u8 flags)
 {
 	return __clear_tree(bt, flags);
 }

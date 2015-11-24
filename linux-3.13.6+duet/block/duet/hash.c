@@ -232,7 +232,7 @@ again:
 	}
 
 	if (!found) {
-		printk(KERN_ERR "duet: uninteresting bucket marked in bitmap\n");
+		duet_dbg(KERN_NOTICE "duet: uninteresting bucket marked in bitmap\n");
 		hlist_bl_unlock(b);
 		goto again;
 	}
