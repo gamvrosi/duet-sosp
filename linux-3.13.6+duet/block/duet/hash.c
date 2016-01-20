@@ -136,18 +136,13 @@ check_dispose:
 				}
 			}
 
-			if (!found) {
-				spin_lock(&task->bbmap_lock);
+			if (!found)
 				clear_bit(bnum, task->bucket_bmap);
-				spin_unlock(&task->bbmap_lock);
-			}
 		} else {
 			itnode->state[task->id] = curmask;
 
 			/* Update bitmap */
-			spin_lock(&task->bbmap_lock);
 			set_bit(bnum, task->bucket_bmap);
-			spin_unlock(&task->bbmap_lock);
 		}
 	} else if (!found) {
 		if (!evtmask)
@@ -167,9 +162,7 @@ check_dispose:
 		hlist_bl_add_head(&itnode->node, b);
 
 		/* Update bitmap */
-		spin_lock(&task->bbmap_lock);
 		set_bit(bnum, task->bucket_bmap);
-		spin_unlock(&task->bbmap_lock);
 	}
 
 done:
@@ -249,11 +242,8 @@ again:
 		}
 	}
 
-	if (found) {
-		spin_lock(&task->bbmap_lock);
+	if (found)
 		set_bit(bnum, task->bucket_bmap);
-		spin_unlock(&task->bbmap_lock);
-	}
 
 #ifdef CONFIG_DUET_STATS
 	duet_env.itm_stat_num++;
