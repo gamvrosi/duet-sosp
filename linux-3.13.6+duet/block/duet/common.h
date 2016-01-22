@@ -100,6 +100,7 @@ struct duet_task {
 	/* Hash table bucket bitmap */
 	spinlock_t		bbmap_lock;
 	unsigned long		*bucket_bmap;
+	unsigned long		bmap_cursor;
 
 	/* BitTree -- progress bitmap tree */
 	struct duet_bittree	bittree;

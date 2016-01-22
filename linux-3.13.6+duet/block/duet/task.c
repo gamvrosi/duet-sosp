@@ -269,6 +269,8 @@ static int duet_task_init(struct duet_task **task, const char *name,
 		return -ENOMEM;
 	}
 
+	(*task)->bmap_cursor = 0;
+
 	/* Do some sanity checking on event mask. */
 	if (regmask & DUET_PAGE_EXISTS) {
 		if (regmask & (DUET_PAGE_ADDED | DUET_PAGE_REMOVED)) {

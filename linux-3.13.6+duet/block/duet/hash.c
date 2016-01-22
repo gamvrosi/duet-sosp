@@ -183,12 +183,30 @@ int hash_fetch(struct duet_task *task, struct duet_item *itm)
 	local_irq_save(flags);
 again:
 	spin_lock(&task->bbmap_lock);
-	bnum = find_first_bit(task->bucket_bmap, duet_env.itm_hash_size);
+	bnum = find_next_bit(task->bucket_bmap, duet_env.itm_hash_size,
+			     task->bmap_cursor);
+
 	if (bnum == duet_env.itm_hash_size) {
-		spin_unlock(&task->bbmap_lock);
-		local_irq_restore(flags);
-		return 1;
+		/* Reached end of bitmap */
+		found = 0;
+
+		if (task->bmap_cursor != 0) {
+			/* Started part way, try again */
+			bnum = find_next_bit(task->bucket_bmap,
+					     task->bmap_cursor, 0);
+
+			if (bnum != task->bmap_cursor)
+				found = 1;
+		}
+
+		if (!found) {
+			spin_unlock(&task->bbmap_lock);
+			local_irq_restore(flags);
+			return 1;
+		}
 	}
+
+	task->bmap_cursor = bnum;
 	clear_bit(bnum, task->bucket_bmap);
 	spin_unlock(&task->bbmap_lock);
 	b = duet_env.itm_hash_table + bnum;
