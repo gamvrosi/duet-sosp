@@ -413,7 +413,7 @@ out:
 #ifdef CONFIG_BTRFS_DUET_DEFRAG
 #ifdef CONFIG_BTRFS_DUET_DEFRAG_DEBUG
 	/* Let's first print out the bitmaps */
-	duet_print_bittree(dctx->taskid);
+	duet_print_bitmap(dctx->taskid);
 #endif /* CONFIG_BTRFS_DUET_DEFRAG_DEBUG */
 	printk(KERN_DEBUG "defrag: total bytes defragged = %ld\n",
 			atomic64_read(&fs_info->defrag_bytes_total));
