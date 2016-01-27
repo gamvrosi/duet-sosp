@@ -59,30 +59,30 @@ while getopts ":dcigu" opt; do
 		time fakeroot make-kpkg --initrd --append-to-version="${KERNEL_VERSION_APPEND}" \
 			kernel_image kernel_headers $KDBG || die
 
-		# ...and (re)compile the btrfs tools
-		cd "${BASEDIR}/btrfs-progs-3.12+duet"
-		#make clean
-		make || die
-
-		# ...and (re)compile the duet tools
+		# ...and (re)compile the duet tools (install if not present)
 		cd "${BASEDIR}/duet-progs"
-		#make clean
 		make || die
-
-		# ...and (re)compile the f2fs tools
-		cd "${BASEDIR}/f2fs-tools"
-		#make clean
-		make || die
- 
-		# ...and (re)compile rsync
-		cd "${BASEDIR}/rsync-3.1.1+duet"
-		#make clean
-		#make reconfigure
-		make || die
+		locate libduet | grep /usr/local/lib > /dev/null
+		if [[ $? == 1 ]]; then
+			sudo make install
+		fi
 
 		# ...and (re)compile the dummy task
 		cd "${BASEDIR}/dummy_task"
 		make || die
+
+		# ...and (re)compile the btrfs tools
+		cd "${BASEDIR}/btrfs-progs-3.12+duet"
+		make || die
+
+		# ...and (re)compile the f2fs tools
+		cd "${BASEDIR}/f2fs-tools"
+		make || (autoreconf --install && ./configure && make) || die
+ 
+		# ...and (re)compile rsync
+		cd "${BASEDIR}/rsync-3.1.1+duet"
+		make || (make reconfigure && make) || \
+			(make clean && ./configure && make) || die
 
 		exit 0
 		;;
