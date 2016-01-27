@@ -81,8 +81,7 @@ while getopts ":dcigu" opt; do
  
 		# ...and (re)compile rsync
 		cd "${BASEDIR}/rsync-3.1.1+duet"
-		make || (make reconfigure && make) || \
-			(make clean && ./configure && make) || die
+		make || (make reconfigure && make) || (./configure && make) || die
 
 		exit 0
 		;;
