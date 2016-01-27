@@ -2255,7 +2255,7 @@ int set_page_dirty(struct page *page)
 		dhfp = rcu_dereference(duet_hook_fp);
 
 		if (dhfp)
-			dhfp(DUET_PAGE_MODIFIED, (void *)page);
+			dhfp(DUET_PAGE_DIRTY, (void *)page);
 		rcu_read_unlock();
 #endif /* CONFIG_DUET */
 
