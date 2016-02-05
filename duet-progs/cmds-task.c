@@ -172,6 +172,8 @@ static int cmd_task_reg(int fd, int argc, char **argv)
 	__u32 regmask = 0;
 	__u32 bitrange = 0;
 
+	path[0] = name[0] = 0;
+
 	optind = 1;
 	while ((c = getopt(argc, argv, "n:b:m:p:")) != -1) {
 		switch (c) {
@@ -194,7 +196,7 @@ static int cmd_task_reg(int fd, int argc, char **argv)
 			break;
 		case 'm':
 			errno = 0;
-			regmask = (__u32)strtol(optarg, NULL, 10);
+			regmask = (__u32)strtol(optarg, NULL, 16);
 			if (errno) {
 				perror("strtol: invalid evtmask");
 				usage(cmd_task_reg_usage);

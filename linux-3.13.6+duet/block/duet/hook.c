@@ -203,8 +203,11 @@ void duet_hook(__u16 evtcode, void *data)
 		page = (struct page *)data;
 
 		/* Duet must be online, and the page must belong to a valid mapping */
-		if (!page || !page_mapping(page))
+		if (!page || !page_mapping(page)) {
+			duet_dbg(KERN_ERR "duet: dropped event %x due to NULL mapping\n",
+					evtcode);
 			return;
+		}
 
 		inode = page_mapping(page)->host;
 		page_idx = page->index;
@@ -230,66 +233,69 @@ void duet_hook(__u16 evtcode, void *data)
 	list_for_each_entry_rcu(cur, &duet_env.tasks, task_list) {
 		/* Verify that the event refers to the fs we're interested in */
 		if (cur->f_sb && cur->f_sb != inode->i_sb) {
-			duet_dbg(KERN_INFO "duet: event sb not matching\n");
+			//duet_dbg(KERN_INFO "duet: event sb not matching\n");
 			continue;
 		}
+
+		duet_dbg(KERN_INFO "duet: received event %x on (inode %lu, offt %lu)\n",
+				evtcode, inode->i_ino, page_idx);
 
 		/* Handle some file task specific events */
 		if (cur->is_file) {
 			switch (evtcode) {
-				case DUET_IN_DELETE:
-					/* Reset state for this inode */
-					bittree_clear_bits(&cur->bittree, inode->i_ino, 1);
+			case DUET_IN_DELETE:
+				/* Reset state for this inode */
+				bittree_clear_bits(&cur->bittree, inode->i_ino, 1);
+				continue;
+			case DUET_IN_MOVED:
+				/* Case 1: Sanity checking */
+				if (!(mdata->old_dir) || !(mdata->new_dir))
 					continue;
-				case DUET_IN_MOVED:
-					/* Case 1: Sanity checking */
-					if (!(mdata->old_dir) || !(mdata->new_dir))
-						continue;
 
-					/* Case 2: Same parent directory */
-					if (mdata->old_dir == mdata->new_dir)
-						continue;
-
-					/* Check whether old and new parents are in task scope */
-					p_old = do_find_path(cur, mdata->old_dir, 0, NULL);
-					p_new = do_find_path(cur, mdata->new_dir, 0, NULL);
-					if (p_old == -1 || p_new == -1) {
-						printk(KERN_ERR "duet: can't determind parent dir relevance\n");
-						continue;
-					}
-
-					/*
-					 * Case 3: Move constrained outside/inside task scope?
-					 * Nothing to do.
-					 */
-
-					/* Case 4: Item was moved outside task scope */
-					if (!p_old && p_new) {
-						if (!S_ISDIR(inode->i_mode)) {
-							/* Item is a file. Unmark relevant bit */
-							bittree_unset_relv(&cur->bittree, inode->i_ino, 1);
-							process_dir_inode(cur, inode, 1);
-						} else {
-							/* Item is a dir. Clear seen, relevant bitmaps */
-							bittree_clear_bitmap(&cur->bittree,
-														BMAP_SEEN | BMAP_RELV);
-							scan_cached_dir(cur, inode, 1);
-						}
-					}
-
-					/* Case 5: Item was moved inside task scope */
-					if (p_old && !p_new) {
-						if (!S_ISDIR(inode->i_mode)) {
-							/* Item is a file. Mark the relevant bit */
-							bittree_set_relv(&cur->bittree, inode->i_ino, 1);
-							process_dir_inode(cur, inode, 0);
-						} else {
-							/* Item is a dir. Clear seen bitmap only */
-							bittree_clear_bitmap(&cur->bittree, BMAP_SEEN);
-							scan_cached_dir(cur, inode, 0);
-						}
-					}
+				/* Case 2: Same parent directory */
+				if (mdata->old_dir == mdata->new_dir)
 					continue;
+
+				/* Check whether old and new parents are in task scope */
+				p_old = do_find_path(cur, mdata->old_dir, 0, NULL);
+				p_new = do_find_path(cur, mdata->new_dir, 0, NULL);
+				if (p_old == -1 || p_new == -1) {
+					printk(KERN_ERR "duet: can't determind parent dir relevance\n");
+					continue;
+				}
+
+				/*
+				 * Case 3: Move constrained outside/inside task scope?
+				 * Nothing to do.
+				 */
+
+				/* Case 4: Item was moved outside task scope */
+				if (!p_old && p_new) {
+					if (!S_ISDIR(inode->i_mode)) {
+						/* Item is a file. Unmark relevant bit */
+						bittree_unset_relv(&cur->bittree, inode->i_ino, 1);
+						process_dir_inode(cur, inode, 1);
+					} else {
+						/* Item is a dir. Clear seen, relevant bitmaps */
+						bittree_clear_bitmap(&cur->bittree,
+											BMAP_SEEN | BMAP_RELV);
+						scan_cached_dir(cur, inode, 1);
+					}
+				}
+
+				/* Case 5: Item was moved inside task scope */
+				if (p_old && !p_new) {
+					if (!S_ISDIR(inode->i_mode)) {
+						/* Item is a file. Mark the relevant bit */
+						bittree_set_relv(&cur->bittree, inode->i_ino, 1);
+						process_dir_inode(cur, inode, 0);
+					} else {
+						/* Item is a dir. Clear seen bitmap only */
+						bittree_clear_bitmap(&cur->bittree, BMAP_SEEN);
+						scan_cached_dir(cur, inode, 0);
+					}
+				}
+				continue;
 			}
 
 			/* Use the inode bitmap to filter out event if applicable */
