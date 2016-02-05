@@ -18,6 +18,8 @@
 #ifndef _DUET_H
 #define _DUET_H
 
+#include <linux/rbtree.h>
+
 #ifdef CONFIG_DUET_DEBUG
 #define duet_dbg(...)	printk(__VA_ARGS__)
 #else

@@ -12,6 +12,9 @@
 #include <linux/mm_types.h>
 #include <generated/bounds.h>
 #endif /* !__GENERATING_BOUNDS_H */
+#ifdef CONFIG_DUET
+#include <linux/duet.h>
+#endif /* CONFIG_DUET */
 
 /*
  * Various page->flags bits:
@@ -199,7 +202,85 @@ struct page;	/* forward declaration */
 TESTPAGEFLAG(Locked, locked)
 PAGEFLAG(Error, error) TESTCLEARFLAG(Error, error)
 PAGEFLAG(Referenced, referenced) TESTCLEARFLAG(Referenced, referenced)
+#ifdef CONFIG_DUET
+TESTPAGEFLAG(Dirty, dirty)
+
+static inline void SetPageDirty(struct page *page)
+{
+	duet_hook_t *dhfp = NULL;
+
+	if (!test_and_set_bit(PG_dirty, &page->flags)) {
+		rcu_read_lock();
+		dhfp = rcu_dereference(duet_hook_fp);
+
+		if (dhfp)
+			dhfp(DUET_PAGE_DIRTY, (void *)page);
+		rcu_read_unlock();
+	}
+}
+
+static inline void __ClearPageDirty(struct page *page)
+{
+	duet_hook_t *dhfp = NULL;
+
+	if (__test_and_clear_bit(PG_dirty, &page->flags)) {
+		rcu_read_lock();
+		dhfp = rcu_dereference(duet_hook_fp);
+
+		if (dhfp)
+			dhfp(DUET_PAGE_FLUSHED, (void *)page);
+		rcu_read_unlock();
+	}
+}
+
+static inline void ClearPageDirty(struct page *page)
+{
+	duet_hook_t *dhfp = NULL;
+
+	if (test_and_clear_bit(PG_dirty, &page->flags)) {
+		rcu_read_lock();
+		dhfp = rcu_dereference(duet_hook_fp);
+
+		if (dhfp)
+			dhfp(DUET_PAGE_FLUSHED, (void *)page);
+		rcu_read_unlock();
+	}
+}
+
+static inline int TestSetPageDirty(struct page *page)
+{ 
+	duet_hook_t *dhfp = NULL;
+
+	if (!test_and_set_bit(PG_dirty, &page->flags)) {
+		rcu_read_lock();
+		dhfp = rcu_dereference(duet_hook_fp);
+
+		if (dhfp)
+			dhfp(DUET_PAGE_DIRTY, (void *)page);
+		rcu_read_unlock();
+		return 0;
+	}
+	return 1;
+}
+
+static inline int TestClearPageDirty(struct page *page)
+{
+	duet_hook_t *dhfp = NULL;
+
+	if (test_and_clear_bit(PG_dirty, &page->flags)) {
+		rcu_read_lock();
+		dhfp = rcu_dereference(duet_hook_fp);
+
+		if (dhfp)
+			dhfp(DUET_PAGE_FLUSHED, (void *)page);
+		rcu_read_unlock();
+		return 1;
+	}
+	return 0;
+}
+#else
 PAGEFLAG(Dirty, dirty) TESTSCFLAG(Dirty, dirty) __CLEARPAGEFLAG(Dirty, dirty)
+#endif /* CONFIG_DUET */
 PAGEFLAG(LRU, lru) __CLEARPAGEFLAG(LRU, lru)
 PAGEFLAG(Active, active) __CLEARPAGEFLAG(Active, active)
 	TESTCLEARFLAG(Active, active)

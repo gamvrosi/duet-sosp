@@ -2243,21 +2243,9 @@ EXPORT_SYMBOL(redirty_page_for_writepage);
 int set_page_dirty(struct page *page)
 {
 	struct address_space *mapping = page_mapping(page);
-#ifdef CONFIG_DUET
-	duet_hook_t *dhfp = NULL;
-#endif /* CONFIG_DUET */
 
 	if (likely(mapping)) {
 		int (*spd)(struct page *) = mapping->a_ops->set_page_dirty;
-
-#ifdef CONFIG_DUET
-		rcu_read_lock();
-		dhfp = rcu_dereference(duet_hook_fp);
-
-		if (dhfp)
-			dhfp(DUET_PAGE_DIRTY, (void *)page);
-		rcu_read_unlock();
-#endif /* CONFIG_DUET */
 
 		/*
 		 * readahead/lru_deactivate_page could remain
@@ -2322,20 +2310,9 @@ EXPORT_SYMBOL(set_page_dirty_lock);
 int clear_page_dirty_for_io(struct page *page)
 {
 	struct address_space *mapping = page_mapping(page);
-#ifdef CONFIG_DUET
-	duet_hook_t *dhfp = NULL;
-#endif /* CONFIG_DUET */
 
 	BUG_ON(!PageLocked(page));
 
-#ifdef CONFIG_DUET
-	rcu_read_lock();
-	dhfp = rcu_dereference(duet_hook_fp);
-
-	if (dhfp)
-		dhfp(DUET_PAGE_FLUSHED, (void *)page);
-	rcu_read_unlock();
-#endif /* CONFIG_DUET */
 	if (mapping && mapping_cap_account_dirty(mapping)) {
 		/*
 		 * Yes, Virginia, this is indeed insane.
