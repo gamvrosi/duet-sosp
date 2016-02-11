@@ -81,13 +81,20 @@ again:
 			/* If we haven't seen this inode before, process it. */
 			if (bittree_check(&inodetree, inode->i_ino, 1, NULL) != 1) {
 				spin_lock(&inode->i_lock);
-				__iget(inode);
-				spin_unlock(&inode->i_lock);
+				if (inode->i_state & DUET_INODE_FREEING) {
+					unsigned long i_ino = inode->i_ino;
+					spin_unlock(&inode->i_lock);
+					spin_unlock(duet_inode_hash_lock);
+					bittree_set_done(&inodetree, i_ino, 1);
+				} else {
+					__iget(inode);
+					spin_unlock(&inode->i_lock);
+					spin_unlock(duet_inode_hash_lock);
+					process_inode(task, inode);
+					bittree_set_done(&inodetree, inode->i_ino, 1);
+					iput(inode);
+				}
 
-				spin_unlock(duet_inode_hash_lock);
-				process_inode(task, inode);
-				bittree_set_done(&inodetree, inode->i_ino, 1);
-				iput(inode);
 				goto again;
 			}
 		}

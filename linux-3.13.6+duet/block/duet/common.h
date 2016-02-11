@@ -27,6 +27,8 @@
 #include <linux/rculist.h>
 #include <linux/duet.h>
 
+#define DUET_INODE_FREEING (I_WILL_FREE | I_FREEING | I_CLEAR)
+
 #define MAX_NAME		128
 #define MAX_TASKS		15
 #define DUET_BITS_PER_NODE	(32768 * 8)	/* 32KB bitmaps */

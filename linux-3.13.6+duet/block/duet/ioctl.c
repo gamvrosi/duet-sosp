@@ -116,7 +116,8 @@ static int find_get_inode(struct super_block *sb, unsigned long c_ino,
 				continue;
 
 			spin_lock(&inode->i_lock);
-			if (!*c_inode && inode->i_ino == c_ino) {
+			if (!*c_inode && inode->i_ino == c_ino &&
+					!(inode->i_state & DUET_INODE_FREEING)) {
 				__iget(inode);
 				*c_inode = inode;
 				spin_unlock(&inode->i_lock);

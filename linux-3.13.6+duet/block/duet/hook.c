@@ -146,15 +146,21 @@ again:
 			 * the dir we're moving, process it. */
 			if (bittree_check(&inodetree, inode->i_ino, 1, NULL) != 1) {
 				spin_lock(&inode->i_lock);
-				__iget(inode);
-				spin_unlock(&inode->i_lock);
-
-				spin_unlock(duet_inode_hash_lock);
-				/* Check that the inode falls under our dir */
-				if (!d_find_path(inode, dir_dentry, 0, NULL, 0, NULL))
-					process_dir_inode(task, inode, was_removed);
-				bittree_set_done(&inodetree, inode->i_ino, 1);
-				iput(inode);
+				if (inode->i_state & DUET_INODE_FREEING) {
+					unsigned long i_ino = inode->i_ino;
+					spin_unlock(&inode->i_lock);
+					spin_unlock(duet_inode_hash_lock);
+					bittree_set_done(&inodetree, i_ino, 1);
+				} else {
+					__iget(inode);
+					spin_unlock(&inode->i_lock);
+					spin_unlock(duet_inode_hash_lock);
+					/* Check that the inode falls under our dir */
+					if (!d_find_path(inode, dir_dentry, 0, NULL, 0, NULL))
+						process_dir_inode(task, inode, was_removed);
+					bittree_set_done(&inodetree, inode->i_ino, 1);
+					iput(inode);
+				}
 				goto again;
 			}
 		}
