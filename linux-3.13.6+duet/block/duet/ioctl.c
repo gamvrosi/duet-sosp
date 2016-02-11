@@ -181,7 +181,7 @@ int duet_find_path(struct duet_task *task, unsigned long inum, int getpath,
 
 	/* First, we need to find struct inode for child and parent */
 	if (find_get_inode(task->f_sb, inum, &ino)) {
-		printk(KERN_ERR "duet_find_path%s: failed to find child inode\n",
+		duet_dbg(KERN_NOTICE "duet_find_path%s: failed to find child inode\n",
 			(getpath ? "" : " (null)"));
 		return 1;
 	}
