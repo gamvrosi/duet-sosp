@@ -50,7 +50,7 @@ static int process_inode(struct duet_task *task, struct inode *inode)
 		state = DUET_PAGE_ADDED;
 		if (PageDirty(page))
 			state |= DUET_PAGE_DIRTY;
-		hash_add(task, inode->i_ino, page->index, state, 1);
+		hash_add(task, DUET_GET_UUID(inode), page->index, state, 1);
 	}
 	rcu_read_unlock();
 
@@ -79,19 +79,20 @@ again:
 				continue;
 
 			/* If we haven't seen this inode before, process it. */
-			if (bittree_check(&inodetree, inode->i_ino, 1, NULL) != 1) {
+			if (bittree_check(&inodetree, DUET_GET_UUID(inode), 1, NULL) != 1) {
 				spin_lock(&inode->i_lock);
 				if (inode->i_state & DUET_INODE_FREEING) {
-					unsigned long i_ino = inode->i_ino;
+					unsigned long long uuid = DUET_GET_UUID(inode);
 					spin_unlock(&inode->i_lock);
 					spin_unlock(duet_inode_hash_lock);
-					bittree_set_done(&inodetree, i_ino, 1);
+					bittree_set_done(&inodetree, uuid, 1);
 				} else {
 					__iget(inode);
 					spin_unlock(&inode->i_lock);
 					spin_unlock(duet_inode_hash_lock);
+
 					process_inode(task, inode);
-					bittree_set_done(&inodetree, inode->i_ino, 1);
+					bittree_set_done(&inodetree, DUET_GET_UUID(inode), 1);
 					iput(inode);
 				}
 

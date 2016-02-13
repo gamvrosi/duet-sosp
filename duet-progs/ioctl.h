@@ -74,8 +74,8 @@ struct duet_ioctl_cmd_args {
 		};
 		/* ino -> path args */
 		struct {
-			unsigned long c_ino;		/* in */
-			char cpath[DUET_MAX_PATH];	/* out */
+			__u64	c_uuid;			/* in */
+			char	cpath[DUET_MAX_PATH];	/* out */
 		};
 	};	
 };

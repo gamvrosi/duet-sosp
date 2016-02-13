@@ -27,8 +27,6 @@
 #include <linux/rculist.h>
 #include <linux/duet.h>
 
-#define DUET_INODE_FREEING (I_WILL_FREE | I_FREEING | I_CLEAR)
-
 #define MAX_NAME		128
 #define MAX_TASKS		15
 #define DUET_BITS_PER_NODE	(32768 * 8)	/* 32KB bitmaps */
@@ -37,6 +35,10 @@
 #define BMAP_SEEN	0x1
 #define BMAP_RELV	0x2
 #define BMAP_DONE	0x4
+
+#define DUET_INODE_FREEING	(I_WILL_FREE | I_FREEING | I_CLEAR)
+#define DUET_GET_UUID(inode)	(((unsigned long long) inode->i_generation << 32) | \
+				(unsigned long long) inode->i_ino)
 
 enum {
 	DUET_STATUS_OFF = 0,
@@ -122,8 +124,6 @@ struct duet_info {
 	/* ItemTable -- Global page state hash table */
 	struct hlist_bl_head	*itm_hash_table;
 	unsigned long		itm_hash_size;
-	unsigned long		itm_hash_shift;
-	unsigned long		itm_hash_mask;
 #ifdef CONFIG_DUET_STATS
 	unsigned long		itm_stat_lkp;	/* total lookups per request */
 	unsigned long		itm_stat_num;	/* number of node requests */
@@ -139,7 +139,7 @@ extern int d_find_path(struct inode *cnode, struct dentry *p_dentry,
 
 /* hash.c */
 int hash_init(void);
-int hash_add(struct duet_task *task, unsigned long ino, unsigned long idx,
+int hash_add(struct duet_task *task, unsigned long long uuid, unsigned long idx,
 	__u16 evtmask, short in_scan);
 int hash_fetch(struct duet_task *task, struct duet_item *itm);
 void hash_print(struct duet_task *task);
@@ -154,7 +154,7 @@ int duet_shutdown(void);
 long duet_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 int do_find_path(struct duet_task *task, struct inode *inode, int getpath,
 	char *path);
-int duet_find_path(struct duet_task *task, unsigned long inum, int getpath,
+int duet_find_path(struct duet_task *task, unsigned long long uuid, int getpath,
 	char *path);
 
 /* bittree.c */

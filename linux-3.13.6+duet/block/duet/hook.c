@@ -57,8 +57,9 @@ again:
 	if (hash_fetch(task, &items[idx]))
 		goto done;
 
-	duet_dbg(KERN_INFO "duet_fetch: sending (ino%lu, idx%lu, %x)\n",
-		items[idx].ino, items[idx].idx, items[idx].state);
+	duet_dbg(KERN_INFO "duet_fetch: sending (uuid%llu, ino%lu, idx%lu, %x)\n",
+		items[idx].uuid, DUET_UUID_INO(items[idx].uuid), items[idx].idx,
+		items[idx].state);
 
 	idx++;
 	if (idx < *count)
@@ -74,15 +75,17 @@ done:
 }
 EXPORT_SYMBOL_GPL(duet_fetch);
 
-static int process_dir_inode(struct duet_task *task, struct inode *inode, int was_removed)
+static int process_dir_inode(struct duet_task *task, struct inode *inode,
+	int was_removed)
 {
 	struct radix_tree_iter iter;
 	void **slot;
 	__u16 state;
+	unsigned long long uuid = DUET_GET_UUID(inode);
 
 	/* If the file is done, don't bother sending events. We probably didn't
 	 * receive any to begin with */
-	if (bittree_check_done_bit(&task->bittree, inode->i_ino, 1))
+	if (bittree_check_done_bit(&task->bittree, uuid, 1))
 		return 0;
 
 	/* Go through all pages of this inode */
@@ -93,7 +96,7 @@ static int process_dir_inode(struct duet_task *task, struct inode *inode, int wa
 			continue;
 
 		state = was_removed ? DUET_PAGE_REMOVED : DUET_PAGE_ADDED;
-		hash_add(task, inode->i_ino, page->index, state, 1);
+		hash_add(task, uuid, page->index, state, 1);
 	}
 	rcu_read_unlock();
 
@@ -142,23 +145,24 @@ again:
 			if (inode->i_sb != task->f_sb)
 				continue;
 
-			/* If we haven't seen this inode before, and it's a descendant of
-			 * the dir we're moving, process it. */
-			if (bittree_check(&inodetree, inode->i_ino, 1, NULL) != 1) {
+			/* If we haven't seen this inode before, and it's a
+			 * descendant of the dir we're moving, process it. */
+			if (bittree_check(&inodetree, DUET_GET_UUID(inode), 1, NULL) != 1) {
 				spin_lock(&inode->i_lock);
 				if (inode->i_state & DUET_INODE_FREEING) {
-					unsigned long i_ino = inode->i_ino;
+					unsigned long long uuid = DUET_GET_UUID(inode);
 					spin_unlock(&inode->i_lock);
 					spin_unlock(duet_inode_hash_lock);
-					bittree_set_done(&inodetree, i_ino, 1);
+					bittree_set_done(&inodetree, uuid, 1);
 				} else {
 					__iget(inode);
 					spin_unlock(&inode->i_lock);
 					spin_unlock(duet_inode_hash_lock);
+
 					/* Check that the inode falls under our dir */
 					if (!d_find_path(inode, dir_dentry, 0, NULL, 0, NULL))
 						process_dir_inode(task, inode, was_removed);
-					bittree_set_done(&inodetree, inode->i_ino, 1);
+					bittree_set_done(&inodetree, DUET_GET_UUID(inode), 1);
 					iput(inode);
 				}
 				goto again;
@@ -182,6 +186,7 @@ void duet_hook(__u16 evtcode, void *data)
 	struct duet_move_data *mdata = NULL;
 	struct duet_task *cur;
 	unsigned long page_idx = 0;
+	unsigned long long uuid = 0;
 	int p_old, p_new;
 
 	/* Duet must be online */
@@ -219,9 +224,11 @@ void duet_hook(__u16 evtcode, void *data)
 		page_idx = page->index;
 	}
 
-	/* Check that we're referring to an actual inode */
+	/* Check that we're referring to an actual inode and get its UUID */
 	if (!inode)
 		return;
+
+	uuid = DUET_GET_UUID(inode);
 
 	/* Verify that the inode does not belong to a special file */
 	if (!S_ISREG(inode->i_mode) && !S_ISDIR(inode->i_mode)) {
@@ -243,15 +250,15 @@ void duet_hook(__u16 evtcode, void *data)
 			continue;
 		}
 
-		duet_dbg(KERN_INFO "duet: received event %x on (inode %lu, offt %lu)\n",
-				evtcode, inode->i_ino, page_idx);
+		duet_dbg(KERN_INFO "duet: received event %x on (uuid %llu, inode %lu, "
+				"offt %lu)\n", evtcode, uuid, inode->i_ino, page_idx);
 
 		/* Handle some file task specific events */
 		if (cur->is_file) {
 			switch (evtcode) {
 			case DUET_IN_DELETE:
 				/* Reset state for this inode */
-				bittree_clear_bits(&cur->bittree, inode->i_ino, 1);
+				bittree_clear_bits(&cur->bittree, uuid, 1);
 				continue;
 			case DUET_IN_MOVED:
 				/* Case 1: Sanity checking */
@@ -279,7 +286,7 @@ void duet_hook(__u16 evtcode, void *data)
 				if (!p_old && p_new) {
 					if (!S_ISDIR(inode->i_mode)) {
 						/* Item is a file. Unmark relevant bit */
-						bittree_unset_relv(&cur->bittree, inode->i_ino, 1);
+						bittree_unset_relv(&cur->bittree, uuid, 1);
 						process_dir_inode(cur, inode, 1);
 					} else {
 						/* Item is a dir. Clear seen, relevant bitmaps */
@@ -293,7 +300,7 @@ void duet_hook(__u16 evtcode, void *data)
 				if (p_old && !p_new) {
 					if (!S_ISDIR(inode->i_mode)) {
 						/* Item is a file. Mark the relevant bit */
-						bittree_set_relv(&cur->bittree, inode->i_ino, 1);
+						bittree_set_relv(&cur->bittree, uuid, 1);
 						process_dir_inode(cur, inode, 0);
 					} else {
 						/* Item is a dir. Clear seen bitmap only */
@@ -310,7 +317,7 @@ void duet_hook(__u16 evtcode, void *data)
 		}
 
 		/* Update the hash table */
-		if (hash_add(cur, inode->i_ino, page_idx, evtcode, 0))
+		if (hash_add(cur, uuid, page_idx, evtcode, 0))
 			printk(KERN_ERR "duet: hash table add failed\n");
 	}
 	rcu_read_unlock();

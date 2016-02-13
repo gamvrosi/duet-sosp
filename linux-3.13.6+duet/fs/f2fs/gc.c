@@ -396,21 +396,21 @@ void fetch_and_handle_duet_events(struct f2fs_sb_info *sbi)
 			break;
 
 		/* GC not interested in meta pages */
-		if (itm.ino == F2FS_META_INO(sbi))
+		if (DUET_UUID_INO(itm.uuid) == F2FS_META_INO(sbi))
 			continue;
 
 		if (itm.state & DUET_PAGE_ADDED) {
-			ret = blkaddr_lookup_insert(sbi, itm.ino, itm.idx);
+			ret = blkaddr_lookup_insert(sbi, DUET_UUID_INO(itm.uuid), itm.idx);
 			if (ret < 0)
 				f2fs_duet_debug(KERN_ERR "duet-gc: "
 					"blkaddr_lookup_insert error\n");
 		} else if (itm.state & DUET_PAGE_REMOVED) {
-			ret = blkaddr_lookup_remove(sbi, itm.ino, itm.idx);
+			ret = blkaddr_lookup_remove(sbi, DUET_UUID_INO(itm.uuid), itm.idx);
 			if (ret < 0)
 				f2fs_duet_debug(KERN_ERR "duet-gc: "
 					"blkaddr_lookup_remove error\n");
 		} else if (itm.state == DUET_PAGE_FLUSHED) {
-			ret = blkaddr_lookup_update(sbi, itm.ino, itm.idx);
+			ret = blkaddr_lookup_update(sbi, DUET_UUID_INO(itm.uuid), itm.idx);
 			if (ret < 0)
 				f2fs_duet_debug(KERN_ERR "duet-gc: "
 					"blkaddr_lookup_update error\n");

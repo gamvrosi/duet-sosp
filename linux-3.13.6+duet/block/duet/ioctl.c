@@ -98,7 +98,7 @@ int duet_shutdown(void)
 }
 
 /* Scan through the page cache for a given inode */
-static int find_get_inode(struct super_block *sb, unsigned long c_ino,
+static int find_get_inode(struct super_block *sb, unsigned long long c_uuid,
 	struct inode **c_inode)
 {
 	unsigned int loop;
@@ -116,8 +116,8 @@ static int find_get_inode(struct super_block *sb, unsigned long c_ino,
 				continue;
 
 			spin_lock(&inode->i_lock);
-			if (!*c_inode && inode->i_ino == c_ino &&
-					!(inode->i_state & DUET_INODE_FREEING)) {
+			if (!*c_inode && (DUET_GET_UUID(inode) == c_uuid) &&
+			    !(inode->i_state & DUET_INODE_FREEING)) {
 				__iget(inode);
 				*c_inode = inode;
 				spin_unlock(&inode->i_lock);
@@ -168,7 +168,7 @@ int do_find_path(struct duet_task *task, struct inode *inode, int getpath,
 	return ret;
 }
 
-int duet_find_path(struct duet_task *task, unsigned long inum, int getpath,
+int duet_find_path(struct duet_task *task, unsigned long long uuid, int getpath,
 	char *path)
 {
 	int ret = 0;
@@ -181,7 +181,7 @@ int duet_find_path(struct duet_task *task, unsigned long inum, int getpath,
 	}
 
 	/* First, we need to find struct inode for child and parent */
-	if (find_get_inode(task->f_sb, inum, &ino)) {
+	if (find_get_inode(task->f_sb, uuid, &ino)) {
 		duet_dbg(KERN_NOTICE "duet_find_path%s: failed to find child inode\n",
 			(getpath ? "" : " (null)"));
 		return 1;
@@ -193,7 +193,7 @@ int duet_find_path(struct duet_task *task, unsigned long inum, int getpath,
 	return ret;
 }
 
-static int duet_get_path(__u8 tid, unsigned long c_ino, char *cpath)
+static int duet_get_path(__u8 tid, __u64 c_uuid, char *cpath)
 {
 	int ret = 0;
 	struct duet_task *task = duet_find_task(tid);
@@ -203,7 +203,7 @@ static int duet_get_path(__u8 tid, unsigned long c_ino, char *cpath)
 		return 1;	
 	}
 
-	ret = duet_find_path(task, c_ino, 1, cpath);
+	ret = duet_find_path(task, (unsigned long long) c_uuid, 1, cpath);
 
 	/* decref and wake up cleaner if needed */
 	if (atomic_dec_and_test(&task->refcount))
@@ -314,7 +314,7 @@ static int duet_ioctl_cmd(void __user *arg)
 		break;
 
 	case DUET_GET_PATH:
-		ca->ret = duet_get_path(ca->tid, ca->c_ino, ca->cpath);
+		ca->ret = duet_get_path(ca->tid, ca->c_uuid, ca->cpath);
 		break;
 
 	default:

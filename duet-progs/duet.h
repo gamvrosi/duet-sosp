@@ -73,6 +73,9 @@
 #define DUET_REG_SBLOCK		0x8000
 #define DUET_FILE_TASK		0x10000	/* we register a 32-bit flag due to this */
 
+#define DUET_UUID_INO(uuid)	((unsigned long)(uuid & 0xffff))
+#define DUET_UUID_GEN(uuid)	((unsigned long)(uuid >> 32))
+
 /*
  * Item struct returned for processing. For both state- and event- based duet,
  * we return 4 bits, for page addition, removal, dirtying, and flushing. The
@@ -80,9 +83,9 @@
  * subscribed for.
  */
 struct duet_item {
-	unsigned long ino;
-	unsigned long idx;
-	__u16 state;
+	unsigned long long	uuid;
+	unsigned long		idx;
+	__u16			state;
 };
 
 int open_duet_dev(void);
@@ -95,7 +98,7 @@ int duet_fetch(int duet_fd, int tid, struct duet_item *items, int *count);
 int duet_check_done(int duet_fd, int tid, __u64 idx, __u32 count);
 int duet_set_done(int duet_fd, int tid, __u64 idx, __u32 count);
 int duet_unset_done(int duet_fd, int tid, __u64 idx, __u32 count);
-int duet_get_path(int duet_fd, int tid, unsigned long ino, char *path);
+int duet_get_path(int duet_fd, int tid, unsigned long long uuid, char *path);
 int duet_debug_printbit(int duet_fd, int tid);
 int duet_task_list(int duet_fd);
 

@@ -220,7 +220,7 @@ void send_files(int f_in, int f_out)
 	int ndx, j;
 #ifdef HAVE_DUET
 	char buf[PATH_MAX];
-	long long ino;
+	unsigned long long uuid;
 	long long inmem;
 	struct timeval start_tv, end_tv;
 	int64 total_update_time = 0, total_fetch_time = 0;
@@ -248,7 +248,7 @@ start_another:
 
 			/* Send a file out of order */
 			gettimeofday(&start_tv, NULL);
-			if (itree_fetch(&itree, tid, duet_fd, buf, &ino, &inmem)) {
+			if (itree_fetch(&itree, tid, duet_fd, buf, &uuid, &inmem)) {
 				if (INFO_GTE(DUET, 3))
 					rprintf(FERROR, "duet: nothing to fetch\n");
 				exit_cleanup(RERR_DUET);
@@ -273,13 +273,13 @@ start_another:
 					buf, inmem, pending_o3_files, file_total,
 					file_old_total);
 
-			if (duet_set_done(duet_fd, tid, ino, 1))
-				rprintf(FERROR, "duet: failed to mark %s (ino %lld)\n",
-					buf, ino);
+			if (duet_set_done(duet_fd, tid, DUET_UUID_INO(uuid), 1))
+				rprintf(FERROR, "duet: failed to mark %s (ino %ld)\n",
+					buf, DUET_UUID_INO(uuid));
 
 			if (INFO_GTE(DUET, 3))
-				rprintf(FINFO, "duet: Marked %s (ino %lld)\n",
-					buf, ino);
+				rprintf(FINFO, "duet: Marked %s (ino %ld)\n",
+					buf, DUET_UUID_INO(uuid));
 
 			/* If we had less than 800KB in memory there's no point bothering */
 //			if (inmem > 100)

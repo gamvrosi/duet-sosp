@@ -3749,11 +3749,11 @@ static int process_duet_events(struct send_ctx *sctx)
 			goto done;
 
 		/* If we're already past this inode, ignore the event */
-		if (itm.ino < sctx->send_progress)
+		if (DUET_UUID_INO(itm.uuid) < sctx->send_progress)
 			goto done;
 
 		/* Get inode */
-		if (btrfs_iget_ino(fs_info, itm.ino, &inode, NULL))
+		if (btrfs_iget_ino(fs_info, DUET_UUID_INO(itm.uuid), &inode, NULL))
 			goto done;
 
 		/* Trace the logical extent the page belongs to */

@@ -157,7 +157,7 @@ int main(int argc, char *argv[])
 
 			if (getpath) {
 				for (c = 0; c < itret; c++) {
-					tmp = duet_get_path(duet_fd, tid, buf[c].ino, path);
+					tmp = duet_get_path(duet_fd, tid, buf[c].uuid, path);
 					if (tmp < 0) {
 						fprintf(stderr, "Error: Duet get_path failed\n");
 						ret = 1;

@@ -35,7 +35,7 @@ struct inode_tree {
 void itree_init(struct inode_tree *itree);
 int itree_update(struct inode_tree *itree, __u8 taskid, int duet_fd);
 int itree_fetch(struct inode_tree *itree, __u8 taskid, int duet_fd, char *path,
-	long long *ino, long long *inmem);
+	unsigned long long *uuid, long long *inmem);
 void itree_teardown(struct inode_tree *itree);
 
 #endif /* _ITREE_H */

@@ -233,7 +233,7 @@ int duet_unset_done(int duet_fd, int tid, __u64 idx, __u32 count)
 }
 
 /* Warning: should only be called with a path that's DUET_MAX_PATH or longer */
-int duet_get_path(int duet_fd, int tid, unsigned long ino, char *path)
+int duet_get_path(int duet_fd, int tid, unsigned long long uuid, char *path)
 {
 	int ret=0;
 	struct duet_ioctl_cmd_args args;
@@ -246,7 +246,7 @@ int duet_get_path(int duet_fd, int tid, unsigned long ino, char *path)
 	memset(&args, 0, sizeof(args));
 	args.cmd_flags = DUET_GET_PATH;
 	args.tid = tid;
-	args.c_ino = ino;
+	args.c_uuid = uuid;
 
 	ret = ioctl(duet_fd, DUET_IOC_CMD, &args);
 	if (ret < 0) {

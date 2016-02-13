@@ -47,8 +47,8 @@ static const char * const cmd_debug_printitm_usage[] = {
 };
 
 static const char * const cmd_debug_getpath_usage[] = {
-	"duet debug getpath [tid] [child ino]",
-	"Check that [child ino] falls under the namespace subtree the task has",
+	"duet debug getpath [tid] [child uuid]",
+	"Check that [child uuid] falls under the namespace subtree the task has",
 	"registered for, which is expected to be dir. The tid is necessary",
 	"to know which task is requesting this mapping, and which superblock",
 	"and namespace we're referring to.",
@@ -154,7 +154,7 @@ static int cmd_debug_getpath(int fd, int argc, char **argv)
 	}
 
 	errno = 0;
-	args.c_ino = (unsigned long)strtol(argv[2], NULL, 10);
+	args.c_uuid = (unsigned long)strtol(argv[2], NULL, 10);
 	if (errno) {
 		perror("strtol: invalid child inode");
 		usage(cmd_debug_getpath_usage);
@@ -166,7 +166,7 @@ static int cmd_debug_getpath(int fd, int argc, char **argv)
 		usage(cmd_debug_getpath_usage);
 	}
 
-	fprintf(stdout, "%lu is %spart of the namespace (%s)\n", args.c_ino,
+	fprintf(stdout, "%llu is %spart of the namespace (%s)\n", args.c_uuid,
 		args.cpath[0] == '\0' ? "not " : "",
 		args.cpath[0] == '\0' ? "" : args.cpath);
 	return ret;

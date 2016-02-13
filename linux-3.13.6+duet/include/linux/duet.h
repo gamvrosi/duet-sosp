@@ -67,8 +67,11 @@
 
 /* Some macros, to make our lives easier */
 #define DUET_IN_EVENTS		(DUET_IN_ACCESS | DUET_IN_ATTRIB | DUET_IN_WCLOSE | \
-							 DUET_IN_RCLOSE | DUET_IN_CREATE | DUET_IN_DELETE | \
-							 DUET_IN_MODIFY | DUET_IN_MOVED | DUET_IN_OPEN)
+				 DUET_IN_RCLOSE | DUET_IN_CREATE | DUET_IN_DELETE | \
+				 DUET_IN_MODIFY | DUET_IN_MOVED | DUET_IN_OPEN)
+
+#define DUET_UUID_INO(uuid)	((unsigned long)(uuid & 0xffff))
+#define DUET_UUID_GEN(uuid)	((unsigned long)(uuid >> 32))
 
 /* Some structures to communicate file events to Duet */
 struct duet_move_data {
@@ -78,15 +81,16 @@ struct duet_move_data {
 };
 
 /*
- * Item struct returned for processing. We return 6 bits. For state-based duet,
- * we mark a page if it EXISTS or is MODIFIED. For event-based duet, we mark a
- * page for page addition, removal, dirtying, and flushing. The acceptable
- * combinations, however, will differ based on what the task has subscribed for.
+ * Item struct returned for processing.
+ * The UUID currently consists of the inode number and generation.
+ * For state-based duet, we mark a page if it EXISTS or is MODIFIED.
+ * For event-based duet, we mark a page added, removed, dirtied, and/or flushed.
+ * Acceptable event combinations will differ based on the task's subscription.
  */
 struct duet_item {
-	unsigned long ino;
-	unsigned long idx;
-	__u16 state;
+	unsigned long long	uuid;
+	unsigned long		idx;
+	__u16			state;
 };
 
 /*

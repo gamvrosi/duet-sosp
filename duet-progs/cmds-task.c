@@ -142,11 +142,12 @@ static int cmd_task_fetch(int fd, int argc, char **argv)
 	}
 
 	/* Print out the list we received */
-	fprintf(stdout, "Inode number\tOffset      \tState   \n"
-			"------------\t------------\t--------\n");
+	fprintf(stdout, "Inode number\tGeneration\tOffset      \tState   \n"
+			"------------\t----------\t------------\t--------\n");
 	for (c=0; c<count; c++) {
-		fprintf(stdout, "%12lu\t%12lu\t%8x\n",
-			items[c].ino, items[c].idx << 12, items[c].state);
+		fprintf(stdout, "%12lu\t%10lu\t%12lu\t%8x\n",
+			DUET_UUID_INO(items[c].uuid), DUET_UUID_GEN(items[c].uuid),
+			items[c].idx << 12, items[c].state);
 	}
 
 	return ret;

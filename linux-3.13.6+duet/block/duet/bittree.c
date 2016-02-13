@@ -593,7 +593,7 @@ static int do_bittree_check(struct duet_bittree *bt, __u64 idx, __u32 len,
 int bittree_check_inode(struct duet_bittree *bt, struct duet_task *task,
 	struct inode *inode)
 {
-	return do_bittree_check(bt, inode->i_ino, 1, task, inode);
+	return do_bittree_check(bt, DUET_GET_UUID(inode), 1, task, inode);
 }
 
 /* Checks if the given entries are done */

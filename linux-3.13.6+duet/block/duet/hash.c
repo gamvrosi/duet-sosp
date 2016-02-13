@@ -26,24 +26,24 @@
 
 /*
  * Page state for Duet is retained in a global hash table shared by all tasks.
- * Indexing is based on inode number and the page's offset within said inode.
+ * Indexing is based on inode uuid and the page's offset within said inode.
  */
 
-static unsigned long hash(unsigned long ino, unsigned long idx)
+static unsigned long hash(unsigned long long uuid, unsigned long idx)
 {
-	unsigned long tmp;
+	u64 h = uuid ^ (idx * GOLDEN_RATIO_PRIME);
 
-	tmp = (idx * ino ^ (GOLDEN_RATIO_PRIME + idx)) / L1_CACHE_BYTES;
-	tmp = tmp ^ ((tmp ^ GOLDEN_RATIO_PRIME) >> duet_env.itm_hash_shift);
-	return tmp & duet_env.itm_hash_mask;
+#if BITS_PER_LONG == 32
+	h = (h >> 32) ^ (h & 0xffffffff);
+#endif
+
+	return (unsigned long) h;
 }
 
 int hash_init(void)
 {
 	/* Allocate power-of-2 number of buckets */
-	duet_env.itm_hash_shift = ilog2(totalram_pages);
-	duet_env.itm_hash_size = 1 << duet_env.itm_hash_shift;
-	duet_env.itm_hash_mask = duet_env.itm_hash_size - 1;
+	duet_env.itm_hash_size = 1 << ilog2(totalram_pages);
 
 	printk(KERN_DEBUG "duet: allocated global hash table (%lu buckets)\n",
 			duet_env.itm_hash_size);
@@ -58,7 +58,7 @@ int hash_init(void)
 }
 
 /* Add one event into the hash table */
-int hash_add(struct duet_task *task, unsigned long ino, unsigned long idx,
+int hash_add(struct duet_task *task, unsigned long long uuid, unsigned long idx,
 	__u16 evtmask, short in_scan)
 {
 	__u16 curmask = 0;
@@ -71,7 +71,7 @@ int hash_add(struct duet_task *task, unsigned long ino, unsigned long idx,
 	evtmask &= task->evtmask;
 
 	/* Get the bucket */
-	bnum = hash(ino, idx);
+	bnum = hash(uuid, idx);
 	b = duet_env.itm_hash_table + bnum;
 	local_irq_save(flags);
 	hlist_bl_lock(b);
@@ -81,7 +81,7 @@ int hash_add(struct duet_task *task, unsigned long ino, unsigned long idx,
 #ifdef CONFIG_DUET_STATS
 		duet_env.itm_stat_lkp++;
 #endif /* CONFIG_DUET_STATS */
-		if ((itnode->item).ino == ino && (itnode->item).idx == idx) {
+		if ((itnode->item).uuid == uuid && (itnode->item).idx == idx) {
 			found = 1;
 			break;
 		}
@@ -90,9 +90,9 @@ int hash_add(struct duet_task *task, unsigned long ino, unsigned long idx,
 #ifdef CONFIG_DUET_STATS
 	duet_env.itm_stat_num++;
 #endif /* CONFIG_DUET_STATS */
-	duet_dbg(KERN_DEBUG "duet: %s hash node (ino%lu, idx%lu)\n",
+	duet_dbg(KERN_DEBUG "duet: %s hash node (uuid %llu, ino%lu, idx%lu)\n",
 		found ? (in_scan ? "replacing" : "updating") : "inserting",
-		ino, idx);
+		uuid, DUET_UUID_INO(uuid), idx);
 
 	if (found) {
 		curmask = itnode->state[task->id];
@@ -154,7 +154,7 @@ check_dispose:
 			return 1;
 		}
 
-		(itnode->item).ino = ino;
+		(itnode->item).uuid = uuid;
 		(itnode->item).idx = idx;
 		itnode->state[task->id] = evtmask | DUET_MASK_VALID;
 		itnode->refcount++;

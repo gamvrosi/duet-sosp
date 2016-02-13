@@ -57,26 +57,26 @@ struct duet_ioctl_list_args {
 };
 
 struct duet_ioctl_cmd_args {
-	__u8 	cmd_flags;			/* in */
-	__u8 	tid;				/* in/out */
-	__u8 	ret;				/* out */
+	__u8 	cmd_flags;				/* in */
+	__u8 	tid;					/* in/out */
+	__u8 	ret;					/* out */
 	union {
 		/* Registration args */
 		struct {
-			__u32 	regmask;	/* in */
-			__u32 	bitrange;	/* in */
-			char 	name[MAX_NAME];	/* in */
-			char	path[MAX_PATH];	/* in */
+			__u32 	regmask;		/* in */
+			__u32 	bitrange;		/* in */
+			char 	name[MAX_NAME];		/* in */
+			char	path[MAX_PATH];		/* in */
 		};
 		/* (Un)marking and checking args */
 		struct {
-			__u32 	itmnum;		/* in */
-			__u64 	itmidx;		/* in */
+			__u32 	itmnum;			/* in */
+			__u64 	itmidx;			/* in */
 		};
 		/* ino -> path args */
 		struct {
-			unsigned long c_ino;	/* in */
-			char cpath[MAX_PATH];	/* out */
+			__u64	c_uuid;			/* in */
+			char 	cpath[MAX_PATH];	/* out */
 		};
 	};	
 };

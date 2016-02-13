@@ -688,7 +688,7 @@ static int process_duet_events(struct scrub_ctx *sctx)
 
 		/* If this inode came from disk, remember to stop and give the
 		 * other processes a chance */
-		if (btrfs_iget_ino(fs_info, itm.ino, &inode, &stop))
+		if (btrfs_iget_ino(fs_info, DUET_UUID_INO(itm.uuid), &inode, &stop))
 			goto done;
 
 		if (btrfs_get_logical(inode, itm.idx, &em, &stop))
