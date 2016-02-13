@@ -70,7 +70,7 @@
 				 DUET_IN_RCLOSE | DUET_IN_CREATE | DUET_IN_DELETE | \
 				 DUET_IN_MODIFY | DUET_IN_MOVED | DUET_IN_OPEN)
 
-#define DUET_UUID_INO(uuid)	((unsigned long)(uuid & 0xffff))
+#define DUET_UUID_INO(uuid)	((unsigned long)(uuid & 0xffffffff))
 #define DUET_UUID_GEN(uuid)	((unsigned long)(uuid >> 32))
 
 /* Some structures to communicate file events to Duet */

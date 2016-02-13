@@ -650,9 +650,11 @@ int bittree_print(struct duet_task *task)
 {
 	struct bmap_rbnode *bnode = NULL;
 	struct rb_node *node;
+	unsigned long iflags;
 
+	local_irq_save(iflags);
 	spin_lock(&task->bittree.lock);
-	printk(KERN_INFO "duet: Printing global hash table\n");
+	printk(KERN_INFO "duet: Printing task bittree\n");
 	node = rb_first(&task->bittree.root);
 	while (node) {
 		bnode = rb_entry(node, struct bmap_rbnode, node);
@@ -674,6 +676,7 @@ int bittree_print(struct duet_task *task)
 		node = rb_next(node);
 	}
 	spin_unlock(&task->bittree.lock);
+	local_irq_restore(iflags);
 
 	printk(KERN_INFO "duet: Task #%d bitmap has %d out of %lu bits set\n",
 		task->id, bitmap_weight(task->bucket_bmap,

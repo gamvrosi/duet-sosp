@@ -147,16 +147,16 @@ static int cmd_debug_getpath(int fd, int argc, char **argv)
 
 	/* Pass the inode numbers in */
 	errno = 0;
-	args.tid = (__u8)strtol(argv[1], NULL, 10);
+	args.tid = (__u8)strtoul(argv[1], NULL, 10);
 	if (errno) {
 		perror("strtol: invalid task ID");
 		usage(cmd_debug_printbit_usage);
 	}
 
 	errno = 0;
-	args.c_uuid = (unsigned long)strtol(argv[2], NULL, 10);
+	args.c_uuid = (unsigned long long)strtoull(argv[2], NULL, 16);
 	if (errno) {
-		perror("strtol: invalid child inode");
+		perror("strtoll: invalid child uuid");
 		usage(cmd_debug_getpath_usage);
 	}
 

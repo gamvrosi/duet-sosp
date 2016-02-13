@@ -124,6 +124,8 @@ struct duet_info {
 	/* ItemTable -- Global page state hash table */
 	struct hlist_bl_head	*itm_hash_table;
 	unsigned long		itm_hash_size;
+	unsigned long		itm_hash_shift;
+	unsigned long		itm_hash_mask;
 #ifdef CONFIG_DUET_STATS
 	unsigned long		itm_stat_lkp;	/* total lookups per request */
 	unsigned long		itm_stat_num;	/* number of node requests */

@@ -73,7 +73,7 @@
 #define DUET_REG_SBLOCK		0x8000
 #define DUET_FILE_TASK		0x10000	/* we register a 32-bit flag due to this */
 
-#define DUET_UUID_INO(uuid)	((unsigned long)(uuid & 0xffff))
+#define DUET_UUID_INO(uuid)	((unsigned long)(uuid & 0xffffffff))
 #define DUET_UUID_GEN(uuid)	((unsigned long)(uuid >> 32))
 
 /*

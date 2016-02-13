@@ -4,6 +4,7 @@
 gen_file() {
 	old_ino="$1"
 	sizek="$2"
+	del="$3"
 
 	# Generate a 10K file
 	file=$(mktemp ./tmp.XXXXXX)
@@ -20,7 +21,9 @@ gen_file() {
 	echo "Generated file $file (ino: $file_ino). Looking for $old_ino"
 
 	# Delete file
-	rm $file
+	if [[ $del == 1 ]]; then
+		rm $file
+	fi
 }
 
 # Register with Duet
@@ -33,9 +36,9 @@ fi
 tid=`echo $tid | sed 's/.*ID //g;s/)//'`
 
 # Generate 10K files until the inode number is reused
-gen_file 0 20
+gen_file 0 20 1
 while [[ $same == 0 ]]; do
-	gen_file $file_ino 8
+	gen_file $file_ino 8 0
 done
 
 # Fetch Duet events

@@ -31,19 +31,21 @@
 
 static unsigned long hash(unsigned long long uuid, unsigned long idx)
 {
-	u64 h = uuid ^ (idx * GOLDEN_RATIO_PRIME);
+	unsigned long long h;
 
-#if BITS_PER_LONG == 32
+	h = (idx * uuid ^ (GOLDEN_RATIO_PRIME + idx)) / L1_CACHE_BYTES;
+	h = h ^ ((h ^ GOLDEN_RATIO_PRIME) >> duet_env.itm_hash_shift);
 	h = (h >> 32) ^ (h & 0xffffffff);
-#endif
 
-	return (unsigned long) h;
+	return (unsigned long) (h & duet_env.itm_hash_mask);
 }
 
 int hash_init(void)
 {
 	/* Allocate power-of-2 number of buckets */
-	duet_env.itm_hash_size = 1 << ilog2(totalram_pages);
+	duet_env.itm_hash_shift = ilog2(totalram_pages);
+	duet_env.itm_hash_size = 1 << duet_env.itm_hash_shift;
+	duet_env.itm_hash_mask = duet_env.itm_hash_size - 1;
 
 	printk(KERN_DEBUG "duet: allocated global hash table (%lu buckets)\n",
 			duet_env.itm_hash_size);
