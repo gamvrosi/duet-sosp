@@ -81,18 +81,17 @@ int duet_register(int duet_fd, const char *path, __u32 regmask, __u32 bitrange,
 	memcpy(args.path, path, DUET_MAX_PATH);
 
 	ret = ioctl(duet_fd, DUET_IOC_CMD, &args);
-	if (ret < 0) {
+	if (ret < 0)
 		perror("duet: tasks register ioctl error");
-		goto out;
-	}
 
 	*tid = args.tid;
 
-	duet_dbg(stdout, "Task '%s' registered successfully under ID %d.\n",
-		args.name, args.tid);
+	if (args.ret)
+		duet_dbg(stdout, "Error registering task (ID %d).\n", args.tid);
+	else
+		duet_dbg(stdout, "Successfully registered task (ID %d).\n", args.tid);
 
-out:
-	return ret;
+	return (ret < 0) ? ret : args.ret;
 }
 
 int duet_deregister(int duet_fd, int tid)
@@ -113,10 +112,12 @@ int duet_deregister(int duet_fd, int tid)
 	if (ret < 0)
 		perror("duet: tasks deregister ioctl error");
 
-	duet_dbg(stdout, "Task with ID %d deregistered successfully.\n",
-		args.tid);
+	if (args.ret)
+		duet_dbg(stdout, "Error deregistering task (ID %d).\n", args.tid);
+	else
+		duet_dbg(stdout, "Successfully deregistered task (ID %d).\n", args.tid);
 
-	return ret;
+	return (ret < 0) ? ret : args.ret;
 }
 
 int duet_fetch(int duet_fd, int tid, struct duet_item *items, int *count)
@@ -297,13 +298,13 @@ int duet_task_list(int duet_fd)
 
 	/* Print out the list we received */
 	fprintf(stdout,
-			"ID\tTask Name\tFile task?\tBit range\tEvt. mask\n"
-			"--\t---------\t----------\t---------\t---------\n");
+		"ID\tTask Name           \tFile task?\tBit range\tEvt. mask\n"
+		"--\t--------------------\t----------\t---------\t---------\n");
 	for (i=0; i<DUET_MAX_TASKS; i++) {
 		if (!args.tid[i])
 			break;
 
-		fprintf(stdout, "%2d\t%9s\t%10s\t%9u\t%8x\n",
+		fprintf(stdout, "%2d\t%13s\t%10s\t%9u\t%8x\n",
 			args.tid[i], args.tnames[i], args.is_file[i] ? "TRUE" : "FALSE",
 			args.bitrange[i], args.evtmask[i]);
 	}

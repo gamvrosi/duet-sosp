@@ -225,7 +225,7 @@ void duet_hook(__u16 evtcode, void *data)
 
 	/* Verify that the inode does not belong to a special file */
 	if (!S_ISREG(inode->i_mode) && !S_ISDIR(inode->i_mode)) {
-		duet_dbg(KERN_INFO "duet: event not on regular file\n");
+		//duet_dbg(KERN_INFO "duet: event not on regular file\n");
 		return;
 	}
 

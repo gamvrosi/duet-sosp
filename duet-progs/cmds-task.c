@@ -218,8 +218,8 @@ static int cmd_task_reg(int fd, int argc, char **argv)
 		usage(cmd_task_reg_usage);
 
 	ret = duet_register(fd, path, regmask, bitrange, name, &tid);
-	if (ret < 0) {
-		perror("tasks register ioctl error");
+	if (ret) {
+		fprintf(stdout, "Error registering task '%s'\n", name);
 		usage(cmd_task_reg_usage);
 	}
 
@@ -252,12 +252,12 @@ static int cmd_task_dereg(int fd, int argc, char **argv)
 		usage(cmd_task_dereg_usage);
 
 	ret = duet_deregister(fd, tid);
-	if (ret < 0) {
-		perror("tasks deregister ioctl error");
+	if (ret) {
+		fprintf(stdout, "Error deregistering task (ID %d)\n", tid);
 		usage(cmd_task_dereg_usage);
 	}
 
-	fprintf(stdout, "Success deregistering Task with ID %d\n", tid);
+	fprintf(stdout, "Success deregistering task (ID %d)\n", tid);
 	return ret;
 }
 

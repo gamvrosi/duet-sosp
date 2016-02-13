@@ -478,6 +478,10 @@ int duet_register(char *path, __u32 regmask, __u32 bitrange, const char *name,
 {
 	int ret;
 
+	/* Do some basic sanity checking */
+	if (!path || !regmask || !bitrange)
+		return -EINVAL;
+
 	if (regmask & DUET_REG_SBLOCK)
 		ret = __register_ktask(path, regmask, bitrange, name, taskid);
 	else
