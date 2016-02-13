@@ -322,7 +322,8 @@ static int __update_tree(struct duet_bittree *bt, __u64 idx, __u32 len,
 
 			if (bt->is_file) {
 				/* First read seen bit */
-				res = duet_bmap_read(bnode->seen, bnode->idx, bt->range, idx);
+				res = duet_bmap_read(bnode->seen, bnode->idx,
+						     bt->range, idx);
 				if (res == -1) {
 					ret = -1;
 					goto done;
@@ -330,7 +331,8 @@ static int __update_tree(struct duet_bittree *bt, __u64 idx, __u32 len,
 				ret |= res << 2;
 
 				/* Then read relevant bit */
-				res = duet_bmap_read(bnode->relv, bnode->idx, bt->range, idx);
+				res = duet_bmap_read(bnode->relv, bnode->idx,
+						     bt->range, idx);
 				if (res == -1) {
 					ret = -1;
 					goto done;
@@ -394,45 +396,50 @@ static int __update_tree(struct duet_bittree *bt, __u64 idx, __u32 len,
 			/* Set the bits. Return -1 if something goes wrong. */
 			if (!(flags & BMAP_CHECK)) {
 				if (bt->is_file) {
-					if ((flags & BMAP_SEEN_SET) && duet_bmap_set(bnode->seen,
-									bnode->idx, bt->range, idx, node_len, 1)) {
+					if ((flags & BMAP_SEEN_SET) &&
+					    duet_bmap_set(bnode->seen, bnode->idx,
+							  bt->range, idx, node_len, 1)) {
 						ret = -1;
 						goto done;
 					}
 
-					if ((flags & BMAP_RELV_SET) && duet_bmap_set(bnode->relv,
-									bnode->idx, bt->range, idx, node_len, 1)) {
+					if ((flags & BMAP_RELV_SET) &&
+					    duet_bmap_set(bnode->relv, bnode->idx,
+							  bt->range, idx, node_len, 1)) {
 						ret = -1;
 						goto done;
 					}
 				}
 
-				if ((flags & BMAP_DONE_SET) && duet_bmap_set(bnode->done,
-									bnode->idx, bt->range, idx, node_len, 1)) {
+				if ((flags & BMAP_DONE_SET) &&
+				    duet_bmap_set(bnode->done, bnode->idx,
+						  bt->range, idx, node_len, 1)) {
 					ret = -1;
 					goto done;
 				}
 
-			/* Check the bits. Return if all bits are not in expected state */
+			/* Check the bits. Return if any bits are off */
 			} else {
 				if (bt->is_file) {
 					if (flags & BMAP_SEEN_SET) {
-						ret = duet_bmap_chk(bnode->seen, bnode->idx, bt->range,
-												idx, node_len, 1);
+						ret = duet_bmap_chk(bnode->seen,
+							bnode->idx, bt->range,
+							idx, node_len, 1);
 						if (ret != 1)
 							goto done;
 					}
 
 					if (flags & BMAP_RELV_SET) {
-						ret = duet_bmap_chk(bnode->relv, bnode->idx, bt->range,
-												idx, node_len, 1);
+						ret = duet_bmap_chk(bnode->relv,
+							bnode->idx, bt->range,
+							idx, node_len, 1);
 						if (ret != 1)
 							goto done;
 					}
 				}
 
-				ret = duet_bmap_chk(bnode->done, bnode->idx, bt->range,
-												idx, node_len, 1);
+				ret = duet_bmap_chk(bnode->done, bnode->idx,
+					bt->range, idx, node_len, 1);
 				if (ret != 1)
 					goto done;
 			}
@@ -443,45 +450,50 @@ static int __update_tree(struct duet_bittree *bt, __u64 idx, __u32 len,
 			/* Clear the bits. Return -1 if something goes wrong. */
 			if (!(flags & BMAP_CHECK)) {
 				if (bt->is_file) {
-					if ((flags & BMAP_SEEN_RST) && duet_bmap_set(bnode->seen,
-									bnode->idx, bt->range, idx, node_len, 0)) {
+					if ((flags & BMAP_SEEN_RST) &&
+					    duet_bmap_set(bnode->seen, bnode->idx,
+							  bt->range, idx, node_len, 0)) {
 						ret = -1;
 						goto done;
 					}
 
-					if ((flags & BMAP_RELV_RST) && duet_bmap_set(bnode->relv,
-									bnode->idx, bt->range, idx, node_len, 0)) {
+					if ((flags & BMAP_RELV_RST) &&
+					    duet_bmap_set(bnode->relv, bnode->idx,
+							  bt->range, idx, node_len, 0)) {
 						ret = -1;
 						goto done;
 					}
 				}
 
-				if ((flags & BMAP_DONE_RST) && duet_bmap_set(bnode->done,
-									bnode->idx, bt->range, idx, node_len, 0)) {
+				if ((flags & BMAP_DONE_RST) &&
+				    duet_bmap_set(bnode->done, bnode->idx,
+						  bt->range, idx, node_len, 0)) {
 					ret = -1;
 					goto done;
 				}
 
-			/* Check the bits. Return if all bits are not in expected state */
+			/* Check the bits. Return if any bits are off */
 			} else {
 				if (bt->is_file) {
 					if (flags & BMAP_SEEN_RST) {
-						ret = duet_bmap_chk(bnode->seen, bnode->idx, bt->range,
-												idx, node_len, 0);
+						ret = duet_bmap_chk(bnode->seen,
+							bnode->idx, bt->range,
+							idx, node_len, 0);
 						if (ret != 1)
 							goto done;
 					}
 
 					if (flags & BMAP_RELV_RST) {
-						ret = duet_bmap_chk(bnode->relv, bnode->idx, bt->range,
-												idx, node_len, 0);
+						ret = duet_bmap_chk(bnode->relv,
+							bnode->idx, bt->range,
+							idx, node_len, 0);
 						if (ret != 1)
 							goto done;
 					}
 				}
 
-				ret = duet_bmap_chk(bnode->done, bnode->idx, bt->range,
-												idx, node_len, 0);
+				ret = duet_bmap_chk(bnode->done, bnode->idx,
+						bt->range, idx, node_len, 0);
 				if (ret != 1)
 					goto done;
 			}
@@ -531,7 +543,7 @@ static int do_bittree_check(struct duet_bittree *bt, __u64 idx, __u32 len,
 	if (bt->is_file) { /* File task */
 
 		if (len != 1) {
-			printk(KERN_ERR "duet: can't check more than one inode at a time\n");
+			printk(KERN_ERR "duet: can't check multiple inodes\n");
 			return -1;
 		}
 
@@ -638,7 +650,6 @@ int bittree_print(struct duet_task *task)
 {
 	struct bmap_rbnode *bnode = NULL;
 	struct rb_node *node;
-//	unsigned long flags;
 
 	spin_lock(&task->bittree.lock);
 	printk(KERN_INFO "duet: Printing global hash table\n");
@@ -664,13 +675,9 @@ int bittree_print(struct duet_task *task)
 	}
 	spin_unlock(&task->bittree.lock);
 
-//	local_irq_save(flags);
-//	spin_lock(&task->bbmap_lock);
 	printk(KERN_INFO "duet: Task #%d bitmap has %d out of %lu bits set\n",
 		task->id, bitmap_weight(task->bucket_bmap,
 		duet_env.itm_hash_size), duet_env.itm_hash_size);
-//	spin_unlock(&task->bbmap_lock);
-//	local_irq_restore(flags);
 
 	return 0;
 }

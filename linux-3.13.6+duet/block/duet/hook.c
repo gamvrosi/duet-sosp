@@ -201,7 +201,7 @@ void duet_hook(__u16 evtcode, void *data)
 				break;
 			default:
 				duet_dbg(KERN_INFO "duet: event code %x not supported\n",
-							evtcode);
+					evtcode);
 				return;
 		}
 	} else {
@@ -211,7 +211,7 @@ void duet_hook(__u16 evtcode, void *data)
 		/* Duet must be online, and the page must belong to a valid mapping */
 		if (!page || !page_mapping(page)) {
 			duet_dbg(KERN_ERR "duet: dropped event %x due to NULL mapping\n",
-					evtcode);
+				evtcode);
 			return;
 		}
 
@@ -266,7 +266,7 @@ void duet_hook(__u16 evtcode, void *data)
 				p_old = do_find_path(cur, mdata->old_dir, 0, NULL);
 				p_new = do_find_path(cur, mdata->new_dir, 0, NULL);
 				if (p_old == -1 || p_new == -1) {
-					printk(KERN_ERR "duet: can't determind parent dir relevance\n");
+					printk(KERN_ERR "duet: can't determine parent dir relevance\n");
 					continue;
 				}
 
@@ -284,7 +284,7 @@ void duet_hook(__u16 evtcode, void *data)
 					} else {
 						/* Item is a dir. Clear seen, relevant bitmaps */
 						bittree_clear_bitmap(&cur->bittree,
-											BMAP_SEEN | BMAP_RELV);
+							BMAP_SEEN | BMAP_RELV);
 						scan_cached_dir(cur, inode, 1);
 					}
 				}
