@@ -138,3 +138,53 @@ to both VMs and install on the debuggee, then reboot as per step 13.
 On Ubuntu server, you can change hostname by editing ```/etc/hostname```,
 ```/etc/hosts```, and running ```sudo service hostname restart```.
 
+
+Using perf with Duet
+----------------------
+
+_perf_ is a powerful tool for profiling, tracing and instrumenting the Linux
+kernel, and is extremely useful for diagnosing performance issues that cross
+the userspace/kernel system call boundary. In order to use perf with the Duet
+kernel, include the following options in your build configuration:
+
+ * `CONFIG_KPROBES=y`
+ * `CONFIG_HAVE_KPROBES=y`
+ * `CONFIG_KPROBES_ON_FTRACE=y`
+ * `CONFIG_KPROBE_EVENT=y`
+ * `CONFIG_UPROBES=y`
+ * `CONFIG_UPROBE_EVENT=y`
+ * `CONFIG_FTRACE=y`
+ * `CONFIG_FTRACE_SYSCALLS=y`
+ * `CONFIG_DYNAMIC_FTRACE=y`
+ * `CONFIG_FUNCTION_PROFILER=y`
+ * `CONFIG_FUNCTION_TRACER=y`
+ * `CONFIG_FUNCTION_GRAPH_TRACR=y`
+ * `CONFIG_STACKTRACE_SUPPORT=y`
+ * `CONFIG_TRACEPOINTS=y`
+ * `CONFIG_PERF_EVENTS=y`
+
+Also, `CONFIG_DEBUG_INFO=y` and `CONFIG_DEBUG_KERNEL=y` are a good idea too (be sure to run `./setup.sh -g` and install the resulting `linux-image-3.13.6+duet-$SHA1-dbg` package in order to give perf the necessary debug info found under `/usr/lib/debug/lib/modules/3.13.6+duet-$SHA1/vmlinux`.)
+
+Unfortunately, the userspace tool found in `linux-3.13.6+duet/tools/perf` is
+unusable. Instead, on Debian and Ubuntu systems, install the
+`linux-tools-X.Y.Z-W` package, where the kernel version _X.Y.Z-W_ is whichever
+is the highest available as reported by `apt-cache search linux-tools` (at the
+time of this writing, on Ubuntu 15.10 "Wily" this is in the 4.2.0 range.)
+
+Next, as `root` run the `perf` binary found under
+`/usr/lib/linux-tools-X.Y.Z-W/perf`. If you see a message such as _WARNING:
+perf not found for kernel 3.13.6+duet_, you have actually only run the shell
+script frontend `/usr/bin/perf` installed by the `linux-tools-common` package,
+and not the real binary.
+
+### A few basic perf commands
+
+ * `perf top`: see which kernel and userspace process functions are consuming the most CPU
+ * `perf top --call-graph dwarf,1024`: see which functions are consuming CPU along with the graph of callsites that invoke them, broken down by CPU usage
+ * `perf trace -p $PID1,$PID2,...`: trace system calls and events in the spirit of _strace_ but with much less performance impact on the traced process
+
+### Useful perf links
+
+ * <https://perf.wiki.kernel.org/index.php/Main_Page>
+ * <https://perf.wiki.kernel.org/index.php/Tutorial>
+ * <http://www.brendangregg.com/perf.html>
