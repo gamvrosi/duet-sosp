@@ -16,10 +16,6 @@
  * Boston, MA 021110-1307, USA.
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
 #include "commands.h"
 
 static char argv0_buf[ARGV0_BUF_SIZE];

@@ -28,13 +28,15 @@ int duet_online(void)
 }
 EXPORT_SYMBOL_GPL(duet_online);
 
-int duet_bootstrap(void)
+int duet_bootstrap(__u8 numtasks)
 {
 	if (atomic_cmpxchg(&duet_env.status, DUET_STATUS_OFF, DUET_STATUS_INIT)
 	    != DUET_STATUS_OFF) {
 		printk(KERN_WARNING "duet: framework not off, bootstrap aborted\n");
 		return 1;
 	}
+
+	duet_env.numtasks = (numtasks ? numtasks : DUET_DEF_NUMTASKS);
 
 	/* Initialize global hash table */
 	if (hash_init()) {
@@ -265,7 +267,7 @@ static int duet_ioctl_cmd(void __user *arg)
 
 	switch (ca->cmd_flags) {
 	case DUET_START:
-		ca->ret = duet_bootstrap();
+		ca->ret = duet_bootstrap(ca->numtasks);
 
 		if (ca->ret)
 			printk(KERN_ERR "duet: failed to enable framework\n");
@@ -349,16 +351,16 @@ static int duet_ioctl_tlist(void __user *arg)
 	if (IS_ERR(la))
 		return PTR_ERR(la);
 
-	/* We will only send the first MAX_TASKS, and that's ok */
+	/* We will only send the first num_tasks, and that's ok */
 	mutex_lock(&duet_env.task_list_mutex);
 	list_for_each_entry(cur, &duet_env.tasks, task_list) {
-		la->tid[i] = cur->id;
-		memcpy(la->tnames[i], cur->name, MAX_NAME);
-		la->is_file[i] = cur->is_file;
-		la->bitrange[i] = cur->bittree.range;
-		la->evtmask[i] = cur->evtmask;
+		la->tasks[i].tid = cur->id;
+		memcpy(la->tasks[i].tname, cur->name, MAX_NAME);
+		la->tasks[i].is_file = cur->is_file;
+		la->tasks[i].bitrange = cur->bittree.range;
+		la->tasks[i].evtmask = cur->evtmask;
 		i++;
-		if (i == MAX_TASKS)
+		if (i == min(duet_env.numtasks, (__u8)MAX_TASKS))
 			break;
         }
 	mutex_unlock(&duet_env.task_list_mutex);

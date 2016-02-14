@@ -23,7 +23,6 @@
 #include "duet.h"
 
 /* NB: some definitions have been moved to duet.h */
-#define DUET_MAX_TASKS	15
 #define DUET_IOC_MAGIC	0xDE
 
 /* ioctl codes */
@@ -40,6 +39,14 @@ enum duet_ioctl_codes {
 	DUET_GET_PATH,
 };
 
+struct duet_task_attrs {
+	__u8 	tid;					/* out */
+	char 	tname[DUET_MAX_NAME];			/* out */
+	__u8	is_file;				/* out */
+	__u32 	bitrange;				/* out */
+	__u16	evtmask;				/* out */
+};
+
 /* We return up to MAX_ITEMS at a time (9b each). */
 struct duet_ioctl_fetch_args {
 	__u8 			tid;			/* in */
@@ -48,11 +55,8 @@ struct duet_ioctl_fetch_args {
 };
 
 struct duet_ioctl_list_args {
-	__u8 	tid[DUET_MAX_TASKS];			/* out */
-	char 	tnames[DUET_MAX_TASKS][DUET_MAX_NAME];	/* out */
-	__u8	is_file[DUET_MAX_TASKS];		/* out */
-	__u32 	bitrange[DUET_MAX_TASKS];		/* out */
-	__u16	evtmask[DUET_MAX_TASKS];		/* out */
+	__u8			numtasks;		/* out */
+	struct duet_task_attrs	*tasks;			/* out */
 };
 
 struct duet_ioctl_cmd_args {
@@ -60,6 +64,10 @@ struct duet_ioctl_cmd_args {
 	__u8 	tid;					/* in/out */
 	__u8 	ret;					/* out */
 	union {
+		/* Bootstrapping args */
+		struct {
+			__u8	numtasks;		/* in */
+		};
 		/* Registration args */
 		struct {
 			__u32 	regmask;		/* in */

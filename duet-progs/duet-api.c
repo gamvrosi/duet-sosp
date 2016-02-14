@@ -15,6 +15,7 @@
  * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
  * Boston, MA 021110-1307, USA.
  */
+
 #include <stdio.h>
 #include <errno.h>
 #include <unistd.h>
@@ -292,6 +293,13 @@ int duet_task_list(int duet_fd)
 
 	memset(&args, 0, sizeof(args));
 
+	args.tasks = (struct duet_task_attrs *)malloc(DUET_MAX_TASKS *
+			sizeof(struct duet_task_attrs));
+	if (!args.tasks) {
+		perror("duet: task list args allocation failed");
+		return 1;
+	}
+
 	ret = ioctl(duet_fd, DUET_IOC_TLIST, &args);
 	if (ret < 0)
 		perror("duet: task list ioctl failed");
@@ -300,13 +308,14 @@ int duet_task_list(int duet_fd)
 	fprintf(stdout,
 		"ID\tTask Name           \tFile task?\tBit range\tEvt. mask\n"
 		"--\t--------------------\t----------\t---------\t---------\n");
-	for (i=0; i<DUET_MAX_TASKS; i++) {
-		if (!args.tid[i])
+	for (i=0; i<args.numtasks; i++) {
+		if (!args.tasks[i].tid)
 			break;
 
 		fprintf(stdout, "%2d\t%13s\t%10s\t%9u\t%8x\n",
-			args.tid[i], args.tnames[i], args.is_file[i] ? "TRUE" : "FALSE",
-			args.bitrange[i], args.evtmask[i]);
+			args.tasks[i].tid, args.tasks[i].tname,
+			args.tasks[i].is_file ? "TRUE" : "FALSE",
+			args.tasks[i].bitrange, args.tasks[i].evtmask);
 	}
 
 	return ret;

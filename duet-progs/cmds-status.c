@@ -15,10 +15,7 @@
  * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
  * Boston, MA 021110-1307, USA.
  */
-#include <unistd.h>
-#include <string.h>
-#include <stdlib.h>
-#include <stdio.h>
+
 #include "ioctl.h"
 #include "commands.h"
 
@@ -28,11 +25,13 @@ static const char * const status_cmd_group_usage[] = {
 };
 
 static const char * const cmd_status_start_usage[] = {
-	"duet status start",
+	"duet status start [-n tasks]",
 	"Enable the duet framework.",
 	"Initializes and enables the duet framework. Only tasks registered",
 	"after running this command will be monitored by the framework.",
 	"Ensure the framework is off, otherwise this command will fail.",
+	"",
+	"-n	max number of concurrently running tasks (default: 8)",
 	NULL
 };
 
@@ -48,11 +47,31 @@ static const char * const cmd_status_stop_usage[] = {
 
 static int cmd_status_start(int fd, int argc, char **argv)
 {
-	int ret = 0;
+	int c, ret = 0;
 	struct duet_ioctl_cmd_args args;
 
 	memset(&args, 0, sizeof(args));
 	args.cmd_flags = DUET_START;
+
+	optind = 1;
+	while ((c = getopt(argc, argv, "n:")) != -1) {
+		switch (c) {
+		case 'n':
+			errno = 0;
+			args.numtasks = (__u8)strtoul(optarg, NULL, 10);
+			if (errno) {
+				perror("strtoul: invalid number of tasks");
+				usage(cmd_status_start_usage);
+			}
+			break;
+		default:
+			fprintf(stderr, "Unknown option %c\n", (char)c);
+			usage(cmd_status_start_usage);
+		}
+	}
+
+	if (argc != optind)
+		usage(cmd_status_start_usage);
 
 	ret = ioctl(fd, DUET_IOC_CMD, &args);
 	if (ret < 0) {

@@ -15,11 +15,7 @@
  * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
  * Boston, MA 021110-1307, USA.
  */
-#include <stdio.h>
-#include <unistd.h>
-#include <string.h>
-#include <stdlib.h>
-#include <errno.h>
+
 #include "commands.h"
 
 static const char * const task_cmd_group_usage[] = {

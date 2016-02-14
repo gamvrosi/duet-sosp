@@ -15,6 +15,7 @@
  * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
  * Boston, MA 021110-1307, USA.
  */
+
 #ifndef _DUET_H
 #define _DUET_H
 
@@ -23,7 +24,8 @@
 
 #define DUET_MAX_ITEMS	512
 #define DUET_MAX_PATH	1024
-#define DUET_MAX_NAME	128
+#define DUET_MAX_NAME	22
+#define DUET_MAX_TASKS	128
 
 //#define offsetof(TYPE, MEMBER) ((size_t) &((TYPE *)0)->MEMBER)
 #define container_of(ptr, type, member) ({				\

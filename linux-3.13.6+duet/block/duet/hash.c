@@ -59,6 +59,39 @@ int hash_init(void)
 	return 0;
 }
 
+/* Deallocate a hash table node */
+static void hnode_destroy(struct item_hnode *itnode)
+{
+	kfree(itnode->state);
+	kfree(itnode);
+}
+
+/* Allocate and initialize a new hash table node */
+static struct item_hnode *hnode_init(unsigned long long uuid, unsigned long idx)
+{
+	struct item_hnode *itnode = NULL;
+
+	itnode = kzalloc(sizeof(struct item_hnode), GFP_NOWAIT);
+	if (!itnode) {
+		printk(KERN_ERR "duet: failed to allocate hash node\n");
+		return NULL;
+	}
+
+	itnode->state = kzalloc(sizeof(*(itnode->state)) * duet_env.numtasks,
+				GFP_NOWAIT);
+	if (!(itnode->state)) {
+		printk(KERN_ERR "duet: failed to allocate hash node state\n");
+		kfree(itnode);
+		return NULL;
+	}
+
+	(itnode->item).uuid = uuid;
+	(itnode->item).idx = idx;
+	itnode->refcount++;
+
+	return itnode;
+}
+
 /* Add one event into the hash table */
 int hash_add(struct duet_task *task, unsigned long long uuid, unsigned long idx,
 	__u16 evtmask, short in_scan)
@@ -124,7 +157,7 @@ check_dispose:
 				itnode->state[task->id] = 0;
 			} else {
 				hlist_bl_del(&itnode->node);
-				kfree(itnode);
+				hnode_destroy(itnode);
 			}
 
 			/* Are we still interested in this bucket? */
@@ -150,17 +183,11 @@ check_dispose:
 		if (!evtmask)
 			goto done;
 
-		itnode = kzalloc(sizeof(struct item_hnode), GFP_NOWAIT);
-		if (!itnode) {
-			printk(KERN_ERR "duet: failed to allocate hash node\n");
+		itnode = hnode_init(uuid, idx);
+		if (!itnode)
 			return 1;
-		}
 
-		(itnode->item).uuid = uuid;
-		(itnode->item).idx = idx;
 		itnode->state[task->id] = evtmask | DUET_MASK_VALID;
-		itnode->refcount++;
-
 		hlist_bl_add_head(&itnode->node, b);
 
 		/* Update bitmap */
@@ -234,7 +261,7 @@ again:
 			/* Free or update node */
 			if (!itnode->refcount) {
 				hlist_bl_del(n);
-				kfree(itnode);
+				hnode_destroy(itnode);
 			} else {
 				itnode->state[task->id] = 0;
 			}

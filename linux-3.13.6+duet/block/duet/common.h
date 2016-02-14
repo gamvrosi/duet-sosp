@@ -27,8 +27,9 @@
 #include <linux/rculist.h>
 #include <linux/duet.h>
 
-#define MAX_NAME		128
-#define MAX_TASKS		15
+#define DUET_DEF_NUMTASKS	8
+#define MAX_NAME		22
+#define MAX_TASKS		128
 #define DUET_BITS_PER_NODE	(32768 * 8)	/* 32KB bitmaps */
 
 /* Some useful flags for clearing bitmaps */
@@ -72,7 +73,7 @@ struct item_hnode {
 	struct hlist_bl_node	node;
 	struct duet_item	item;
 	__u8			refcount;
-	__u16			state[MAX_TASKS];
+	__u16			*state;		/* One entry per task */
 };
 
 struct duet_bittree {
@@ -112,6 +113,7 @@ struct duet_task {
 
 struct duet_info {
 	atomic_t		status;
+	__u8			numtasks;	/* Number of concurrent tasks */
 
 	/*
 	 * Access to the task list is synchronized via a mutex. However, any
@@ -151,7 +153,7 @@ struct duet_task *duet_find_task(__u8 taskid);
 void duet_task_dispose(struct duet_task *task);
 
 /* ioctl.c */
-int duet_bootstrap(void);
+int duet_bootstrap(__u8 numtasks);
 int duet_shutdown(void);
 long duet_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 int do_find_path(struct duet_task *task, struct inode *inode, int getpath,

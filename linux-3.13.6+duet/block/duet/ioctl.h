@@ -21,9 +21,8 @@
 #include <linux/ioctl.h>
 #include "common.h"
 
-//#define MAX_TASKS	15
 #define MAX_ITEMS	512
-#define MAX_NAME	128
+#define MAX_NAME	22
 #define MAX_PATH	1024
 #define DUET_IOC_MAGIC	0xDE
 
@@ -41,19 +40,24 @@ enum duet_ioctl_codes {
 	DUET_GET_PATH,
 };
 
+struct duet_task_attrs {
+	__u8 	tid;					/* out */
+	char 	tname[MAX_NAME];			/* out */
+	__u8	is_file;				/* out */
+	__u32 	bitrange;				/* out */
+	__u16	evtmask;				/* out */
+};
+
 /* We return up to MAX_ITEMS at a time (9b each). */
 struct duet_ioctl_fetch_args {
-	__u8 			tid;		/* in */
-	__u16 			num;		/* in/out */
-	struct duet_item	itm[MAX_ITEMS];	/* out */
+	__u8 			tid;			/* in */
+	__u16 			num;			/* in/out */
+	struct duet_item	itm[MAX_ITEMS];		/* out */
 };
 
 struct duet_ioctl_list_args {
-	__u8 	tid[MAX_TASKS];			/* out */
-	char 	tnames[MAX_TASKS][MAX_NAME];	/* out */
-	__u8	is_file[MAX_TASKS];		/* out */
-	__u32 	bitrange[MAX_TASKS];		/* out */
-	__u16	evtmask[MAX_TASKS];		/* out */
+	__u8			numtasks;		/* out */
+	struct duet_task_attrs	*tasks;			/* out */
 };
 
 struct duet_ioctl_cmd_args {
@@ -61,6 +65,10 @@ struct duet_ioctl_cmd_args {
 	__u8 	tid;					/* in/out */
 	__u8 	ret;					/* out */
 	union {
+		/* Bootstrapping args */
+		struct {
+			__u8	numtasks;		/* in */
+		};
 		/* Registration args */
 		struct {
 			__u32 	regmask;		/* in */
@@ -68,12 +76,12 @@ struct duet_ioctl_cmd_args {
 			char 	name[MAX_NAME];		/* in */
 			char	path[MAX_PATH];		/* in */
 		};
-		/* (Un)marking and checking args */
+		/* Bitmap manipulation args */
 		struct {
 			__u32 	itmnum;			/* in */
 			__u64 	itmidx;			/* in */
 		};
-		/* ino -> path args */
+		/* Path retrieval args */
 		struct {
 			__u64	c_uuid;			/* in */
 			char 	cpath[MAX_PATH];	/* out */
