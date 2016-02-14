@@ -102,6 +102,6 @@ int duet_set_done(int duet_fd, int tid, __u64 idx, __u32 count);
 int duet_unset_done(int duet_fd, int tid, __u64 idx, __u32 count);
 int duet_get_path(int duet_fd, int tid, unsigned long long uuid, char *path);
 int duet_debug_printbit(int duet_fd, int tid);
-int duet_task_list(int duet_fd);
+int duet_task_list(int duet_fd, int numtasks);
 
 #endif /* _DUET_H */

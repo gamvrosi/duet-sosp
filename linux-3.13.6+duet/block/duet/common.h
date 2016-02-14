@@ -29,7 +29,6 @@
 
 #define DUET_DEF_NUMTASKS	8
 #define MAX_NAME		22
-#define MAX_TASKS		128
 #define DUET_BITS_PER_NODE	(32768 * 8)	/* 32KB bitmaps */
 
 /* Some useful flags for clearing bitmaps */

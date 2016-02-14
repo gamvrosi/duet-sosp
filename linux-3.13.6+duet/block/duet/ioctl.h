@@ -57,7 +57,7 @@ struct duet_ioctl_fetch_args {
 
 struct duet_ioctl_list_args {
 	__u8			numtasks;		/* out */
-	struct duet_task_attrs	*tasks;			/* out */
+	struct duet_task_attrs	tasks[0];		/* out */
 };
 
 struct duet_ioctl_cmd_args {

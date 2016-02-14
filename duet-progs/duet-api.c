@@ -286,37 +286,48 @@ int duet_debug_printbit(int duet_fd, int tid)
 	return ret;
 }
 
-int duet_task_list(int duet_fd)
+int duet_task_list(int duet_fd, int numtasks)
 {
 	int i, ret=0;
-	struct duet_ioctl_list_args args;
+	struct duet_ioctl_list_args *args;
+	size_t args_size;
 
-	memset(&args, 0, sizeof(args));
+	if (numtasks <= 0 || numtasks > 255) {
+		fprintf(stderr, "duet: invalid number of tasks\n");
+		return 1;
+	}
 
-	args.tasks = (struct duet_task_attrs *)malloc(DUET_MAX_TASKS *
-			sizeof(struct duet_task_attrs));
-	if (!args.tasks) {
+	args_size = sizeof(struct duet_ioctl_list_args) +
+			(numtasks * sizeof(struct duet_task_attrs));
+	args = malloc(args_size);
+	if (!args) {
 		perror("duet: task list args allocation failed");
 		return 1;
 	}
 
-	ret = ioctl(duet_fd, DUET_IOC_TLIST, &args);
-	if (ret < 0)
+	memset(args, 0, args_size);
+	args->numtasks = numtasks;
+	ret = ioctl(duet_fd, DUET_IOC_TLIST, args);
+	if (ret < 0) {
 		perror("duet: task list ioctl failed");
+		goto out;
+	}
 
 	/* Print out the list we received */
 	fprintf(stdout,
 		"ID\tTask Name           \tFile task?\tBit range\tEvt. mask\n"
 		"--\t--------------------\t----------\t---------\t---------\n");
-	for (i=0; i<args.numtasks; i++) {
-		if (!args.tasks[i].tid)
+	for (i=0; i<args->numtasks; i++) {
+		if (!args->tasks[i].tid)
 			break;
 
-		fprintf(stdout, "%2d\t%13s\t%10s\t%9u\t%8x\n",
-			args.tasks[i].tid, args.tasks[i].tname,
-			args.tasks[i].is_file ? "TRUE" : "FALSE",
-			args.tasks[i].bitrange, args.tasks[i].evtmask);
+		fprintf(stdout, "%2d\t%20s\t%10s\t%9u\t%8x\n",
+			args->tasks[i].tid, args->tasks[i].tname,
+			args->tasks[i].is_file ? "TRUE" : "FALSE",
+			args->tasks[i].bitrange, args->tasks[i].evtmask);
 	}
 
+out:
+	free(args);
 	return ret;
 }

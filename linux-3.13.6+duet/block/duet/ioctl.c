@@ -342,38 +342,45 @@ static int duet_ioctl_tlist(void __user *arg)
 {
 	int i=0;
 	struct duet_task *cur;
-	struct duet_ioctl_list_args *la;
+	struct duet_ioctl_list_args argh, *argp;
 
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	la = memdup_user(arg, sizeof(*la));
-	if (IS_ERR(la))
-		return PTR_ERR(la);
+	/* Copy in task list header */
+	if (copy_from_user(&argh, arg, sizeof(argh)))
+		return -EFAULT;
 
-	/* We will only send the first num_tasks, and that's ok */
+	/* Copy in entire task list */
+	argp = memdup_user(arg, sizeof(*argp) + (argh.numtasks *
+				sizeof(struct duet_task_attrs)));
+	if (IS_ERR(argp))
+		return PTR_ERR(argp);
+	
+	/* We will only send the first numtasks, and that's ok */
 	mutex_lock(&duet_env.task_list_mutex);
 	list_for_each_entry(cur, &duet_env.tasks, task_list) {
-		la->tasks[i].tid = cur->id;
-		memcpy(la->tasks[i].tname, cur->name, MAX_NAME);
-		la->tasks[i].is_file = cur->is_file;
-		la->tasks[i].bitrange = cur->bittree.range;
-		la->tasks[i].evtmask = cur->evtmask;
+		argp->tasks[i].tid = cur->id;
+		memcpy(argp->tasks[i].tname, cur->name, MAX_NAME);
+		argp->tasks[i].is_file = cur->is_file;
+		argp->tasks[i].bitrange = cur->bittree.range;
+		argp->tasks[i].evtmask = cur->evtmask;
 		i++;
-		if (i == min(duet_env.numtasks, (__u8)MAX_TASKS))
+		if (i == argp->numtasks)
 			break;
         }
 	mutex_unlock(&duet_env.task_list_mutex);
 
-	if (copy_to_user(arg, la, sizeof(*la))) {
-		printk(KERN_ERR "duet: failed to copy out tasklist\n");
-		kfree(la);
+	/* Copy out entire task list */
+	if (copy_to_user(arg, argp, sizeof(*argp) + (argp->numtasks *
+			 sizeof(struct duet_task_attrs)))) {
+		printk(KERN_ERR "duet: failed to copy out task list items\n");
+		kfree(argp);
 		return -EINVAL;
 	}
 
 	duet_dbg(KERN_INFO "duet: task list sent\n");
-
-	kfree(la);
+	kfree(argp);
 	return 0;
 }
 

@@ -24,11 +24,13 @@ static const char * const task_cmd_group_usage[] = {
 };
 
 static const char * const cmd_task_list_usage[] = {
-	"duet task list",
+	"duet task list [-n num]",
 	"List tasks registered with the duet framework.",
 	"Requests and prints a list of all the tasks that are currently",
 	"registered with the duet framework. For each task, we print the",
 	"name with which it was registered.",
+	"",
+	"-n	number of tasks to get (default: 32, max: 255)",
 	NULL
 };
 
@@ -152,9 +154,29 @@ static int cmd_task_fetch(int fd, int argc, char **argv)
 
 static int cmd_task_list(int fd, int argc, char **argv)
 {
-	int ret = 0;
+	int c, numtasks = 32, ret = 0;
 
-	ret = duet_task_list(fd);
+	optind = 1;
+	while ((c = getopt(argc, argv, "n:")) != -1) {
+		switch (c) {
+		case 'n':
+			errno = 0;
+			numtasks = (int)strtol(optarg, NULL, 10);
+			if (errno) {
+				perror("strtol: invalid task number");
+				usage(cmd_task_list_usage);
+			}
+			break;
+		default:
+			fprintf(stderr, "Unknown option %c\n", (char)c);
+			usage(cmd_task_list_usage);
+		}
+	}
+
+	if (numtasks <= 0 || numtasks > 255 || argc != optind)
+		usage(cmd_task_list_usage);
+
+	ret = duet_task_list(fd, numtasks);
 	if (ret < 0) {
 		perror("tasks list ioctl error");
 		usage(cmd_task_list_usage);
